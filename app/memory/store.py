@@ -1,0 +1,280 @@
+"""Memory layer — the only place that talks to the database.
+
+Everything the pipeline needs to remember and check (jobs, decisions,
+applications, contacts, sources, events) lives here. Keeping repositories
+in one module makes the state machine and tests easy to follow.
+"""
+from __future__ import annotations
+
+from collections.abc import Iterable
+from datetime import datetime, timedelta, timezone
+from typing import Any
+
+from sqlalchemy import select
+from sqlalchemy.orm import Session
+
+from app import models
+from app.models import (
+    Application,
+    Company,
+    Contact,
+    Decision,
+    Email,
+    Event,
+    ImmigrationProgram,
+    Job,
+    JobAnalysis,
+    Source,
+    utcnow,
+)
+
+
+def record_event(session: Session, type: str, message: str, level: str = "info", data: dict | None = None) -> None:
+    session.add(Event(type=type, level=level, message=message, data=data or {}))
+
+
+# ------------------------- companies -------------------------
+def get_or_create_company(session: Session, name: str, url: str = "", country: str = "") -> Company:
+    norm = _normalize_name(name)
+    if not norm:
+        norm = "unknown"
+    existing = session.execute(select(Company).where(Company.normalized_name == norm)).scalar_one_or_none()
+    if existing:
+        return existing
+    c = Company(name=name, normalized_name=norm, website=url, country=country)
+    session.add(c)
+    session.flush()
+    return c
+
+
+def _normalize_name(name: str) -> str:
+    import unicodedata
+
+    n = unicodedata.normalize("NFKD", name or "")
+    n = "".join(c for c in n if not unicodedata.combining(c))
+    return " ".join(n.lower().split())[:255]
+
+
+# ------------------------- jobs -------------------------
+def find_job_by_key(session: Session, dedup_key: str) -> Job | None:
+    return session.execute(select(Job).where(Job.dedup_key == dedup_key)).scalar_one_or_none()
+
+
+def find_similar_job(session: Session, title: str, company_norm: str, limit: int = 5) -> list[Job]:
+    """Best-effort fuzzy match when exact dedup_key misses."""
+    stmt = select(Job).where(Job.company_id.is_not(None)).limit(0)
+    # Cheap n-gram prefix containment on title; good enough for MVP.
+    from sqlalchemy import or_
+
+    like = f"%{title.lower()[:24]}%"
+    stmt = select(Job).where(or_(Job.title.ilike(like), Job.dedup_key.ilike(f"%{company_norm[:12]}%"))).limit(limit)
+    return list(session.execute(stmt).scalars().all())
+
+
+def upsert_job(session: Session, data: dict[str, Any]) -> tuple[Job, bool]:
+    key = data["dedup_key"]
+    job = find_job_by_key(session, key)
+    if job:
+        return job, False
+    job = Job(**{k: v for k, v in data.items() if hasattr(Job, k)})
+    session.add(job)
+    session.flush()
+    return job, True
+
+
+def get_jobs_by_status(session: Session, statuses: Iterable[str]) -> list[Job]:
+    return list(session.execute(select(Job).where(Job.status.in_(list(statuses)))).scalars().all())
+
+
+def get_job(session: Session, job_id: int) -> Job | None:
+    return session.get(Job, job_id)
+
+
+# ------------------------- analysis / decisions -------------------------
+def add_analysis(session: Session, job_id: int, analysis: dict[str, Any], model_used: str = "") -> JobAnalysis:
+    a = JobAnalysis(job_id=job_id, model_used=model_used, raw_json=analysis, **{
+        k: v for k, v in analysis.items() if hasattr(JobAnalysis, k)
+    })
+    session.add(a)
+    session.flush()
+    return a
+
+
+def get_analysis(session: Session, job_id: int) -> JobAnalysis | None:
+    return session.execute(select(JobAnalysis).where(JobAnalysis.job_id == job_id)).scalar_one_or_none()
+
+
+def add_decision(session: Session, job_id: int, decision: str, overall_score: float,
+                 scores: dict[str, float], reason: str, rules_fired: list[str], ai_reason: str = "") -> Decision:
+    d = Decision(job_id=job_id, decision=decision, overall_score=overall_score, scores=scores,
+                 reason=reason, rules_fired=rules_fired, ai_reason=ai_reason)
+    session.add(d)
+    session.flush()
+    return d
+
+
+def get_last_decision(session: Session, job_id: int) -> Decision | None:
+    return session.execute(
+        select(Decision).where(Decision.job_id == job_id).order_by(Decision.id.desc())
+    ).scalar_one_or_none()
+
+
+# ------------------------- applications -------------------------
+def add_application(session: Session, job_id: int, decision_id: int, action: str,
+                    score: float, contact_email: str = "") -> Application:
+    app = Application(job_id=job_id, decision_id=decision_id, action=action, score=score,
+                      contact_email=contact_email, status="draft")
+    session.add(app)
+    session.flush()
+    return app
+
+
+def get_application(session: Session, app_id: int) -> Application | None:
+    return session.get(Application, app_id)
+
+
+def find_applications(session: Session, job_id: int,
+                      statuses: tuple[str, ...] | None = None) -> list[Application]:
+    stmt = select(Application).where(Application.job_id == job_id)
+    if statuses:
+        stmt = stmt.where(Application.status.in_(statuses))
+    return list(session.execute(stmt).scalars().all())
+
+
+def applications_due_for_followup(session: Session, now: datetime | None = None) -> list[Application]:
+    now = now or utcnow()
+    return list(session.execute(
+        select(Application).where(
+            Application.status.in_(["sent", "replied"]),
+            Application.follow_up_at.is_not(None),
+            Application.follow_up_at <= now,
+            Application.follow_ups_sent < _max_followups(),
+        ).order_by(Application.follow_up_at)
+    ).scalars().all())
+
+
+def _max_followups() -> int:
+    from app.config import get_config
+
+    return int(get_config().rules.get("max_follow_ups_per_application", 2))
+
+
+def count_sent_today(session: Session, now: datetime | None = None) -> int:
+    now = now or utcnow()
+    start = now - timedelta(days=1)
+    return len(list(session.execute(
+        select(Email).where(Email.status == "sent", Email.sent_at >= start)
+    ).scalars().all()))
+
+
+def count_dispatched_today(session: Session, now: datetime | None = None,
+                           action: str | None = None,
+                           statuses: tuple[str, ...] = ("sent", "drafted")) -> int:
+    """Outbound communications actually created today (sent or drafted).
+
+    `dry_run` is deliberately excluded: nothing left the safety boundary, so it
+    must not consume the daily outbound budget.
+    """
+    from sqlalchemy import func
+
+    now = now or utcnow()
+    start = now.astimezone(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
+    stmt = select(func.count()).select_from(Application).where(
+        Application.status.in_(statuses),
+        Application.sent_at.is_not(None),
+        Application.sent_at >= start,
+    )
+    if action:
+        stmt = stmt.where(Application.action == action)
+    return int(session.execute(stmt).scalar_one() or 0)
+
+
+def count_applications_today(session: Session, now: datetime | None = None) -> int:
+    now = now or utcnow()
+    start = now - timedelta(days=1)
+    stmt = select(Application).where(
+        Application.sent_at.is_not(None), Application.sent_at >= start)
+    return len(list(session.execute(stmt).scalars().all()))
+
+
+# ------------------------- emails -------------------------
+def add_email(session: Session, application_id: int | None, to_addr: str, subject: str, body: str,
+              attachments: list[str] | None = None, status: str = "draft", mode: str = "") -> Email:
+    e = Email(application_id=application_id, to_addr=to_addr, subject=subject, body=body,
+              attachments=attachments or [], status=status, mode=mode)
+    session.add(e)
+    session.flush()
+    return e
+
+
+# ------------------------- contacts -------------------------
+def recent_contact(session: Session, email: str, days: int = 14) -> Contact | None:
+    cutoff = utcnow() - timedelta(days=days)
+    return session.execute(
+        select(Contact).where(Contact.email == email, Contact.last_contacted_at >= cutoff)
+    ).scalar_one_or_none()
+
+
+def recent_company_contact(session: Session, company_id: int | None, days: int = 7) -> Contact | None:
+    if not company_id:
+        return None
+    cutoff = utcnow() - timedelta(days=days)
+    return session.execute(
+        select(Contact).where(Contact.company_id == company_id, Contact.last_contacted_at >= cutoff)
+    ).scalar_one_or_none()
+
+
+def upsert_contact(session: Session, email: str, person_name: str = "", role: str = "",
+                   source: str = "", company_id: int | None = None) -> Contact:
+    c = session.execute(select(Contact).where(Contact.email == email)).scalar_one_or_none()
+    if not c:
+        c = Contact(email=email, person_name=person_name, role=role, source=source, company_id=company_id)
+        session.add(c)
+        session.flush()
+    c.last_contacted_at = utcnow()
+    if not c.first_contacted_at:
+        c.first_contacted_at = c.last_contacted_at
+    return c
+
+
+# ------------------------- sources -------------------------
+def get_source(session: Session, name: str) -> Source | None:
+    return session.execute(select(Source).where(Source.name == name)).scalar_one_or_none()
+
+
+def upsert_source(session: Session, name: str, kind: str, base_url: str = "") -> Source:
+    s = get_source(session, name)
+    if not s:
+        s = Source(name=name, kind=kind, base_url=base_url)
+        session.add(s)
+        session.flush()
+    return s
+
+
+def mark_source_fetched(session: Session, source: Source, items: int, error: str = "") -> None:
+    source.last_fetch_at = utcnow()
+    source.items_found = items
+    source.last_error = error
+
+
+# ------------------------- stats (dashboard) -------------------------
+def stats(session: Session) -> dict[str, Any]:
+    now = utcnow()
+    start = now - timedelta(days=1)
+
+    def _count(stmt) -> int:
+        return len(list(session.execute(stmt).scalars().all()))
+
+    return {
+        "new_opportunities": _count(select(models.Job).where(models.Job.discovered_at >= start)),
+        "applications_today": count_applications_today(session, now),
+        "emails_sent_today": count_sent_today(session, now),
+        "employers_contacted": _count(select(Contact)),
+        "immigration_programs": _count(select(ImmigrationProgram)),
+        "total_jobs": _count(select(models.Job)),
+        "total_emails": _count(select(Email)),
+        "last_events": [
+            {"type": e.type, "level": e.level, "message": e.message, "at": e.occurred_at.isoformat()}
+            for e in session.execute(select(Event).order_by(Event.id.desc()).limit(10)).scalars().all()
+        ],
+    }

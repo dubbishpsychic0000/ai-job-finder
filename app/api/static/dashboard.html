@@ -1,0 +1,93 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Worldwide Career Agent</title>
+<style>
+  :root { --bg:#0f172a; --card:#1e293b; --fg:#e2e8f0; --accent:#38bdf8; --ok:#4ade80; --err:#f87171; }
+  * { box-sizing: border-box; }
+  body { margin:0; font-family: system-ui, sans-serif; background:var(--bg); color:var(--fg); padding:24px; }
+  h1 { margin:0 0 4px; font-size:1.4rem; }
+  .sub { color:#94a3b8; margin-bottom:20px; font-size:.85rem; }
+  .grid { display:grid; grid-template-columns: repeat(auto-fit, minmax(150px,1fr)); gap:12px; margin-bottom:24px; }
+  .card { background:var(--card); border:1px solid #334155; border-radius:12px; padding:14px; }
+  .card b { font-size:1.6rem; display:block; color:var(--accent); }
+  .card span { font-size:.75rem; color:#94a3b8; }
+  .row { display:flex; gap:12px; margin-bottom:24px; flex-wrap:wrap; }
+  button { background:var(--accent); color:#0f172a; border:none; padding:8px 16px; border-radius:8px;
+           font-weight:600; cursor:pointer; }
+  button.gray { background:#334155; color:var(--fg); }
+  table { width:100%; border-collapse:collapse; background:var(--card); border-radius:12px; overflow:hidden; margin-bottom:24px; }
+  th, td { text-align:left; padding:8px 12px; border-bottom:1px solid #334155; font-size:.85rem; }
+  th { background:#334155; color:#cbd5e1; }
+  .tag { display:inline-block; padding:2px 8px; border-radius:99px; font-size:.7rem; }
+  .ok { background:#14532d; color:var(--ok); }
+  .err { background:#7f1d1d; color:var(--err); }
+  .warn { background:#78350f; color:#fbbf24; }
+  .paused { color:#fbbf24; font-weight:700; }
+</style>
+</head>
+<body>
+  <h1>Worldwide Career Agent</h1>
+  <div class="sub" id="statusline">loading…</div>
+  <div class="row">
+    <button onclick="togglePause()" id="pausebtn">Pause</button>
+    <button class="gray" onclick="refresh()">Refresh</button>
+  </div>
+  <div class="grid" id="stats"></div>
+  <table id="jobs"><thead><tr><th>Job</th><th>Company</th><th>Country</th><th>Status</th><th>Score</th></tr></thead><tbody></tbody></table>
+  <table id="apps"><thead><tr><th>App</th><th>Status</th><th>Action</th><th>Contact</th><th>Follow-ups</th></tr></thead><tbody></tbody></table>
+  <table id="imm"><thead><tr><th>Country</th><th>Program</th><th>Source</th></tr></thead><tbody></tbody></table>
+  <table id="events"><thead><tr><th>Type</th><th>Level</th><th>Message</th></tr></thead><tbody></tbody></table>
+
+<script>
+async function get(url){ const r = await fetch(url); return r.json(); }
+function tag(text, cls){ return `<span class="tag ${cls}">${text}</span>`; }
+async function refresh(){
+  const stats = await get('/api/stats');
+  document.getElementById('statusline').textContent =
+    `Last events, ${stats.total_jobs} total jobs. ` + (stats.paused ? '<span class="paused">PAUSED</span>' : 'running');
+  document.getElementById('pausebtn').textContent = stats.paused ? 'Resume' : 'Pause';
+  const statsEl = document.getElementById('stats');
+  statsEl.innerHTML = [
+    ['New opportunities (24h)', stats.new_opportunities],
+    ['Applications today', stats.applications_today],
+    ['Emails sent today', stats.emails_sent_today],
+    ['Employers contacted', stats.employers_contacted],
+    ['Immigration programs', stats.immigration_programs],
+  ].map(([k,v]) => `<div class="card"><b>${v}</b><span>${k}</span></div>`).join('');
+
+  const jobs = await get('/api/jobs?limit=20');
+  document.getElementById('jobs').querySelector('tbody').innerHTML = jobs.map(j => `<tr>
+    <td><a href="${j.url}" target="_blank">${j.title}</a></td>
+    <td>${j.company}</td><td>${j.country}</td>
+    <td>${tag(j.status, j.status==='new'?'warn':'ok')}</td>
+    <td>${j.score ?? '—'}</td></tr>`).join('');
+
+  const apps = await get('/api/applications?limit=15');
+  document.getElementById('apps').querySelector('tbody').innerHTML = apps.map(a => `<tr>
+    <td>#${a.id} ${a.title}</td>
+    <td>${tag(a.status, a.status==='sent'?'ok':a.status==='blocked'?'err':'warn')}</td>
+    <td>${a.action}</td><td>${a.contact_email||'—'}</td><td>${a.follow_ups_sent}</td></tr>`).join('');
+
+  const imm = await get('/api/immigration?limit=10');
+  document.getElementById('imm').querySelector('tbody').innerHTML = imm.map(r => `<tr>
+    <td>${r.country}</td><td>${r.program}</td>
+    <td><a href="${r.official_source_url}" target="_blank">source</a></td></tr>`).join('');
+
+  const ev = await get('/api/events?limit=10');
+  document.getElementById('events').querySelector('tbody').innerHTML = ev.map(e => `<tr>
+    <td>${e.type}</td>
+    <td>${tag(e.level, e.level==='error'?'err':e.level==='warn'?'warn':'ok')}</td>
+    <td>${e.message}</td></tr>`).join('');
+}
+async function togglePause(){
+  const s = await get('/api/stats');
+  await fetch(s.paused ? '/api/resume' : '/api/pause', {method:'POST'});
+  refresh();
+}
+refresh();
+setInterval(refresh, 15000);
+</script>
+</body>
+</html>

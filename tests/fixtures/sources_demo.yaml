@@ -1,0 +1,8 @@
+# Test-only sources — golden-set discovery must feed ONLY the offline demo
+# fixtures so tests are hermetic (never hit the live web).
+connectors:
+  - kind: static_files
+    name: demo_jobs
+    enabled: true
+    path: "tests/fixtures/demo"
+    live: true

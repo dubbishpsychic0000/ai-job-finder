@@ -1,0 +1,53 @@
+version: "3.9"
+
+services:
+  app:
+    build: .
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql+psycopg://agent:agent@postgres:5432/agent
+    volumes:
+      - ./candidate:/app/candidate
+      - ./config:/app/config
+      - ./data:/app/data
+    depends_on:
+      - postgres
+    command: ["wca", "run-once"]
+    restart: unless-stopped
+
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: agent
+      POSTGRES_PASSWORD: agent
+      POSTGRES_DB: agent
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U agent"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Optional, for later queue-based scale-out
+  redis:
+    image: redis:7-alpine
+    profiles: ["advanced"]
+
+  dashboard:
+    build: .
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql+psycopg://agent:agent@postgres:5432/agent
+    volumes:
+      - ./candidate:/app/candidate
+      - ./config:/app/config
+      - ./data:/app/data
+    depends_on:
+      - postgres
+    command: ["uvicorn", "app.api.main:app", "--host", "0.0.0.0", "--port", "8000"]
+    ports:
+      - "8000:8000"
+
+volumes:
+  pgdata:

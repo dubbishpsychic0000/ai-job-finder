@@ -1,0 +1,55 @@
+[project]
+name = "worldwide-career-agent"
+version = "0.1.0"
+description = "24/7 autonomous AI job discovery, analysis, matching and relocation agent"
+requires-python = ">=3.10"
+dependencies = [
+    "pydantic>=2.5",
+    "pydantic-settings>=2.1",
+    "PyYAML>=6.0",
+    "feedparser>=6.0",
+    "beautifulsoup4>=4.12",
+    "lxml>=4.9",
+    "requests>=2.31",
+    "SQLAlchemy>=2.0",
+    "python-dotenv>=1.0",
+    "rich>=13.7",
+]
+
+[project.optional-dependencies]
+llm = ["google-genai>=0.2"]
+email = ["google-api-python-client>=2.100", "google-auth-httplib2>=0.1.1", "google-auth-oauthlib>=1.1"]
+api = ["fastapi>=0.110", "uvicorn>=0.27", "jinja2>=3.1"]
+dev = ["pytest>=8.0", "httpx>=0.27", "ruff>=0.4"]
+
+[project.scripts]
+wca = "app.cli:main"
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["app*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP", "B", "SIM", "RUF"]
+ignore = [
+    "BLE001",   # blind catches are deliberate per-source isolation in connectors
+    "B008",     # FastAPI Depends() in defaults is idiomatic
+    "DTZ007",   # parse_date normalises naive dates to aware UTC on purpose
+    "ASYNC210", # async connectors use blocking HTTP intentionally (MVP, sequential phases)
+    "E501",     # line length is not enforced (multilingual strings, wide prompts)
+    "RUF001",   # intentional unicode (é, à, —, ×) in multilingual text & regex
+    "RUF002",
+    "RUF003",
+]
+[tool.ruff.lint.per-file-ignores]
+"__init__.py" = ["F401"]  # re-export style package facades

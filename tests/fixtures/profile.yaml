@@ -1,0 +1,40 @@
+# Fixed test profile — golden-set tests must NOT depend on the user's live profile.
+# 4 years experience, intermediate languages → deterministic, stable expectations.
+name: "Test Candidate"
+title: "Civil Engineering Technician"
+
+education:
+  - degree: "Technicien Spécialisé"
+    field: "Génie Civil"
+    country: "Morocco"
+    year: 2019
+
+experience_years: 4
+
+skills:
+  - civil engineering
+  - road construction
+  - VRD
+  - geotechnics
+  - site surveying
+  - AutoCAD
+  - quality control
+  - concrete testing
+
+languages:
+  arabic: native
+  french: intermediate
+  english: intermediate
+
+certifications: []
+
+projects:
+  - role: "Site Technician"
+    description: "Road rehabilitation and drainage works on urban projects."
+
+relocation:
+  willing: true
+  constraints: "Legal route required."
+
+availability:
+  notice_period_months: 1

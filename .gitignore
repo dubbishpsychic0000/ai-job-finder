@@ -1,0 +1,33 @@
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.ruff_cache/
+*.egg-info/
+
+# runtime data
+data/*.db
+data/*.db-wal
+data/*.db-shm
+data/control.json
+data/llm_budget_*.json
+data/*.log.err
+
+# personal candidate data — CVs, identity profile, job-search prefs (never push)
+candidate/cv/*.pdf
+candidate/profile.yaml
+candidate/preferences.yaml
+
+# secrets — OAuth client secret + refresh tokens must NEVER reach git
+secrets/
+.env
+
+# logs
+*.log
+
+# LLM cache/budget (mutable runtime state)
+data/llm_cache.json
+data/llm_budget.json
+data/gemini_result.json
+data/run*.json
+data/run_*.log

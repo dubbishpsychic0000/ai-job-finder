@@ -1,0 +1,47 @@
+# Agent behaviour & scoring thresholds. Tune these; the dashboard can override at runtime.
+
+score_thresholds:
+  apply: { min: 80, max: 100 }
+  investigate: { min: 70, max: 84 }
+  hold: { min: 50, max: 69 }
+  ignore: { min: 0, max: 49 }
+
+scoring_weights:
+  qualification: 0.30
+  career: 0.20
+  international_fit: 0.20
+  sponsorship_potential: 0.15
+  relocation_practicality: 0.10
+  employer_confidence: 0.05
+
+# Deterministic hard rules (run before AI).
+rules:
+  tolerance_years_buffer: 2                 # allow candidate exp + buffer vs required
+  max_days_since_posted: 45                 # older postings are ignored
+  max_daily_applications: 5                 # APPLY emails per day
+  max_daily_inquiries: 5                    # ASK_EMPLOYER / information requests per day
+  max_daily_outbound: 10                    # total outbound emails per day
+  employer_cooldown_days: 7                 # cooldown between any contact with the same company
+  min_application_score: 80                 # min opportunity score to auto-apply
+  min_application_confidence: 0.8           # min agent confidence to auto-apply
+  require_contact_for_apply: false          # if true, APPLY is downgraded without a contact email
+  follow_up_days: [7, 14, 21]               # follow-up schedule in days after sending
+  max_follow_ups_per_application: 2
+
+email:
+  max_daily_outbound: 10
+  require_verifiable_recipient: true
+  require_claims_allowedlist: true          # invention check against candidate profile
+
+discovery:
+  full_text_description_max_chars: 8000
+  results_per_source: 25
+
+search_plan:
+  max_combinations_per_country: 3
+  freshness_days: 14
+
+scheduler:
+  search_cadence_hours: 12
+  analysis_cadence_hours: 12
+  followup_cadence_hours: 24

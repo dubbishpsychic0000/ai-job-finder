@@ -1,0 +1,32 @@
+# Connector configuration for the discovery layer.
+# Each entry: kind (registry key), name, enabled, options.
+# Enable real web sources by setting enabled: true — they will still respect
+# ToS / robots and degrade gracefully offline.
+
+connectors:
+  - kind: static_files
+    name: demo_jobs
+    enabled: true
+    path: "tests/fixtures/demo"
+    live: true            # deterministic, all items, offline demo/tests
+
+  - kind: rss
+    name: eures_rss
+    enabled: false        # feed URL currently 404s; re-enable with a current EURES feed URL
+    feeds:
+      - "https://eures.europa.eu/search-jobs/result?query={query}&location={location}&format=rss"
+
+  - kind: search_engine
+    name: duckduckgo_jobs
+    enabled: true         # real web discovery via DuckDuckGo (no API key); degrades offline
+    results_per_query: 4
+
+  - kind: company_careers
+    name: example_careers
+    enabled: false
+    pages:
+      - url: "https://example.com/careers"
+        company: "Example Construction"
+        ops:
+          location: "France"
+          card_selectors: ["a.job-listing", "a.job-card"]
