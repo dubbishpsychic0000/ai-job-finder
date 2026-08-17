@@ -31,3 +31,4 @@ data/llm_budget.json
 data/gemini_result.json
 data/run*.json
 data/run_*.log
+data/search_vocab_cache.json

@@ -10,9 +10,10 @@ from pathlib import Path
 from sqlalchemy.orm import Session
 
 from app import memory as mem
-from app.config import ROOT_DIR, AgentConfig, Preferences, load_yaml
+from app.config import ROOT_DIR, AgentConfig, CandidateProfile, Preferences, load_yaml
 from app.connectors import registry
 from app.deduplication import find_duplicates
+from app.discovery.vocabulary import CandidateVocabulary
 from app.normalization import normalize
 from app.workflows.search_plan import SearchPlan
 
@@ -61,9 +62,21 @@ def _resolve_paths(cfg: dict) -> dict:
 
 
 async def run_discovery(session: Session, config: AgentConfig, prefs: Preferences,
-                        sources_path: Path | None = None) -> DiscoveryReport:
+                        sources_path: Path | None = None,
+                        profile: CandidateProfile | None = None,
+                        llm=None) -> DiscoveryReport:
     report = DiscoveryReport()
-    plan = SearchPlan(prefs).build(max_per_country=int(config.search_plan.get("max_combinations_per_country", 3)))
+    discovery_cfg = config.discovery or {}
+    max_per_country = int(discovery_cfg.get(
+        "max_per_country", config.search_plan.get("max_combinations_per_country", 3)))
+    max_queries = int(discovery_cfg.get("max_queries_per_run", 40))
+    vocab = CandidateVocabulary(profile=profile, prefs=prefs)
+    # Optional LLM vocabulary expansion (discovery.vocab_llm) — cached on disk.
+    if llm is not None and discovery_cfg.get("vocab_llm", False):
+        await vocab.llm_expanded_roles(llm)
+        logger.info("vocab_llm enabled; vocabulary now %d terms", len(vocab.roles()))
+    plan = SearchPlan(prefs, vocab=vocab).build(max_per_country=max_per_country,
+                                                max_queries_per_run=max_queries)
     connectors = _load_source_connectors(sources_path)
 
     for source_cfg, connector in connectors:
@@ -77,6 +90,16 @@ async def run_discovery(session: Session, config: AgentConfig, prefs: Preference
                     results = await connector.search(combo["query"], combo["location"])
                 except (TypeError, NotImplementedError):
                     results = []
+                for o in results:
+                    raw = dict(o.raw or {})
+                    raw.update({
+                        "search_query": combo["query"],
+                        "search_location": combo["location"],
+                        "search_country": combo.get("country", ""),
+                        "search_language": combo.get("lang", ""),
+                        "search_intent": combo.get("intent", ""),
+                    })
+                    o.raw = raw
                 processed = [normalize(o) for o in results]
                 processed = [o for o in processed if o is not None]
                 report.opportunities_fetched += len(processed)

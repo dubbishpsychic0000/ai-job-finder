@@ -36,6 +36,10 @@ email:
 discovery:
   full_text_description_max_chars: 8000
   results_per_source: 25
+  max_per_country: 3                  # role/localized terms kept per country
+  max_queries_per_run: 40             # global cap on generated queries per run
+  vocab_cache_path: "data/search_vocab_cache.json"
+  vocab_llm: false                    # expand roles via LLM (cached on disk)
 
 search_plan:
   max_combinations_per_country: 3

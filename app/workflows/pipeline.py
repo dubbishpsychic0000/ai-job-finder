@@ -45,7 +45,7 @@ def run_pipeline(session: Session | None = None, *, sources_path: Path | None = 
     def _run() -> RunResult:
         result = RunResult()
         with session_scope() if session is None else _nullctx(session) as s:
-            discovery = asyncio.run(run_discovery(s, config, prefs, sources_path))
+            discovery = asyncio.run(run_discovery(s, config, prefs, sources_path, profile=profile, llm=llm))
             result.discovery = {
                 "new_jobs": discovery.new_jobs,
                 "duplicates": discovery.duplicates,
