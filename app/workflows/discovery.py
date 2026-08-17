@@ -16,7 +16,6 @@ from app.deduplication import find_duplicates
 from app.discovery.verification import freshness_label
 from app.discovery.vocabulary import CandidateVocabulary
 from app.normalization import normalize
-from app.workflows.search_plan import SearchPlan
 
 logger = logging.getLogger(__name__)
 
@@ -80,8 +79,11 @@ async def run_discovery(session: Session, config: AgentConfig, prefs: Preference
     if llm is not None and discovery_cfg.get("vocab_llm", False):
         await vocab.llm_expanded_roles(llm)
         logger.info("vocab_llm enabled; vocabulary now %d terms", len(vocab.roles()))
-    plan = SearchPlan(prefs, vocab=vocab).build(max_per_country=max_per_country,
-                                                max_queries_per_run=max_queries)
+    from app.workflows.adaptive_plan import build_adaptive_plan
+
+    plan = build_adaptive_plan(session, prefs, config, vocab=vocab, profile=profile,
+                               max_per_country=max_per_country,
+                               max_queries_per_run=max_queries)
     connectors = _load_source_connectors(sources_path)
 
     # Employer + agency universe (§7, §9) — opt-in so the job pipeline stays hermetic.
@@ -145,6 +147,7 @@ async def run_discovery(session: Session, config: AgentConfig, prefs: Preference
                 items_found += len(processed)
                 dup = find_duplicates(session, processed)
                 seen_canonical = set()
+                combo_new = 0
                 for idx, opp in enumerate(processed):
                     if idx in dup:
                         report.duplicates += 1
@@ -198,6 +201,10 @@ async def run_discovery(session: Session, config: AgentConfig, prefs: Preference
                     _, created = mem.store.upsert_job(session, job_data)
                     if created:
                         report.new_jobs += 1
+                        combo_new += 1
+                mem.store.record_query(session, combo["query"], combo.get("country", ""),
+                                       source_cfg.get("name", connector.name),
+                                       jobs_found=len(processed), relevant_jobs=combo_new)
                 session.flush()
         except Exception as exc:  # connector-level isolation
             logger.exception("Discovery connector %s failed", source_cfg.get("name"))

@@ -120,6 +120,59 @@ def api_events(db: Session = Depends(get_db), limit: int = Query(20, le=200)):
              "at": e.occurred_at.isoformat()} for e in rows]
 
 
+@app.get("/api/analytics", summary="Discovery analytics (§30): ranking, learning, health")
+def api_analytics(db: Session = Depends(get_db)):
+    from app.config import get_preferences, get_profile
+    from app.discovery.query_learning import query_value
+
+    jobs_by_country: dict[str, int] = {}
+    for row in db.execute(
+            select(models.Job.country, models.Job.id).where(models.Job.country != "")):
+        jobs_by_country[row[0]] = jobs_by_country.get(row[0], 0) + 1
+
+    countries, seen = [], set()
+    for cs in _ranked_countries(get_preferences, get_profile):
+        seen.add(cs.country.lower())
+        countries.append({"country": cs.country, "score": cs.score,
+                          "reasons": cs.reasons, "jobs": jobs_by_country.get(cs.country, 0),
+                          "rank": len(countries) + 1})
+    for country, n in sorted(jobs_by_country.items(), key=lambda kv: -kv[1]):
+        if country.lower() not in seen:
+            countries.append({"country": country, "score": 0.0, "reasons": [],
+                              "jobs": n, "rank": len(countries) + 1})
+
+    top = mem.store.best_queries(db, limit=25)
+    queries = [{"query": q.query, "country": q.country, "source": q.source,
+                "runs": q.runs, "jobs_found": q.jobs_found, "relevant_jobs": q.relevant_jobs,
+                "applications": q.applications, "responses": q.responses,
+                "value": round(query_value(q), 3)} for q in top]
+
+    src_rows = db.execute(select(models.Source).order_by(models.Source.id)).scalars().all()
+    source_health = [{"name": s.name, "kind": s.kind, "enabled": s.enabled,
+                      "items_found": s.items_found,
+                      "last_fetch_at": s.last_fetch_at.isoformat() if s.last_fetch_at else None,
+                      "last_error": s.last_error} for s in src_rows]
+
+    return {"stats": mem.store.stats(db), "countries": countries,
+            "top_queries": queries, "source_health": source_health}
+
+
+def _ranked_countries(get_preferences_fn, get_profile_fn):
+    """Country ranking for analytics — never crashes when the user prefs are absent."""
+    try:
+        prefs = get_preferences_fn()
+        target = list(prefs.countries)
+    except Exception:
+        target = []
+    try:
+        profile = get_profile_fn()
+    except Exception:
+        profile = None
+    from app.discovery.country_ranking import rank_countries
+
+    return rank_countries(target, prefs if target else None, profile)
+
+
 @app.post("/api/pause")
 def api_pause():
     set_paused(True)

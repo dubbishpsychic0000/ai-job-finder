@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import os
 import sys
+import time
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -16,9 +17,17 @@ os.environ["DATABASE_URL"] = f"sqlite:///{ROOT / 'data' / 'test_agent.db'}"
 os.environ["LLM_PROVIDER"] = "null"
 os.environ["ENABLE_EMAIL"] = "false"
 
-# wipe any previous test DB
+# wipe any previous test DB (best-effort: Windows may briefly hold the file open
+# after a prior run; per-test truncation keeps isolation either way)
 _db_path = ROOT / "data" / "test_agent.db"
-_db_path.unlink(missing_ok=True)
+for _attempt in range(5):
+    try:
+        _db_path.unlink()
+        break
+    except FileNotFoundError:
+        break
+    except OSError:
+        time.sleep(0.2)
 
 import pytest  # noqa: E402  (test env must be set before app imports)
 

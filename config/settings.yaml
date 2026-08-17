@@ -51,6 +51,7 @@ discovery:
   immigration_facts_per_country: 25
   opportunity_source_discovery: false  # search-engine expansion → opportunity sources (§6) — live web
   opportunity_sources_per_country: 5
+  max_daily_search_queries: 0      # §25 daily discovery budget (0 = unlimited)
   social_signal_discovery: false    # LinkedIn/Meta + user-provided social signals (§15-18) — authorized only
   social_sources_path: "config/social_sources.yaml"
 
