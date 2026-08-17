@@ -1,0 +1,91 @@
+name: Agent 24-7
+
+# Runs the full pipeline (discovery -> analysis -> action) on a schedule,
+# keeping all state inside the PRIVATE vault repo. Nothing personal ever
+# touches this public repository: candidate data, OAuth secrets and the
+# SQLite state are cloned in from the vault at runtime and pushed back.
+#
+# Secrets required (repo-level, Actions):
+#   VAULT_TOKEN      fine-grained PAT (read+write "Contents") for
+#                    dubbishpsychic0000/ai-job-finder-vault
+#   GEMINI_API_KEYS  comma-separated Gemini API key(s)
+
+on:
+  schedule:
+    - cron: "13 */12 * * *" # every 12h, matching search_cadence_hours
+  workflow_dispatch:
+    inputs:
+      email_mode:
+        description: "Email mode (dry_run never touches Gmail)"
+        type: choice
+        default: dry_run
+        options: [dry_run, draft, live]
+
+# One run at a time: the agent shares a SQLite DB + global pause control.
+concurrency:
+  group: agent-24-7
+  cancel-in-progress: false
+
+jobs:
+  pipeline:
+    runs-on: ubuntu-latest
+    timeout-minutes: 55
+    env:
+      LLM_PROVIDER: gemini
+      EMAIL_MODE: ${{ inputs.email_mode || 'dry_run' }}
+      ENABLE_EMAIL: ${{ (inputs.email_mode == 'draft' || inputs.email_mode == 'live') && 'true' || 'false' }}
+    steps:
+      - name: Checkout public repo
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Restore candidate data, OAuth secrets, and state (private vault)
+        env:
+          VAULT_TOKEN: ${{ secrets.VAULT_TOKEN }}
+          VAULT_URL: https://github.com/dubbishpsychic0000/ai-job-finder-vault.git
+        run: |
+          git clone --depth 1 "https://x-access-token:${VAULT_TOKEN}@${VAULT_URL#https://}" /tmp/vault
+          cp -r /tmp/vault/candidate ./candidate
+          cp -r /tmp/vault/secrets ./secrets
+          mkdir -p data
+          cp -a /tmp/vault/state/. ./data/ 2>/dev/null || true
+
+      - name: Run one pipeline pass
+        env:
+          GEMINI_API_KEYS: ${{ secrets.GEMINI_API_KEYS }}
+        run: |
+          python -m app.cli run-once --json | tee /tmp/run_report.json
+
+      - name: Persist state back to vault
+        if: always()
+        env:
+          VAULT_TOKEN: ${{ secrets.VAULT_TOKEN }}
+          VAULT_URL: https://github.com/dubbishpsychic0000/ai-job-finder-vault.git
+        run: |
+          rm -f data/test_agent.db data/*.log* data/gemini_result.json data/run_*.json
+          git clone --depth 1 "https://x-access-token:${VAULT_TOKEN}@${VAULT_URL#https://}" /tmp/vault
+          cp -a data/. /tmp/vault/state/
+          cd /tmp/vault
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "state: snapshot $(date -u +%Y-%m-%dT%H:%M:%SZ)" || echo "no state change"
+          git push origin HEAD:main
+
+      - name: Upload run logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: agent-logs
+          path: |
+            data/*.log
+            data/*.log.err
+            /tmp/run_report.json
