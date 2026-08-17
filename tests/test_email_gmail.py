@@ -209,18 +209,26 @@ def test_scope_is_send_only():
 
 
 def test_load_client_config_reads_secret_without_logging(settings, caplog, tmp_path):
-    secret_value = None
-    src = "secrets/client_secret.json"
-    import os
-    if os.path.exists(src):
-        secret_value = json.load(open(src, encoding="utf-8"))["web"]["client_secret"]
+    secret_path = tmp_path / "client_secret.json"
+    secret_value = "GOCSPX-hermetic-secret-value-1234"
+    secret_path.write_text(json.dumps({
+        "web": {
+            "client_id": "c-hermetic.apps.googleusercontent.com",
+            "project_id": "hermetic",
+            "auth_uri": "https://accounts.google.com/o/oauth2/auth",
+            "token_uri": "https://oauth2.googleapis.com/token",
+            "auth_provider_x509_cert_url": "https://www.googleapis.com/oauth2/v1/certs",
+            "client_secret": secret_value,
+            "redirect_uris": ["http://localhost"],
+        }
+    }))
+    s = settings.model_copy(update={"gmail_client_secret_path": str(secret_path)})
 
     with caplog.at_level(logging.INFO):
-        cfg = gmail_oauth.load_client_config(settings)
+        cfg = gmail_oauth.load_client_config(s)
 
     assert "web" in cfg
-    if secret_value:
-        assert secret_value not in caplog.text
+    assert secret_value not in caplog.text
 
 
 def test_secret_and_token_never_logged_on_failure(settings, caplog, monkeypatch):
