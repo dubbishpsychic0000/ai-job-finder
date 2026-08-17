@@ -52,6 +52,7 @@ jobs:
           VAULT_TOKEN: ${{ secrets.VAULT_TOKEN }}
           VAULT_URL: https://github.com/dubbishpsychic0000/ai-job-finder-vault.git
         run: |
+          rm -rf /tmp/vault
           git clone --depth 1 "https://x-access-token:${VAULT_TOKEN}@${VAULT_URL#https://}" /tmp/vault
           cp -r /tmp/vault/candidate ./candidate
           cp -r /tmp/vault/secrets ./secrets
@@ -71,6 +72,7 @@ jobs:
           VAULT_URL: https://github.com/dubbishpsychic0000/ai-job-finder-vault.git
         run: |
           rm -f data/test_agent.db data/*.log* data/gemini_result.json data/run_*.json
+          rm -rf /tmp/vault
           git clone --depth 1 "https://x-access-token:${VAULT_TOKEN}@${VAULT_URL#https://}" /tmp/vault
           cp -a data/. /tmp/vault/state/
           cd /tmp/vault
