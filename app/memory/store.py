@@ -35,7 +35,7 @@ def record_event(session: Session, type: str, message: str, level: str = "info",
 
 # ------------------------- companies -------------------------
 def get_or_create_company(session: Session, name: str, url: str = "", country: str = "",
-                          *, careers_url: str = "", industry: str = "",
+                          *, careers_url: str = "", recruitment_url: str = "", industry: str = "",
                           source: str = "", sponsorship_signal: str = "",
                           international_recruitment_signal: str = "") -> Company:
     norm = _normalize_name(name)
@@ -45,6 +45,8 @@ def get_or_create_company(session: Session, name: str, url: str = "", country: s
     if existing:
         if careers_url and not existing.careers_url:
             existing.careers_url = careers_url
+        if recruitment_url and not existing.recruitment_url:
+            existing.recruitment_url = recruitment_url
         if industry and not existing.industry:
             existing.industry = industry
         if source and not existing.source:
@@ -56,7 +58,8 @@ def get_or_create_company(session: Session, name: str, url: str = "", country: s
         existing.last_checked_at = utcnow()
         return existing
     c = Company(name=name, normalized_name=norm, website=url, country=country,
-                careers_url=careers_url, industry=industry, source=source,
+                careers_url=careers_url, recruitment_url=recruitment_url, industry=industry,
+                source=source,
                 sponsorship_signal=sponsorship_signal or "unknown",
                 international_recruitment_signal=international_recruitment_signal or "unknown",
                 last_checked_at=utcnow())

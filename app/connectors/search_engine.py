@@ -33,6 +33,15 @@ def _clean(text: str) -> str:
     return re.sub(r"\s+", " ", (text or "")).strip()
 
 
+def resolve_search_url(href: str) -> str:
+    """Unwrap DuckDuckGo redirect links to the real destination URL."""
+    if not href or "duckduckgo" not in (href or "").lower():
+        return href
+    qs = urllib.parse.parse_qs(urllib.parse.urlparse(href).query)
+    uddg = qs.get("uddg")
+    return urllib.parse.unquote(uddg[0]) if uddg else href
+
+
 class SearchEngineSource:
     """Web search connector built on DuckDuckGo's HTML result page."""
 

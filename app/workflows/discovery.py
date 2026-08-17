@@ -29,6 +29,7 @@ class DiscoveryReport:
     new_jobs: int = 0
     duplicates: int = 0
     source_errors: list[str] = field(default_factory=list)
+    employers_discovered: int = 0
 
 
 def _load_source_connectors(path: Path | None = None) -> list[tuple[dict, object]]:
@@ -78,6 +79,13 @@ async def run_discovery(session: Session, config: AgentConfig, prefs: Preference
     plan = SearchPlan(prefs, vocab=vocab).build(max_per_country=max_per_country,
                                                 max_queries_per_run=max_queries)
     connectors = _load_source_connectors(sources_path)
+
+    # Employer + agency universe (§7, §9) — opt-in so the job pipeline stays hermetic.
+    if discovery_cfg.get("employer_discovery", False):
+        from app.workflows.employer_discovery import run_employer_discovery
+
+        ereport = await run_employer_discovery(session, config, prefs, profile=profile)
+        report.employers_discovered = ereport.stored
 
     for source_cfg, connector in connectors:
         source = mem.store.upsert_source(session, source_cfg.get("name", connector.name),

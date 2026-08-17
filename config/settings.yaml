@@ -43,6 +43,8 @@ discovery:
   source_quality: {}                  # optional per-source-type overrides (§22)
   confidence_boost_per_source: 5      # confidence added per extra source seen (§21/§22)
   confidence_cap: 100
+  employer_discovery: false           # build the employer/agency universe (§7/§9) — live web
+  employer_targets_per_country: 5
 
 search_plan:
   max_combinations_per_country: 3
