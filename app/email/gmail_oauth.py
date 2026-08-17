@@ -1,8 +1,8 @@
-"""Gmail OAuth — minimal-scope (gmail.send) credential management.
+"""Gmail OAuth — dual-scope (drafts + send) credential management.
 
 Security invariants enforced here:
-  * the ONLY requested scope is `https://www.googleapis.com/auth/gmail.send`
-    (send-only; the agent can never read the user's inbox);
+  * the ONLY scopes requested are `gmail.compose` (create drafts) and
+    `gmail.send` (send); the agent can never read the user's inbox;
   * the OAuth client secret lives in `secrets/client_secret.json` and the refresh
     token in `secrets/gmail_token.json` — both git-ignored;
   * secrets and tokens are NEVER logged, printed, or passed to any LLM prompt;
@@ -25,6 +25,9 @@ logger = logging.getLogger(__name__)
 
 GMAIL_SEND_SCOPE = "https://www.googleapis.com/auth/gmail.send"
 GMAIL_COMPOSE_SCOPE = "https://www.googleapis.com/auth/gmail.compose"  # draft creation
+# One token must power BOTH live sends and the draft-overflow fallback, so the
+# consent flow requests both scopes up front.
+GMAIL_ALL_SCOPES = [GMAIL_COMPOSE_SCOPE, GMAIL_SEND_SCOPE]
 
 _SECRET_FILENAME = "client_secret.json"
 _TOKEN_FILENAME = "gmail_token.json"
@@ -139,7 +142,7 @@ def save_credentials(settings: RunnerSettings, creds) -> None:
         json.dump(json.loads(creds.to_json()), fh)
     _restrict_permissions(path)
     logger.info("Gmail token stored at %s (git-ignored, scopes=%s)", path,
-                ",".join(required_scopes(settings)))
+                ",".join(GMAIL_ALL_SCOPES))
 
 
 def authorize(settings: RunnerSettings) -> str:
@@ -162,12 +165,11 @@ def authorize(settings: RunnerSettings) -> str:
 
     client_config = load_client_config(settings)
     flow = InstalledAppFlow.from_client_config(
-        client_config, scopes=required_scopes(settings), redirect_uri=redirect_uri
+        client_config, scopes=GMAIL_ALL_SCOPES, redirect_uri=redirect_uri
     )
     creds = flow.run_local_server(port=OAUTH_PORT, prompt="consent")
     save_credentials(settings, creds)
     return token_path(settings).as_posix()
-
 
 def authenticated_service(settings: RunnerSettings):
     """Build a Gmail API service authenticated with the send-only token."""
