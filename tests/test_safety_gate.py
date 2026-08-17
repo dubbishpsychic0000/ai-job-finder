@@ -140,18 +140,19 @@ def test_employer_cooldown_blocked(db, profile, config, cv_file):
 
 def test_daily_application_limit_blocked(db, profile, config, cv_file):
     body = "I have 4 years of experience in civil engineering."
-    report = _run(db, profile, config, body, cv_file, daily=0)
+    limit = int(config.rules.get("max_daily_applications", 5))
     report = validate(to_addr="hr@colas.example", subject="Application", body=body,
                       attachments=[cv_file], job=_job(db), profile=profile, config=config,
-                      session=db, daily_total=0, daily_applications=5, action="APPLY")
+                      session=db, daily_total=0, daily_applications=limit, action="APPLY")
     assert not report.allowed
     assert any("application limit" in r for r in report.reasons)
 
 
 def test_daily_inquiry_limit_blocked(db, profile, config, cv_file):
     body = "I have 4 years of experience in civil engineering."
+    limit = int(config.rules.get("max_daily_inquiries", 5))
     report = validate(to_addr="hr@colas.example", subject="Question", body=body,
                       attachments=[cv_file], job=_job(db), profile=profile, config=config,
-                      session=db, daily_total=0, daily_inquiries=5, action="ASK_EMPLOYER")
+                      session=db, daily_total=0, daily_inquiries=limit, action="ASK_EMPLOYER")
     assert not report.allowed
     assert any("inquiry limit" in r for r in report.reasons)

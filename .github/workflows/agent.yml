@@ -32,8 +32,8 @@ jobs:
     timeout-minutes: 55
     env:
       LLM_PROVIDER: gemini
-      EMAIL_MODE: ${{ inputs.email_mode || 'dry_run' }}
-      ENABLE_EMAIL: ${{ (inputs.email_mode == 'draft' || inputs.email_mode == 'live') && 'true' || 'false' }}
+      EMAIL_MODE: ${{ inputs.email_mode || 'live' }}
+      ENABLE_EMAIL: ${{ (inputs.email_mode || 'live') != 'dry_run' && 'true' || 'false' }}
     steps:
       - name: Checkout public repo
         uses: actions/checkout@v4

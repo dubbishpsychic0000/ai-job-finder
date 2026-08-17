@@ -18,8 +18,8 @@ scoring_weights:
 rules:
   tolerance_years_buffer: 2                 # allow candidate exp + buffer vs required
   max_days_since_posted: 45                 # older postings are ignored
-  max_daily_applications: 5                 # APPLY emails per day
-  max_daily_inquiries: 5                    # ASK_EMPLOYER / information requests per day
+  max_daily_applications: 10                # APPLY emails per day
+  max_daily_inquiries: 10                   # ASK_EMPLOYER / information requests per day
   max_daily_outbound: 10                    # total outbound emails per day
   employer_cooldown_days: 7                 # cooldown between any contact with the same company
   min_application_score: 80                 # min opportunity score to auto-apply

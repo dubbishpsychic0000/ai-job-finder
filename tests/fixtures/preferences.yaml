@@ -1,0 +1,51 @@
+# Fixed test preferences - golden-set tests must NOT depend on the user's live
+# candidate/preferences.yaml. Countries/roles mirror the offline demo jobs.json
+# so discovery + search-plan behaviour is deterministic and hermetic.
+target_countries:
+  - France
+  - Belgium
+  - Canada
+  - Germany
+  - Spain
+  - Portugal
+  - Netherlands
+
+target_roles:
+  - civil engineering technician
+  - site technician
+  - road construction technician
+  - technicien genie civil
+  - technicien VRD
+  - constructie
+  - technicien travaux publics
+
+localized_roles:
+  fr:
+    - "technicien genie civil"
+    - "technicien VRD"
+    - "technicien travaux publics"
+    - "technicien chantier"
+  nl:
+    - "burgerlijk ingenieur technicus"
+    - "werfleider"
+    - "technieker wegenbouw"
+  de:
+    - "bautechniker"
+    - "strassentechniker"
+    - "tiefbautechniker"
+  es:
+    - "tecnico de obras civiles"
+    - "tecnico de carreteras"
+  pt:
+    - "tecnico de engenharia civil"
+    - "tecnico de obras"
+
+employment_preferences:
+  full_time: true
+  part_time: false
+  contract: false
+  remote: false
+
+min_salary_monthly_eur: 1800
+
+sponsorship_required: true

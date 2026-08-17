@@ -362,3 +362,53 @@ def test_emergency_pause_blocks_outbound_even_in_dry_run(db, config, profile, se
 
     assert result["status"] == "blocked"
     assert "pause" in result["reason"].lower()
+
+
+def test_live_mode_cap_overflow_keeps_gmail_draft(db, config, profile, settings, monkeypatch):
+    """At the 10/day outbound cap, live mode keeps further messages as drafts
+    instead of blocking them (the ask: send up to 10, hold the rest in draft)."""
+    from app.memory.store import add_application, count_dispatched_today
+
+    job = _job(db)
+    decision = _decision(db, job)
+    settings = _settings(settings)  # live + enable_email
+
+    for i in range(10):
+        seed = _job(db, title=f"Seeded Job {i}", email=f"seed{i}@colas.example")
+        a = add_application(db, seed.id, None, "APPLY", 88.0, seed.contact_email)
+        a.status = "sent"
+        a.sent_at = datetime.now(timezone.utc)
+    db.commit()
+    assert count_dispatched_today(db) == 10
+
+    drafts = []
+
+    def fake_draft(settings_, *, to, subject, body, attachments):
+        drafts.append(to)
+        return True, "draft-cap-1", ""
+
+    monkeypatch.setattr(provider_mod, "create_draft", fake_draft)
+    result = asyncio.run(_engine(db, config, profile, settings, _real_communicator(profile)).run(
+        job, decision, "APPLY", job.contact_email, "fr"))
+
+    assert result["status"] == "drafted"
+    assert result["draft_id"] == "draft-cap-1"
+    assert drafts == [job.contact_email]  # drafted, not blocked, not sent
+    assert count_dispatched_today(db) == 11  # drafts consume the daily budget too
+
+
+def test_live_mode_content_block_stays_blocked_not_drafted(db, config, profile, settings, monkeypatch):
+    """Only daily-cap failures soften into drafts; content violations stay blocked."""
+    job = _job(db)
+    decision = _decision(db, job)
+    settings = _settings(settings)
+
+    def boom(*a, **k):
+        raise AssertionError("a hard block must never create a draft")
+
+    monkeypatch.setattr(provider_mod, "create_draft", boom)
+    communicator = _draft_communicator("I worked at Meta for 10 years as a rocket scientist.")
+    result = asyncio.run(_engine(db, config, profile, settings, communicator).run(
+        job, decision, "APPLY", job.contact_email, "fr"))
+
+    assert result["status"] == "blocked"

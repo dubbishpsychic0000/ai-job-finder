@@ -36,6 +36,16 @@ LANG_TO_CV = {
     "nl": ["CV_Omar_Benhamid_NL.pdf", "CV_Omar_Benhamid.pdf"],
 }
 
+# Checks that may trip only because a daily outbound budget is spent. When these
+# are the ONLY failures, live mode keeps the message as a Gmail draft instead of
+# blocking it. Any content/recipient/cooldown/duplicate/freshness/attachment
+# failure stays a hard block.
+CAP_CHECKS = {"rate_limit", "daily_applications", "daily_inquiries"}
+
+
+def _only_cap_blocked(report) -> bool:
+    return bool(report.checks) and set(report.checks.keys()) <= CAP_CHECKS
+
 
 def resolve_attachment(cv_dir: Path, lang: str) -> str:
     cv_dir = Path(cv_dir)
@@ -118,6 +128,14 @@ class ApplicationEngine:
         email.validation_log = report.reasons
 
         if not report.allowed:
+            # live mode: the daily outbound budget is the only blocker -> keep
+            # the message as a Gmail draft instead of silently blocking it.
+            if mode == "live" and _only_cap_blocked(report):
+                mem.store.record_event(self.session, "action",
+                                       f"daily outbound cap reached - kept as draft for {contact_email}",
+                                       "info", {"job_id": job.id, "application_id": app.id})
+                return self._finalize_draft(job, app, email, contact_email, draft["subject"],
+                                            draft["body"], attachment, score)
             email.status = "blocked"
             app.status = "blocked"
             mem.store.record_event(self.session, "action",

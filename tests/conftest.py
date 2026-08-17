@@ -68,9 +68,24 @@ def profile():
 
 @pytest.fixture()
 def prefs():
-    return get_preferences()
+    """Deterministic test preferences (independent of the user's candidate/preferences.yaml)."""
+    return get_preferences(Path(__file__).parent / "fixtures" / "preferences.yaml")
 
 
 @pytest.fixture()
 def settings():
     return get_settings()
+
+
+@pytest.fixture(autouse=True)
+def _fake_cv(tmp_path, monkeypatch):
+    """Tests must never depend on the gitignored real candidate/ CVs (absent in CI)."""
+    from app import config as _config
+    from app.config import get_profile
+    from app.email import service as _email_service
+
+    cv = tmp_path / "cv_test.pdf"
+    cv.write_bytes(b"%PDF-1.4 fake CV")
+    monkeypatch.setattr(_email_service, "resolve_attachment", lambda cv_dir, lang: str(cv))
+    fixture_profile = get_profile(ROOT / "tests" / "fixtures" / "profile.yaml")
+    monkeypatch.setattr(_config, "get_profile", lambda: fixture_profile)
