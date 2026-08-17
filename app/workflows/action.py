@@ -78,6 +78,10 @@ async def run_actions(session: Session, config: AgentConfig, settings: RunnerSet
                                            "warn", {"job_id": job.id})
                     continue
                 result = await engine.run(job, decision, decision.decision, to_addr, lang)
+                if result.get("application_id"):  # §24 — query ledger learns the outcome
+                    mem.store.record_query_outcome(
+                        session, job.search_query, job.search_country, job.source,
+                        applications=1)
                 target = report.applied if decision.decision == "APPLY" else report.asked
                 target.append({"job_id": job.id, **result})
                 if result["status"] == "blocked":

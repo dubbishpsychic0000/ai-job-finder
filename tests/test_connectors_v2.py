@@ -344,3 +344,53 @@ def test_discovery_persists_v2_metadata(db, config, prefs, profile):
         assert job.source_confidence == job.source_quality
         assert job.canonical_job_id, "canonical_job_id must persist (§21)"
     assert any(j.search_query for j in jobs), "search metadata must persist (§29)"
+
+
+def test_discovery_per_source_request_budget(db, prefs, profile, monkeypatch):
+    """§25 — max_requests_per_source caps how many queries each source is hit with."""
+    from app.config import AgentConfig
+    from app.connectors.static_files import StaticFilesSource
+    from app.workflows import discovery as disc
+
+    calls = {"n": 0}
+
+    class CountingStatic(StaticFilesSource):
+        async def search(self, query, location=""):
+            calls["n"] += 1
+            return await super().search(query, location)
+
+    monkeypatch.setitem(disc.registry, "static_files", CountingStatic)
+    cfg = AgentConfig(discovery={"max_requests_per_source": 2})
+    report = asyncio.run(disc.run_discovery(db, cfg, prefs, FIX / "sources_demo.yaml",
+                                            profile=profile))
+    assert calls["n"] == 2, "per-source budget must stop after the configured requests"
+    assert report.combinations_attempted == 2
+
+
+def test_parallel_fetch_outcomes_match_sequential(tmp_path, prefs, profile):
+    """§26 — parallel_fetch may speed up searches but must persist identical results."""
+    from sqlalchemy import create_engine
+    from sqlalchemy.orm import sessionmaker
+
+    from app import models
+    from app.config import AgentConfig
+    from app.workflows.discovery import run_discovery
+
+    def run_with(parallel: bool) -> set[tuple]:
+        eng = create_engine(f"sqlite:///{tmp_path / ('par' if parallel else 'seq')}.db",
+                            connect_args={"check_same_thread": False})
+        models.Base.metadata.create_all(eng)
+        session = sessionmaker(bind=eng)()
+        try:
+            cfg = AgentConfig(discovery={"parallel_fetch": parallel,
+                                         "max_requests_per_source": 100,
+                                         "max_queries_per_run": 40})
+            report = asyncio.run(run_discovery(session, cfg, prefs, FIX / "sources_demo.yaml",
+                                               profile=profile))
+            assert report.combinations_attempted == 40
+            jobs = session.query(models.Job).all()
+            return {(j.title, j.canonical_job_id, j.source) for j in jobs}
+        finally:
+            session.close()
+
+    assert run_with(False) == run_with(True), "parallel fetch must not change persisted jobs"

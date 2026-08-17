@@ -126,3 +126,22 @@ def test_discovery_records_query_stats(db, config, prefs, profile):
     rows = db.execute(select(models.QueryStat)).scalars().all()
     assert rows
     assert all(r.runs >= 1 and r.jobs_found >= 0 and r.relevant_jobs >= 0 for r in rows)
+
+
+# ---- post-discovery outcomes (§24) -------------------------------------------------
+
+
+def test_query_outcome_counters_accumulate(db):
+    mem.store.record_query(db, "technicien genie civil", "France", source="demo")
+    mem.store.record_query_outcome(db, "technicien genie civil", "France", source="demo",
+                                   applications=2, responses=1, interviews=1)
+    st = mem.store.aggregate_query_stat(db, "technicien genie civil", "France")
+    assert st.applications == 2
+    assert st.responses == 1
+    assert st.interviews == 1
+
+
+def test_query_outcome_is_noop_without_ledger_row(db):
+    mem.store.record_query_outcome(db, "phantom query", "France", source="x",
+                                   applications=9, interviews=3)
+    assert mem.store.get_query_stat(db, "phantom query", "France", "x") is None

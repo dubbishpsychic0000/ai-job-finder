@@ -33,7 +33,8 @@ def build_adaptive_plan(session: Session, prefs: Preferences, config: AgentConfi
                                                 max_queries_per_run=max_queries_per_run)
     dcfg = config.discovery or {}
     ranking = {cs.country: idx for idx, cs in enumerate(
-        rank_countries(prefs.countries, prefs, profile))}
+        rank_countries(prefs.countries, prefs, profile, session=session,
+                       weights=dcfg.get("country_ranking_weights")))}
     has_history = any(aggregate_query_stat(session, item["query"], item["country"]) is not None
                       for item in base)
     remaining = budget_remaining(session, int(dcfg.get("max_daily_search_queries") or 0))

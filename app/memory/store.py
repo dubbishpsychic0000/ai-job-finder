@@ -366,9 +366,26 @@ def aggregate_query_stat(session: Session, query: str, country: str = "") -> Que
     merged.relevant_jobs = sum(r.relevant_jobs for r in rows)
     merged.applications = sum(r.applications for r in rows)
     merged.responses = sum(r.responses for r in rows)
+    merged.interviews = sum(r.interviews for r in rows)
     merged.runs = sum(r.runs for r in rows)
     merged.last_run_at = max((r.last_run_at for r in rows if r.last_run_at), default=None)
     return merged
+
+
+def record_query_outcome(session: Session, query: str, country: str = "", source: str = "",
+                         applications: int = 0, responses: int = 0, interviews: int = 0) -> None:
+    """Accumulate post-discovery outcomes (§24) on a (query, country, source) row.
+
+    Used when applications get recorded for a job that discovery found via that
+    query; employers' replies/interviews land on the same counter when present.
+    No-op when discovery has no ledger row for the combo (nothing to track).
+    """
+    stat = get_query_stat(session, query, country, source)
+    if not stat:
+        return
+    stat.applications += max(0, applications)
+    stat.responses += max(0, responses)
+    stat.interviews += max(0, interviews)
 
 
 def record_query(session: Session, query: str, country: str = "", source: str = "",
@@ -407,9 +424,18 @@ def upsert_source(session: Session, name: str, kind: str, base_url: str = "") ->
 
 
 def mark_source_fetched(session: Session, source: Source, items: int, error: str = "") -> None:
-    source.last_fetch_at = utcnow()
+    now = utcnow()
+    source.last_fetch_at = now
     source.items_found = items
     source.last_error = error
+    if error:  # §27 — triage failures for connector health
+        source.last_failure_at = now
+        lowered = error.lower()
+        source.rate_limit_status = (
+            "limited" if any(k in lowered for k in ("rate limit", "429", "too many")) else "error")
+    else:
+        source.last_success_at = now
+        source.rate_limit_status = "ok"
 
 
 # ------------------------- stats (dashboard) -------------------------

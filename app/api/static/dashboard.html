@@ -35,6 +35,12 @@
     <button class="gray" onclick="refresh()">Refresh</button>
   </div>
   <div class="grid" id="stats"></div>
+  <h2 style="font-size:1.05rem;margin:4px 0 12px;">Discovery (§30)</h2>
+  <div class="row">
+    <table id="countries"><thead><tr><th>#</th><th>Country</th><th>Score</th><th>Jobs</th><th>Why</th></tr></thead><tbody></tbody></table>
+    <table id="queries"><thead><tr><th>Query</th><th>Country</th><th>Runs</th><th>Relevant</th><th>Apps</th><th>Intrv</th><th>Value</th></tr></thead><tbody></tbody></table>
+  </div>
+  <table id="sources"><thead><tr><th>Source</th><th>Kind</th><th>Health</th><th>Rate limit</th><th>Items</th><th>Last fetch</th></tr></thead><tbody></tbody></table>
   <table id="jobs"><thead><tr><th>Job</th><th>Company</th><th>Country</th><th>Status</th><th>Score</th></tr></thead><tbody></tbody></table>
   <table id="apps"><thead><tr><th>App</th><th>Status</th><th>Action</th><th>Contact</th><th>Follow-ups</th></tr></thead><tbody></tbody></table>
   <table id="imm"><thead><tr><th>Country</th><th>Program</th><th>Source</th></tr></thead><tbody></tbody></table>
@@ -56,6 +62,21 @@ async function refresh(){
     ['Employers contacted', stats.employers_contacted],
     ['Immigration programs', stats.immigration_programs],
   ].map(([k,v]) => `<div class="card"><b>${v}</b><span>${k}</span></div>`).join('');
+
+  const analytics = await get('/api/analytics');
+  document.getElementById('countries').querySelector('tbody').innerHTML =
+    analytics.countries.map(c => `<tr><td>${c.rank}</td><td>${c.country}</td>
+      <td>${Number(c.score).toFixed(2)}</td><td>${c.jobs}</td>
+      <td>${(c.reasons||[]).slice(0,3).join(' · ')}</td></tr>`).join('');
+  document.getElementById('queries').querySelector('tbody').innerHTML =
+    analytics.top_queries.slice(0,10).map(q => `<tr><td>${q.query}</td><td>${q.country}</td>
+      <td>${q.runs}</td><td>${q.relevant_jobs}</td><td>${q.applications}</td><td>${q.interviews}</td>
+      <td>${Number(q.value).toFixed(2)}</td></tr>`).join('');
+  document.getElementById('sources').querySelector('tbody').innerHTML =
+    analytics.source_health.map(s => `<tr><td>${s.name}</td><td>${s.kind}</td>
+      <td>${tag(s.health, s.health==='healthy'?'ok':s.health==='error'?'err':'warn')}</td>
+      <td>${tag(s.rate_limit_status, s.rate_limit_status==='ok'?'ok':'warn')}</td>
+      <td>${s.items_found}</td><td>${s.last_fetch_at ? s.last_fetch_at.replace('T',' ').slice(0,16) : 'never'}</td></tr>`).join('');
 
   const jobs = await get('/api/jobs?limit=20');
   document.getElementById('jobs').querySelector('tbody').innerHTML = jobs.map(j => `<tr>

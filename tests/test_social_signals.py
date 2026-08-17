@@ -56,13 +56,41 @@ def test_linkedin_user_provided_mode_skips_index():
     assert [o.url for o in ops] == ["https://www.linkedin.com/jobs/view/9"]
 
 
-# ---- Meta: user-provided ONLY (§17, §34) ----------------------------------------
+# ---- Meta: authorized channels (§17, §18, §34) --------------------------------
 
 
-def test_meta_rejects_non_user_provided_mode():
-    for mode in ("public", "authorized_only"):
-        with pytest.raises(ValueError):
-            MetaJobsSource(config={"access_mode": mode})
+def test_meta_rejects_unauthorized_mode():
+    with pytest.raises(ValueError):
+        MetaJobsSource(config={"access_mode": "authorized_only"})
+
+
+def test_meta_public_index_only_keeps_facebook_hosts():
+    async def fake(query, location=""):
+        assert query.startswith("site:facebook.com"), "index query must scope to facebook"
+        return [{"url": "https://www.facebook.com/groups/travaux/announce/12",
+                 "title": "Conducteur de travaux", "snippet": "chantier neuf"},
+                {"url": "https://evil.example/job", "title": "Phishing",
+                 "snippet": "must be dropped"}]
+
+    src = MetaJobsSource(config={"access_mode": "public", "country": "France"},
+                         search_fn=fake)
+    ops = asyncio.run(src.search("conducteur travaux", "France"))
+    assert [o.url for o in ops] == ["https://www.facebook.com/groups/travaux/announce/12"]
+    assert all(o.verification_status == "unverified" for o in ops)
+    assert all(o.raw["channel"] == "search_engine_index" for o in ops)
+    assert all(o.source_type == "social_signal" for o in ops)
+
+
+def test_meta_user_provided_mode_never_indexes():
+    async def boom(query, location=""):
+        raise AssertionError("index search must not run in user_provided mode")
+
+    src = MetaJobsSource(config={"access_mode": "user_provided", "country": "France"},
+                         urls=["https://www.facebook.com/groups/travaux/announce/1"],
+                         search_fn=boom)
+    ops = asyncio.run(src.search("", ""))
+    assert [o.url for o in ops] == ["https://www.facebook.com/groups/travaux/announce/1"]
+    assert all(o.raw["channel"] == "user_provided" for o in ops)
 
 
 def test_meta_emits_only_user_provided_signals(monkeypatch):

@@ -91,6 +91,16 @@ def _upgrade_schema() -> None:
         "source": "VARCHAR(128) DEFAULT ''",
     })
 
+    _add_missing_columns(insp, "sources", {
+        "last_success_at": "DATETIME",
+        "last_failure_at": "DATETIME",
+        "rate_limit_status": "VARCHAR(16) DEFAULT 'ok'",
+    })
+
+    _add_missing_columns(insp, "query_stats", {
+        "interviews": "INTEGER DEFAULT 0",
+    })
+
 
 def _add_missing_columns(insp, table: str, columns: dict[str, str]) -> None:
     """Idempotently add missing columns to a table (SQLite ALTER TABLE)."""

@@ -128,6 +128,7 @@ class QueryStat(Base):
     relevant_jobs: Mapped[int] = mapped_column(Integer, default=0)
     applications: Mapped[int] = mapped_column(Integer, default=0)
     responses: Mapped[int] = mapped_column(Integer, default=0)
+    interviews: Mapped[int] = mapped_column(Integer, default=0)
     runs: Mapped[int] = mapped_column(Integer, default=0)
     last_run_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
@@ -257,6 +258,9 @@ class Source(Base):
     last_fetch_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     last_error: Mapped[str] = mapped_column(Text, default="")
     items_found: Mapped[int] = mapped_column(Integer, default=0)
+    last_success_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    last_failure_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    rate_limit_status: Mapped[str] = mapped_column(String(16), default="ok")
 
 
 class Event(Base):

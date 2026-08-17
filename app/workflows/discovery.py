@@ -3,6 +3,7 @@ normalizes, deduplicates against memory and stores only genuinely new jobs.
 """
 from __future__ import annotations
 
+import asyncio
 import logging
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -121,98 +122,119 @@ async def run_discovery(session: Session, config: AgentConfig, prefs: Preference
         report.social_signals = sreport.stored
 
     for source_cfg, connector in connectors:
-        source = mem.store.upsert_source(session, source_cfg.get("name", connector.name),
+        source_name = source_cfg.get("name", connector.name)
+        source = mem.store.upsert_source(session, source_name,
                                          getattr(connector, "kind", "?"), str(source_cfg.get("path", "")))
         items_found = 0
+        max_requests = int(discovery_cfg.get("max_requests_per_source", 0))  # §25 per-source budget
+        combos = plan[:max_requests] if max_requests else plan
+        parallel = bool(discovery_cfg.get("parallel_fetch", False))  # §26 — concurrent searches
+
+        def process(combo, results, source_name) -> int:
+            """Normalize + dedup + store one combo's results; returns jobs found."""
+            for o in results:
+                raw = dict(o.raw or {})
+                raw.update({
+                    "search_query": combo["query"],
+                    "search_location": combo["location"],
+                    "search_country": combo.get("country", ""),
+                    "search_language": combo.get("lang", ""),
+                    "search_intent": combo.get("intent", ""),
+                })
+                o.raw = raw
+            processed = [normalize(o) for o in results]
+            processed = [o for o in processed if o is not None]
+            report.opportunities_fetched += len(processed)
+            dup = find_duplicates(session, processed)
+            seen_canonical = set()
+            combo_new = 0
+            for idx, opp in enumerate(processed):
+                if idx in dup:
+                    report.duplicates += 1
+                    continue
+                canonical = opp.canonical_job_id()
+                if canonical in seen_canonical:  # same vacancy from another source this run
+                    report.duplicates += 1
+                    continue
+                seen_canonical.add(canonical)
+                src_type = opp.effective_source_type()
+                qmap = discovery_cfg.get("source_quality") or {}
+                quality = int(qmap.get(src_type, opp.effective_quality())) if qmap else opp.effective_quality()
+                careers_url = (opp.raw or {}).get("page", "") if src_type in ("company_career", "ats") else ""
+                company = mem.store.get_or_create_company(
+                    session, opp.company or "Unknown", opp.url, opp.country,
+                    careers_url=careers_url, source=opp.source,
+                    sponsorship_signal=opp.sponsorship_signal,
+                    international_recruitment_signal=opp.international_candidate_signal,
+                )
+                job_data = {
+                    "source": opp.source,
+                    "external_id": opp.external_id,
+                    "dedup_key": opp.dedup_key(),
+                    "title": opp.title,
+                    "company_id": company.id,
+                    "location": opp.location,
+                    "country": opp.country,
+                    "description": opp.description,
+                    "url": opp.url,
+                    "posted_at": opp.posted_at,
+                    "employment_type": opp.employment_type or "full_time",
+                    "salary": opp.salary or "",
+                    "contact_email": opp.contact_email or "",
+                    "status": "new",
+                    "source_type": src_type,
+                    "source_quality": quality,
+                    "source_confidence": quality,
+                    "closing_at": opp.closing_at,
+                    "language": opp.language or combo.get("lang", ""),
+                    "sponsorship_signal": opp.sponsorship_signal,
+                    "international_candidate_signal": opp.international_candidate_signal,
+                    "relocation_signal": opp.relocation_signal,
+                    "work_permit_signal": opp.work_permit_signal,
+                    "verification_status": opp.verification_status,
+                    "search_query": combo["query"],
+                    "search_language": combo.get("lang", ""),
+                    "search_country": combo.get("country", opp.country),
+                    "canonical_job_id": canonical,
+                    "freshness": freshness_label(opp.posted_at),
+                }
+                _, created = mem.store.upsert_job(session, job_data)
+                if created:
+                    report.new_jobs += 1
+                    combo_new += 1
+            mem.store.record_query(session, combo["query"], combo.get("country", ""),
+                                   source_name, jobs_found=len(processed),
+                                   relevant_jobs=combo_new)
+            session.flush()
+            return len(processed)
+
+        async def search(combo, _connector=connector):
+            try:
+                return await _connector.search(combo["query"], combo["location"])
+            except (TypeError, NotImplementedError):
+                return []
+
+        failure = ""
         try:
-            for combo in plan:
-                report.combinations_attempted += 1
-                try:
-                    results = await connector.search(combo["query"], combo["location"])
-                except (TypeError, NotImplementedError):
-                    results = []
-                for o in results:
-                    raw = dict(o.raw or {})
-                    raw.update({
-                        "search_query": combo["query"],
-                        "search_location": combo["location"],
-                        "search_country": combo.get("country", ""),
-                        "search_language": combo.get("lang", ""),
-                        "search_intent": combo.get("intent", ""),
-                    })
-                    o.raw = raw
-                processed = [normalize(o) for o in results]
-                processed = [o for o in processed if o is not None]
-                report.opportunities_fetched += len(processed)
-                items_found += len(processed)
-                dup = find_duplicates(session, processed)
-                seen_canonical = set()
-                combo_new = 0
-                for idx, opp in enumerate(processed):
-                    if idx in dup:
-                        report.duplicates += 1
-                        continue
-                    canonical = opp.canonical_job_id()
-                    if canonical in seen_canonical:  # same vacancy from another source this run
-                        report.duplicates += 1
-                        continue
-                    seen_canonical.add(canonical)
-                    src_type = opp.effective_source_type()
-                    qmap = discovery_cfg.get("source_quality") or {}
-                    quality = int(qmap.get(src_type, opp.effective_quality())) if qmap else opp.effective_quality()
-                    careers_url = (opp.raw or {}).get("page", "") if src_type in ("company_career", "ats") else ""
-                    company = mem.store.get_or_create_company(
-                        session, opp.company or "Unknown", opp.url, opp.country,
-                        careers_url=careers_url, source=opp.source,
-                        sponsorship_signal=opp.sponsorship_signal,
-                        international_recruitment_signal=opp.international_candidate_signal,
-                    )
-                    job_data = {
-                        "source": opp.source,
-                        "external_id": opp.external_id,
-                        "dedup_key": opp.dedup_key(),
-                        "title": opp.title,
-                        "company_id": company.id,
-                        "location": opp.location,
-                        "country": opp.country,
-                        "description": opp.description,
-                        "url": opp.url,
-                        "posted_at": opp.posted_at,
-                        "employment_type": opp.employment_type or "full_time",
-                        "salary": opp.salary or "",
-                        "contact_email": opp.contact_email or "",
-                        "status": "new",
-                        "source_type": src_type,
-                        "source_quality": quality,
-                        "source_confidence": quality,
-                        "closing_at": opp.closing_at,
-                        "language": opp.language or combo.get("lang", ""),
-                        "sponsorship_signal": opp.sponsorship_signal,
-                        "international_candidate_signal": opp.international_candidate_signal,
-                        "relocation_signal": opp.relocation_signal,
-                        "work_permit_signal": opp.work_permit_signal,
-                        "verification_status": opp.verification_status,
-                        "search_query": combo["query"],
-                        "search_language": combo.get("lang", ""),
-                        "search_country": combo.get("country", opp.country),
-                        "canonical_job_id": canonical,
-                        "freshness": freshness_label(opp.posted_at),
-                    }
-                    _, created = mem.store.upsert_job(session, job_data)
-                    if created:
-                        report.new_jobs += 1
-                        combo_new += 1
-                mem.store.record_query(session, combo["query"], combo.get("country", ""),
-                                       source_cfg.get("name", connector.name),
-                                       jobs_found=len(processed), relevant_jobs=combo_new)
-                session.flush()
+            if parallel:  # §26 — all searches dispatched at once, writes stay ordered
+                report.combinations_attempted += len(combos)
+                batch = await asyncio.gather(*(search(c) for c in combos), return_exceptions=True)
+                for combo, results in zip(combos, batch, strict=True):
+                    if isinstance(results, BaseException):
+                        raise results  # connector-level isolation below
+                    items_found += process(combo, results, source_name)
+            else:
+                for combo in combos:
+                    report.combinations_attempted += 1
+                    items_found += process(combo, await search(combo), source_name)
         except Exception as exc:  # connector-level isolation
-            logger.exception("Discovery connector %s failed", source_cfg.get("name"))
-            report.source_errors.append(f"{source_cfg.get('name')}: {exc}")
+            logger.exception("Discovery connector %s failed", source_name)
+            report.source_errors.append(f"{source_name}: {exc}")
             mem.store.record_event(session, "discovery", f"connector failed: {exc}",
-                                   "error", {"source": source_cfg.get("name")})
+                                   "error", {"source": source_name})
+            failure = f"{source_name}: {exc}"
         finally:
-            mem.store.mark_source_fetched(session, source, items_found)
+            mem.store.mark_source_fetched(session, source, items_found, error=failure)
 
     mem.store.record_event(session, "discovery",
                            f"found {report.new_jobs} new jobs ({report.opportunities_fetched} fetched, "

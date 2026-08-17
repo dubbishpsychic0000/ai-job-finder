@@ -145,13 +145,27 @@ def api_analytics(db: Session = Depends(get_db)):
     queries = [{"query": q.query, "country": q.country, "source": q.source,
                 "runs": q.runs, "jobs_found": q.jobs_found, "relevant_jobs": q.relevant_jobs,
                 "applications": q.applications, "responses": q.responses,
+                "interviews": q.interviews,  # §24 — interview callbacks per query
                 "value": round(query_value(q), 3)} for q in top]
 
     src_rows = db.execute(select(models.Source).order_by(models.Source.id)).scalars().all()
-    source_health = [{"name": s.name, "kind": s.kind, "enabled": s.enabled,
-                      "items_found": s.items_found,
-                      "last_fetch_at": s.last_fetch_at.isoformat() if s.last_fetch_at else None,
-                      "last_error": s.last_error} for s in src_rows]
+    source_health = []
+    for s in src_rows:
+        if s.last_error:
+            health = "error"
+        elif s.last_fetch_at:
+            health = "healthy"
+        else:
+            health = "unknown"
+        source_health.append({
+            "name": s.name, "kind": s.kind, "enabled": s.enabled,
+            "items_found": s.items_found,
+            "last_fetch_at": s.last_fetch_at.isoformat() if s.last_fetch_at else None,
+            "last_success_at": s.last_success_at.isoformat() if s.last_success_at else None,
+            "last_failure_at": s.last_failure_at.isoformat() if s.last_failure_at else None,
+            "rate_limit_status": s.rate_limit_status or "ok",
+            "last_error": s.last_error, "health": health,  # §27 — connector health detail
+        })
 
     return {"stats": mem.store.stats(db), "countries": countries,
             "top_queries": queries, "source_health": source_health}

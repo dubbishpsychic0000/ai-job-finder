@@ -52,8 +52,18 @@ discovery:
   opportunity_source_discovery: false  # search-engine expansion → opportunity sources (§6) — live web
   opportunity_sources_per_country: 5
   max_daily_search_queries: 0      # §25 daily discovery budget (0 = unlimited)
+  max_requests_per_source: 40      # §25 per-source request budget per run (0 = unlimited)
+  parallel_fetch: false            # §26 — dispatch all source searches concurrently (results identical)
   social_signal_discovery: false    # LinkedIn/Meta + user-provided social signals (§15-18) — authorized only
   social_sources_path: "config/social_sources.yaml"
+  country_ranking_weights:          # §12 — relative importance of each scoring dimension
+    language: 25
+    demand: 20
+    international: 15
+    sponsorship: 15
+    relocation: 15
+    immigration: 5
+    opportunities: 5
 
 search_plan:
   max_combinations_per_country: 3

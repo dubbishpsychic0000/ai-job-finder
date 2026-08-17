@@ -29,6 +29,8 @@ def test_analytics_report(db, monkeypatch):
     db.flush()
     mem.store.record_query(db, "civil engineering technician", "France", source="s",
                            jobs_found=3, relevant_jobs=2)
+    mem.store.record_query_outcome(db, "civil engineering technician", "France", source="s",
+                                   applications=1, responses=1, interviews=1)
     source = mem.store.upsert_source(db, "demo_rss", "rss", "https://example.com/feed")
     mem.store.mark_source_fetched(db, source, 5)
 
@@ -44,9 +46,18 @@ def test_analytics_report(db, monkeypatch):
     # query learning surfaced in analytics
     assert report["top_queries"][0]["query"] == "civil engineering technician"
     assert report["top_queries"][0]["value"] > 0.5
+    # §24 — applications / responses / interviews per query are exposed
+    assert report["top_queries"][0]["applications"] == 1
+    assert report["top_queries"][0]["responses"] == 1
+    assert report["top_queries"][0]["interviews"] == 1
 
-    # connector health
-    assert report["source_health"][0]["items_found"] == 5
+    # connector health (§27)
+    health = report["source_health"][0]
+    assert health["items_found"] == 5
+    assert health["health"] == "healthy"
+    assert health["last_success_at"], "a successful fetch must record last_success_at"
+    assert health["rate_limit_status"] == "ok"
+    assert health["last_failure_at"] is None
 
 
 def test_analytics_empty_db_is_safe(db, monkeypatch):
@@ -59,3 +70,21 @@ def test_analytics_empty_db_is_safe(db, monkeypatch):
     assert report["top_queries"] == []
     assert report["source_health"] == []
     assert "total_jobs" in report["stats"]  # stats block still present
+
+
+def test_source_health_failure_triage(db, monkeypatch):
+    """§27 — failures and rate limits are reflected in connector health."""
+    from app.config import get_preferences
+
+    monkeypatch.setattr("app.config.get_preferences",
+                        lambda: get_preferences(FIX / "preferences.yaml"))
+
+    source = mem.store.upsert_source(db, "flaky_api", "api", "https://example.com/api")
+    mem.store.mark_source_fetched(db, source, 0, error="HTTP 429 rate limit exceeded")
+
+    report = api.api_analytics(db=db)
+    health = next(h for h in report["source_health"] if h["name"] == "flaky_api")
+    assert health["health"] == "error"
+    assert health["rate_limit_status"] == "limited"
+    assert health["last_failure_at"]
+    assert health["last_success_at"] is None

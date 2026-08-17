@@ -6,9 +6,11 @@
 #                     you supply. access_mode: public (index) or user_provided
 #                     (your URLs only). The connector never touches LinkedIn
 #                     directly (no login / scraping).
-#   meta_fb_groups  — Meta/Facebook signals from YOUR URLs or pasted
-#                     announcements only. access_mode must be 'user_provided'
-#                     and the connector performs no network access at all.
+#   meta_fb_groups  — Meta/Facebook signals through two authorized channels:
+#                     access_mode: public (search-engine index for
+#                     site:facebook.com — never a direct connection) or
+#                     user_provided (your URLs/pasted announcements only, zero
+#                     network access). See spec §18/§34.
 connectors:
   - name: linkedin_jobs
     kind: linkedin_jobs
