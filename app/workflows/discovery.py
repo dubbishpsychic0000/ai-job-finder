@@ -30,6 +30,7 @@ class DiscoveryReport:
     duplicates: int = 0
     source_errors: list[str] = field(default_factory=list)
     employers_discovered: int = 0
+    immigration_facts: int = 0
 
 
 def _load_source_connectors(path: Path | None = None) -> list[tuple[dict, object]]:
@@ -86,6 +87,13 @@ async def run_discovery(session: Session, config: AgentConfig, prefs: Preference
 
         ereport = await run_employer_discovery(session, config, prefs, profile=profile)
         report.employers_discovered = ereport.stored
+
+    # Immigration & work-pathway discovery (§11, §13) — opt-in, official web sources.
+    if discovery_cfg.get("immigration_discovery", False):
+        from app.workflows.immigration_discovery import run_immigration_discovery
+
+        ireport = await run_immigration_discovery(session, config, prefs, profile=profile)
+        report.immigration_facts = ireport.stored
 
     for source_cfg, connector in connectors:
         source = mem.store.upsert_source(session, source_cfg.get("name", connector.name),

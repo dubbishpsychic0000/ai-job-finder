@@ -1,0 +1,20 @@
+{
+  "response": {
+    "docs": [
+      {
+        "id": "ams-1",
+        "beruf": "Straßentechniker (m/w/d)",
+        "arbeitgeber": "ÖBB Infrastruktur",
+        "arbeitsort_staat": "Wien, Österreich",
+        "url": "https://www.ams.at/jobservice/1"
+      },
+      {
+        "id": "ams-2",
+        "beruf": "Bautechniker Tiefbau",
+        "arbeitgeber": "Stadt Wien",
+        "arbeitsort_staat": "Wien, Österreich",
+        "url": "https://www.ams.at/jobservice/2"
+      }
+    ]
+  }
+}

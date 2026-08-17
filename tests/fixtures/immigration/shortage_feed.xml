@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom">
+  <channel>
+    <title>Immigration, Refugees and Citizenship Canada — News</title>
+    <link>https://www.canada.ca/en/immigration-refugees-citizenship.html</link>
+    <description>Official IRCC news feed.</description>
+    <item>
+      <title>Civil engineering technicians added to the 2026 shortage occupation list</title>
+      <link>https://www.canada.ca/en/immigration-refugees-citizenship/news/2026/shortage.html</link>
+      <description>Road technicians and site technicians remain in high demand under the skilled occupation list.</description>
+      <guid>https://www.canada.ca/en/immigration-refugees-citizenship/news/2026/shortage.html</guid>
+      <pubDate>Mon, 12 Jan 2026 10:00:00 GMT</pubDate>
+    </item>
+    <item>
+      <title>Express Entry: new category-based invitations announced</title>
+      <link>https://www.canada.ca/en/immigration-refugees-citizenship/news/2026/express.html</link>
+      <description>The skilled worker program will issue invitations under the new category.</description>
+      <guid>https://www.canada.ca/en/immigration-refugees-citizenship/news/2026/express.html</guid>
+      <pubDate>Fri, 09 Jan 2026 09:00:00 GMT</pubDate>
+    </item>
+  </channel>
+</rss>

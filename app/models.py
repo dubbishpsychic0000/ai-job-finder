@@ -180,6 +180,28 @@ class ImmigrationProgram(Base):
     verified_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
 
+class ImmigrationFact(Base):
+    """A single verifiable migration/work-pathway claim (spec §11).
+
+    Every row is a claim extracted from a whitelisted official government
+    domain. Stored with its source so `source_domain` can always be audited.
+    """
+
+    __tablename__ = "immigration_facts"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    country: Mapped[str] = mapped_column(String(64), index=True)
+    program: Mapped[str] = mapped_column(String(255))
+    fact_type: Mapped[str] = mapped_column(String(32), default="general")  # shortage_occupation | program | work_permit | general
+    claim: Mapped[str] = mapped_column(Text)
+    occupation: Mapped[str] = mapped_column(String(255), default="")
+    source_url: Mapped[str] = mapped_column(String(1024))
+    source_domain: Mapped[str] = mapped_column(String(255), default="")
+    source_name: Mapped[str] = mapped_column(String(128), default="")
+    confidence: Mapped[int] = mapped_column(Integer, default=100)
+    matched: Mapped[bool] = mapped_column(default=False)
+    retrieved_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, index=True)
+
+
 class Source(Base):
     __tablename__ = "sources"
     id: Mapped[int] = mapped_column(primary_key=True)

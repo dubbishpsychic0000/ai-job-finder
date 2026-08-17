@@ -64,6 +64,31 @@ connectors:
         external_id: "uuid"
         posted_at: "createdAt"
 
+  # Government employment portals (spec §14) — public access only (§34); disabled
+  # until an operator verifies the current official endpoints.
+  - kind: government
+    name: uk_dwp_findajob
+    enabled: false
+    type: rss
+    country: "United Kingdom"
+    feeds:
+      - "https://findajob.dwp.gov.uk/search?q={query}&l={location}&o=rss"
+
+  - kind: government
+    name: austria_ams_jobapi
+    enabled: false
+    type: api
+    country: "Austria"
+    access_mode: public
+    base_url: "https://jobapi.gv.at/solr/jobdata/select?q={query}&start=0&rows=10&wt=json"
+    list_path: "response.docs"
+    mapping:
+      title: "beruf"
+      company: "arbeitgeber"
+      location: "arbeitsort_staat"
+      url: "url"
+      external_id: "id"
+
   # ATS connectors (spec §8): Lever / Workday / iCIMS public APIs — all disabled
   # until an operator configures real company identifiers.
   - kind: lever

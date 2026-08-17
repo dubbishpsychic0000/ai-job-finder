@@ -1,0 +1,115 @@
+# Immigration & work-pathway discovery sources (spec §11, §13).
+#
+# Facts are ONLY recorded from whitelisted official domains (OFFICIAL_DOMAINS in
+# app/connectors/immigration/official.py) — a non-official URL is rejected by the
+# engine, never guessed. Enable the entries you want AND set
+# discovery.immigration_discovery: true in config/settings.yaml.
+#
+# Supported kinds:
+#   html — official page; sentences mentioning a candidate occupation become claims
+#   rss  — official RSS/Atom feed; entries (title + summary) become claims
+#   json — official JSON API; items mapped via `list_path` + `mapping`
+
+immigration_sources:
+  - country: Canada
+    name: canada_shortage_occupations
+    kind: html
+    enabled: false                          # verify the current official URL before enabling
+    program: "Temporary Foreign Worker Program — occupation lists"
+    urls:
+      - "https://www.canada.ca/en/immigration-refugees-citizenship/services/work-canada.html"
+
+  - country: Canada
+    name: canada_news_feed
+    kind: rss
+    enabled: false
+    program: "Immigration, Refugees and Citizenship Canada — news"
+    urls:
+      - "https://www.canada.ca/en/immigration-refugees-citizenship/services/news.rss"
+
+  - country: Germany
+    name: make_it_in_germany_skilled
+    kind: html
+    enabled: false
+    program: "Skilled workers — requirements and shortage occupations (Germany)"
+    urls:
+      - "https://www.make-it-in-germany.com/en/visa-residence/employment/working/shortage"
+
+  - country: France
+    name: france_metiers_tension
+    kind: html
+    enabled: false
+    program: "Métiers en tension (France)"
+    urls:
+      - "https://www.vie-publique.fr/infographie/les-metiers-en-tension"
+
+  - country: United Kingdom
+    name: uk_shortage_occupation_list
+    kind: html
+    enabled: false
+    program: "Skilled Worker visa — eligible occupations and codes"
+    urls:
+      - "https://www.gov.uk/government/publications/skilled-worker-visa-eligible-occupations/skilled-worker-visa-eligible-occupations-and-codes"
+
+  - country: United Kingdom
+    name: uk_skilled_worker_feed
+    kind: rss
+    enabled: false
+    program: "Skilled Worker visa — official guidance updates"
+    urls:
+      - "https://www.gov.uk/government/feed"
+
+  - country: Netherlands
+    name: ind_work_netherlands
+    kind: html
+    enabled: false
+    program: "Working in the Netherlands (IND)"
+    urls:
+      - "https://ind.nl/en/work/working-in-the-netherlands"
+
+  - country: Belgium
+    name: belgium_working_foreigners
+    kind: html
+    enabled: false
+    program: "Working in Belgium — foreign workers"
+    urls:
+      - "https://www.belgium.be/en/work/working_belgium/foreigners"
+
+  - country: Spain
+    name: spain_extranjeria
+    kind: html
+    enabled: false
+    program: "Trabajar en España (extranjería)"
+    urls:
+      - "https://www.inclusion.gob.es/documents/"
+
+  - country: Portugal
+    name: portugal_rafael
+    kind: html
+    enabled: false
+    program: "Trabalhar em Portugal"
+    urls:
+      - "https://www.sef.pt/en/"
+
+  - country: Switzerland
+    name: sem_arbeit
+    kind: html
+    enabled: false
+    program: "Working in Switzerland (SEM)"
+    urls:
+      - "https://www.sem.admin.ch/sem/en/home/themen/arbeit.html"
+
+  # Example of a `json` source — point `urls` at an official JSON API that
+  # carries a `claim`/`occupation` payload once an operator has verified it.
+  - country: Canada
+    name: canada_jobs_json_example
+    kind: json
+    enabled: false
+    program: "Government of Canada — Labour Market stats"
+    list_path: "items"
+    mapping:
+      claim: "message"
+      occupation: "occupation"
+      fact_type: "kind"
+    urls:
+      - "https://www.canada.ca/official-json-endpoint.json"

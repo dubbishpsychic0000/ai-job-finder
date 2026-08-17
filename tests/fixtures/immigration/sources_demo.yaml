@@ -1,0 +1,30 @@
+# Hermetic source config for immigration-discovery tests (all URLs official).
+immigration_sources:
+  - country: Canada
+    name: canada_shortage_occupations
+    kind: html
+    enabled: true
+    program: "Temporary Foreign Worker Program — occupation lists"
+    urls:
+      - "https://www.canada.ca/en/immigration-refugees-citizenship/services/work-canada.html"
+
+  - country: Canada
+    name: canada_news_feed
+    kind: rss
+    enabled: true
+    program: "IRC C Canada official news"
+    urls:
+      - "https://www.canada.ca/en/immigration-refugees-citizenship/services/news.rss"
+
+  - country: Canada
+    name: canada_labour_json
+    kind: json
+    enabled: true
+    program: "Federal Job Bank — labour market facts"
+    list_path: "items"
+    mapping:
+      claim: "summary"
+      occupation: "occupation"
+      fact_type: "category"
+    urls:
+      - "https://www.canada.ca/official-labour-api.json"

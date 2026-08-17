@@ -21,6 +21,7 @@ from app.models import (
     Decision,
     Email,
     Event,
+    ImmigrationFact,
     ImmigrationProgram,
     Job,
     JobAnalysis,
@@ -258,6 +259,40 @@ def upsert_contact(session: Session, email: str, person_name: str = "", role: st
     return c
 
 
+# ------------------------- immigration facts -------------------------
+def upsert_immigration_fact(session: Session, *, country: str, program: str,
+                            fact_type: str, claim: str, source_url: str,
+                            source_domain: str = "", source_name: str = "",
+                            confidence: int = 100, occupation: str = "",
+                            matched: bool = False,
+                            retrieved_at: datetime | None = None) -> tuple[ImmigrationFact, bool]:
+    """Store one §11 fact; idempotent on the (country, program, claim) triple."""
+    existing = session.execute(
+        select(ImmigrationFact).where(
+            ImmigrationFact.country == country,
+            ImmigrationFact.program == program,
+            ImmigrationFact.claim == claim,
+        )
+    ).scalars().first()
+    if existing:
+        return existing, False
+    fact = ImmigrationFact(
+        country=country, program=program, fact_type=fact_type, claim=claim,
+        source_url=source_url, source_domain=source_domain or _domain(source_url),
+        source_name=source_name, confidence=confidence, occupation=occupation,
+        matched=matched, retrieved_at=retrieved_at or utcnow(),
+    )
+    session.add(fact)
+    session.flush()
+    return fact, True
+
+
+def _domain(url: str) -> str:
+    from urllib.parse import urlparse
+
+    return urlparse(url).netloc.lower()
+
+
 # ------------------------- sources -------------------------
 def get_source(session: Session, name: str) -> Source | None:
     return session.execute(select(Source).where(Source.name == name)).scalar_one_or_none()
@@ -292,6 +327,7 @@ def stats(session: Session) -> dict[str, Any]:
         "emails_sent_today": count_sent_today(session, now),
         "employers_contacted": _count(select(Contact)),
         "immigration_programs": _count(select(ImmigrationProgram)),
+        "immigration_facts": _count(select(ImmigrationFact)),
         "total_jobs": _count(select(models.Job)),
         "total_emails": _count(select(Email)),
         "last_events": [

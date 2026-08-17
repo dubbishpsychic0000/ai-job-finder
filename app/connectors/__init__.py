@@ -8,6 +8,7 @@ from app.connectors.base import JobSource, Opportunity, get_connector, registry
 from app.connectors.company_careers import CompanyCareersSource
 from app.connectors.eures import EuresSource
 from app.connectors.generic_api import GenericAPISource
+from app.connectors.government import GovernmentPortalSource
 from app.connectors.greenhouse import GreenhouseSource
 from app.connectors.icims import ICIMSSource
 from app.connectors.lever import LeverSource
@@ -21,6 +22,7 @@ __all__ = [
     "CompanyCareersSource",
     "EuresSource",
     "GenericAPISource",
+    "GovernmentPortalSource",
     "GreenhouseSource",
     "ICIMSSource",
     "JobSource",
@@ -47,6 +49,7 @@ def register_defaults() -> None:
         "smartrecruiters": SmartRecruitersSource,
         "eures": EuresSource,
         "generic_api": GenericAPISource,
+        "government": GovernmentPortalSource,
         "lever": LeverSource,
         "workday": WorkdaySource,
         "icims": ICIMSSource,

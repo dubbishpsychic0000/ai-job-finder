@@ -1,0 +1,20 @@
+[
+  {
+    "id": "gov-1001",
+    "title": "Civil Engineering Technician",
+    "company": "Public Works and Government Services Canada",
+    "location": "Toronto, Canada",
+    "description": "Support the design and maintenance of federal infrastructures.",
+    "url": "https://www.canada.ca/en/public-service/jobs/1001.html",
+    "posted_at": "2026-02-01T08:00:00Z"
+  },
+  {
+    "id": "gov-1002",
+    "title": "Road Construction Technician",
+    "company": "National Infrastructure Agency",
+    "location": "Ottawa, Canada",
+    "description": "Road rehabilitation and drainage works on national corridors.",
+    "url": "https://www.canada.ca/en/public-service/jobs/1002.html",
+    "posted_at": "2026-02-02T08:00:00Z"
+  }
+]
