@@ -1,0 +1,22 @@
+{
+  "results": {
+    "items": [
+      {
+        "uuid": "x1",
+        "title": "Civil Engineering Technician",
+        "employer": {"name": "Vinci"},
+        "city": "Rotterdam, Netherlands",
+        "permalink": "https://cfg-api.example/jobs/x1",
+        "createdAt": "2026-08-05T00:00:00Z"
+      },
+      {
+        "uuid": "x2",
+        "title": "Terrassement Technician",
+        "employer": {"name": "Spie Batignolles"},
+        "city": "Nantes, France",
+        "permalink": "https://cfg-api.example/jobs/x2",
+        "createdAt": "2026-08-06T00:00:00Z"
+      }
+    ]
+  }
+}

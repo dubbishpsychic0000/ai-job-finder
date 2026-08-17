@@ -35,6 +35,9 @@ class RSSJobSource:
 
     name = "rss"
     kind = "rss"
+    source_type = "job_board"
+    access_mode = "public"
+    policy_notice = "Consumes public RSS/Atom feeds only."
 
     def __init__(self, feeds: list[str] | None = None, base_type: str = "jobs"):
         self.feeds = feeds or []

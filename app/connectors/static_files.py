@@ -17,6 +17,9 @@ DEFAULT_GLOB = "*.json"
 class StaticFilesSource:
     name = "static_files"
     kind = "static"
+    source_type = "job_board"
+    access_mode = "user_provided"
+    policy_notice = "Local fixture/offline source; only reads user-provided files."
 
     def __init__(self, path: str | Path, live: bool = False):
         self.path = Path(path)

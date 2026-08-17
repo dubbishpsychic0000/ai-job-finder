@@ -62,6 +62,35 @@ def _upgrade_schema() -> None:
         if "mode" not in email_columns:
             conn.execute(text("ALTER TABLE emails ADD COLUMN mode VARCHAR(16) DEFAULT ''"))
 
+    _add_missing_columns(insp, "jobs", {
+        "source_type": "VARCHAR(32) DEFAULT ''",
+        "source_quality": "INTEGER",
+        "closing_at": "DATETIME",
+        "language": "VARCHAR(16) DEFAULT ''",
+        "sponsorship_signal": "VARCHAR(16) DEFAULT 'unknown'",
+        "international_candidate_signal": "VARCHAR(16) DEFAULT 'unknown'",
+        "relocation_signal": "VARCHAR(16) DEFAULT 'unknown'",
+        "work_permit_signal": "VARCHAR(16) DEFAULT 'unknown'",
+        "verification_status": "VARCHAR(16) DEFAULT 'verified'",
+        "search_query": "VARCHAR(512) DEFAULT ''",
+        "search_language": "VARCHAR(16) DEFAULT ''",
+        "search_country": "VARCHAR(64) DEFAULT ''",
+        "canonical_job_id": "VARCHAR(64) DEFAULT ''",
+    })
+
+
+def _add_missing_columns(insp, table: str, columns: dict[str, str]) -> None:
+    """Idempotently add missing columns to a table (SQLite ALTER TABLE)."""
+    if not insp.has_table(table):
+        return
+    from sqlalchemy import text
+
+    existing = {c["name"] for c in insp.get_columns(table)}
+    with engine.begin() as conn:
+        for name, ddl in columns.items():
+            if name not in existing:
+                conn.execute(text(f"ALTER TABLE {table} ADD COLUMN {name} {ddl}"))
+
 
 @contextmanager
 def session_scope():

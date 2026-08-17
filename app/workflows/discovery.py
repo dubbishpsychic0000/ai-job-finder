@@ -105,10 +105,16 @@ async def run_discovery(session: Session, config: AgentConfig, prefs: Preference
                 report.opportunities_fetched += len(processed)
                 items_found += len(processed)
                 dup = find_duplicates(session, processed)
+                seen_canonical = set()
                 for idx, opp in enumerate(processed):
                     if idx in dup:
                         report.duplicates += 1
                         continue
+                    canonical = opp.canonical_job_id()
+                    if canonical in seen_canonical:  # same vacancy from another source this run
+                        report.duplicates += 1
+                        continue
+                    seen_canonical.add(canonical)
                     company = mem.store.get_or_create_company(
                         session, opp.company or "Unknown", opp.url, opp.country)
                     job_data = {
@@ -126,6 +132,19 @@ async def run_discovery(session: Session, config: AgentConfig, prefs: Preference
                         "salary": opp.salary or "",
                         "contact_email": opp.contact_email or "",
                         "status": "new",
+                        "source_type": opp.effective_source_type(),
+                        "source_quality": opp.effective_quality(),
+                        "closing_at": opp.closing_at,
+                        "language": opp.language or combo.get("lang", ""),
+                        "sponsorship_signal": opp.sponsorship_signal,
+                        "international_candidate_signal": opp.international_candidate_signal,
+                        "relocation_signal": opp.relocation_signal,
+                        "work_permit_signal": opp.work_permit_signal,
+                        "verification_status": opp.verification_status,
+                        "search_query": combo["query"],
+                        "search_language": combo.get("lang", ""),
+                        "search_country": combo.get("country", opp.country),
+                        "canonical_job_id": canonical,
                     }
                     _, created = mem.store.upsert_job(session, job_data)
                     if created:

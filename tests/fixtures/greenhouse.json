@@ -1,0 +1,22 @@
+{
+  "jobs": [
+    {
+      "id": 1,
+      "title": "Civil Engineering Technician",
+      "company_name": "Bouygues Construction",
+      "location": {"name": "Paris, France"},
+      "absolute_url": "https://boards.greenhouse.io/bouygues/jobs/1",
+      "updated_at": "2026-08-10T10:00:00Z",
+      "content": "<p>Assistant works technician for urban infrastructure. Visa sponsorship available.</p>"
+    },
+    {
+      "id": 2,
+      "title": "Road Construction Technician",
+      "company_name": "Bouygues Construction",
+      "location": {"name": "Lyon, France"},
+      "absolute_url": "https://boards.greenhouse.io/bouygues/jobs/2",
+      "updated_at": "2026-08-12T10:00:00Z",
+      "content": "<p>Road rehabilitation works technician.</p>"
+    }
+  ]
+}

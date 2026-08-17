@@ -38,6 +38,10 @@ class SearchEngineSource:
 
     name = "search_engine"
     kind = "html_search"
+    source_type = "search_engine"
+    access_mode = "public"
+    policy_notice = ("Uses a public search-engine result page. Does not log in, bypass "
+                     "captchas, or target protected sites.")
 
     def __init__(self, results_per_query: int = 8):
         self.results_per_query = results_per_query

@@ -62,6 +62,20 @@ class Job(Base):
     salary: Mapped[str] = mapped_column(String(128), default="")
     contact_email: Mapped[str] = mapped_column(String(255), default="")
     status: Mapped[str] = mapped_column(String(32), default="new", index=True)  # new|analyzed|acted|ignored|closed
+    # Discovery V2 (§29)
+    source_type: Mapped[str] = mapped_column(String(32), default="", index=True)
+    source_quality: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    closing_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    language: Mapped[str] = mapped_column(String(16), default="")
+    sponsorship_signal: Mapped[str] = mapped_column(String(16), default="unknown")
+    international_candidate_signal: Mapped[str] = mapped_column(String(16), default="unknown")
+    relocation_signal: Mapped[str] = mapped_column(String(16), default="unknown")
+    work_permit_signal: Mapped[str] = mapped_column(String(16), default="unknown")
+    verification_status: Mapped[str] = mapped_column(String(16), default="verified")
+    search_query: Mapped[str] = mapped_column(String(512), default="")
+    search_language: Mapped[str] = mapped_column(String(16), default="")
+    search_country: Mapped[str] = mapped_column(String(64), default="")
+    canonical_job_id: Mapped[str] = mapped_column(String(64), default="", index=True)
 
 
 class JobAnalysis(Base):

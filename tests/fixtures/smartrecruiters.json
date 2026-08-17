@@ -1,0 +1,22 @@
+{
+  "content": [
+    {
+      "id": "abc123",
+      "name": "Technicien Genie Civil",
+      "location": {"city": "Paris", "country": "France"},
+      "releasedDate": "2026-08-01T09:00:00Z",
+      "company": {"name": "Colas"},
+      "ref": "GCE-42",
+      "typeOfEmployment": "FULL_TIME"
+    },
+    {
+      "id": "def456",
+      "name": "Site Technician",
+      "location": {"city": "Lille", "country": "France"},
+      "releasedDate": "2026-08-02T09:00:00Z",
+      "company": {"name": "Eiffage"},
+      "ref": "SITE-7",
+      "typeOfEmployment": "CONTRACT"
+    }
+  ]
+}

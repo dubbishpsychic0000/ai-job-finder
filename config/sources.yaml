@@ -30,3 +30,36 @@ connectors:
         ops:
           location: "France"
           card_selectors: ["a.job-listing", "a.job-card"]
+
+  # Discovery V2 sources —— all disabled until an operator provides real tokens/
+  # IDs. Each connector uses public APIs only (spec §2, §8, §14).
+  - kind: greenhouse
+    name: greenhouse_boards
+    enabled: false
+    boards: ["examplecompany"]        # public board tokens, e.g. "mycompany"
+
+  - kind: smartrecruiters
+    name: smartrecruiters_companies
+    enabled: false
+    companies: ["examplecompany"]     # public company IDs
+
+  - kind: eures
+    name: eures_government
+    enabled: false
+    feeds:
+      - "https://eures.europa.eu/search-jobs/result?query={query}&location={location}&format=rss"
+
+  - kind: generic_api
+    name: example_job_api
+    enabled: false
+    config:
+      name: "example_job_api"
+      base_url: "https://api.example.com/v1/jobs?q={query}&loc={location}"
+      list_path: "results.items"
+      mapping:
+        title: "title"
+        company: "employer.name"
+        location: "city"
+        url: "permalink"
+        external_id: "uuid"
+        posted_at: "createdAt"

@@ -41,6 +41,19 @@ def find_duplicates(session: Session, opportunities) -> dict[int, str]:
             dup[idx] = "exact"
             continue
 
+        # §21 canonical identity: same vacancy posted on another board/ATS/agency
+        # collapses onto the stored copy regardless of external_id or source.
+        canonical = opp.canonical_job_id()
+        existing_canon = session.execute(
+            select(models.Job).where(
+                models.Job.canonical_job_id == canonical,
+                models.Job.canonical_job_id != "",
+            )
+        ).scalar_one_or_none()
+        if existing_canon:
+            dup[idx] = "exact"
+            continue
+
         # fuzzy: normalized title prefix + same company within freshness window
         title_prefix = (opp.title or "")[:24].strip()
         filet = session.execute(

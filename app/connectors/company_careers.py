@@ -17,6 +17,7 @@ from typing import Any
 import requests
 from bs4 import BeautifulSoup
 
+from app.connectors.ats_detect import detect_ats
 from app.connectors.base import Opportunity, infer_country
 
 logger = logging.getLogger(__name__)
@@ -28,6 +29,11 @@ class CompanyCareersSource:
 
     name = "company_careers"
     kind = "html"
+    source_type = "company_career"
+    access_mode = "public"
+    policy_notice = ("Loads public career pages only; never bypasses bot protections, "
+                     "CAPTCHAs or access controls. ATS-powered pages are detected and "
+                     "reported but not auto-scraped.")
 
     def __init__(self, pages: list[dict[str, Any]] | None = None):
         self.pages = pages or []
@@ -64,6 +70,7 @@ class CompanyCareersSource:
             html = self._fetch(url)
             if not html:
                 continue
+            ats = detect_ats(url, html)
             for card in self._extract_cards(html, ops):
                 title = card["title"]
                 link = _abs_url(url, card["url"])
@@ -71,6 +78,7 @@ class CompanyCareersSource:
                     continue
                 out.append(Opportunity(
                     source="company_careers",
+                    source_type="ats" if ats else "company_career",
                     external_id=link,
                     title=title,
                     company=page.get("company", ops.get("company", "")),
@@ -79,7 +87,7 @@ class CompanyCareersSource:
                     description="",
                     url=link,
                     posted_at=None,
-                    raw={"page": url},
+                    raw={"page": url, "ats": ats},
                 ))
         return out
 
