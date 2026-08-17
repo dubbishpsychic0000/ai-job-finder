@@ -32,6 +32,7 @@ email:
   max_daily_outbound: 10
   require_verifiable_recipient: true
   require_claims_allowedlist: true          # invention check against candidate profile
+  verify_url_before_send: false             # §20 — re-fetch the posting URL before emailing (live)
 
 discovery:
   full_text_description_max_chars: 8000
@@ -48,6 +49,8 @@ discovery:
   immigration_discovery: false        # immigration & work-pathway discovery (§11/§13) — live web
   immigration_sources_path: "config/immigration_sources.yaml"
   immigration_facts_per_country: 25
+  opportunity_source_discovery: false  # search-engine expansion → opportunity sources (§6) — live web
+  opportunity_sources_per_country: 5
 
 search_plan:
   max_combinations_per_country: 3

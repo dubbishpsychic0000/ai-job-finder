@@ -13,6 +13,7 @@ from app import memory as mem
 from app.config import ROOT_DIR, AgentConfig, CandidateProfile, Preferences, load_yaml
 from app.connectors import registry
 from app.deduplication import find_duplicates
+from app.discovery.verification import freshness_label
 from app.discovery.vocabulary import CandidateVocabulary
 from app.normalization import normalize
 from app.workflows.search_plan import SearchPlan
@@ -31,6 +32,7 @@ class DiscoveryReport:
     source_errors: list[str] = field(default_factory=list)
     employers_discovered: int = 0
     immigration_facts: int = 0
+    opportunity_sources: int = 0
 
 
 def _load_source_connectors(path: Path | None = None) -> list[tuple[dict, object]]:
@@ -94,6 +96,13 @@ async def run_discovery(session: Session, config: AgentConfig, prefs: Preference
 
         ireport = await run_immigration_discovery(session, config, prefs, profile=profile)
         report.immigration_facts = ireport.stored
+
+    # Search-engine expansion: surface opportunity sources (§6) — opt-in, live web.
+    if discovery_cfg.get("opportunity_source_discovery", False):
+        from app.workflows.opportunity_sources import run_opportunity_source_discovery
+
+        os_report = await run_opportunity_source_discovery(session, config, prefs, profile=profile)
+        report.opportunity_sources = os_report.stored
 
     for source_cfg, connector in connectors:
         source = mem.store.upsert_source(session, source_cfg.get("name", connector.name),
@@ -170,6 +179,7 @@ async def run_discovery(session: Session, config: AgentConfig, prefs: Preference
                         "search_language": combo.get("lang", ""),
                         "search_country": combo.get("country", opp.country),
                         "canonical_job_id": canonical,
+                        "freshness": freshness_label(opp.posted_at),
                     }
                     _, created = mem.store.upsert_job(session, job_data)
                     if created:

@@ -53,6 +53,7 @@ def run_pipeline(session: Session | None = None, *, sources_path: Path | None = 
                 "errors": discovery.source_errors,
                 "employers_discovered": discovery.employers_discovered,
                 "immigration_facts": discovery.immigration_facts,
+                "opportunity_sources": discovery.opportunity_sources,
             }
             analysis = asyncio.run(run_analysis(s, config, profile, llm, prefs.countries))
             result.analysis = {

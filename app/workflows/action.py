@@ -57,7 +57,11 @@ async def run_actions(session: Session, config: AgentConfig, settings: RunnerSet
                       immigration_agent=None) -> ActionReport:
     report = ActionReport()
     communicator = CommunicationAgent(llm, profile)
-    engine = ApplicationEngine(session, config, settings, profile, communicator)
+    # §20 — re-verify a posting is still live before emailing (opt-in via config;
+    # kept OFF by default so tests and dry-runs stay offline).
+    verify_fn = _verify_before_send(config) if (config.email or {}).get("verify_url_before_send", False) else None
+    engine = ApplicationEngine(session, config, settings, profile, communicator,
+                               verify_url_fn=verify_fn)
     jobs = pending_actions(session)
 
     for job in jobs:
@@ -93,6 +97,22 @@ async def run_actions(session: Session, config: AgentConfig, settings: RunnerSet
             report.errors.append(f"#{job.id}: {exc}")
             mem.store.record_event(session, "action", f"failed: {exc}", "error", {"job_id": job.id})
     return report
+
+
+def _verify_before_send(config: AgentConfig):
+    """Live-page checker for §20 before generating an employer email."""
+
+    def _check(url: str) -> bool:
+        import requests
+
+        try:
+            resp = requests.get(url, headers={"User-Agent": "WorldwideCareerAgent/0.1 (verifier)"},
+                                timeout=20, allow_redirects=True)
+            return resp.ok and bool(resp.text.strip())
+        except Exception:
+            return False
+
+    return _check
 
 
 def _record_programs(session: Session, research: dict, job) -> None:

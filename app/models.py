@@ -2,7 +2,8 @@
 
                       Memory tables
     candidates  jobs  companies  job_analysis  decisions  applications
-    contacts    emails  immigration_programs  sources  events
+    contacts    emails  immigration_programs  immigration_facts
+    opportunity_sources  sources  events  query_stats
 
 Works on SQLite (dev) and PostgreSQL (production) without code changes.
 """
@@ -85,6 +86,50 @@ class Job(Base):
     search_language: Mapped[str] = mapped_column(String(16), default="")
     search_country: Mapped[str] = mapped_column(String(64), default="")
     canonical_job_id: Mapped[str] = mapped_column(String(64), default="", index=True)
+    # Phase 5 freshness/verification (§19, §20, §29)
+    freshness: Mapped[str] = mapped_column(String(16), default="unknown")
+    last_verified_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
+
+class OpportunitySource(Base):
+    """A discovered source of opportunities (spec §6) — employer career pages,
+    recruitment agencies, government programmes, immigration/shortage pages,
+    sponsorship pages, social signals and international-hiring announcements.
+
+    Distinct from `companies`: an OpportunitySource is an *entry point* that the
+    search engine surfaced, which may or may not become a tracked company.
+    """
+
+    __tablename__ = "opportunity_sources"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    kind: Mapped[str] = mapped_column(String(32), index=True)  # employer_career|recruitment_agency|government|immigration|shortage|sponsorship|social_signal|international|general
+    url: Mapped[str] = mapped_column(String(1024), index=True)
+    title: Mapped[str] = mapped_column(String(512), default="")
+    country: Mapped[str] = mapped_column(String(64), default="", index=True)
+    source: Mapped[str] = mapped_column(String(128), default="")
+    sponsorship_signal: Mapped[str] = mapped_column(String(16), default="unknown")
+    international_recruitment_signal: Mapped[str] = mapped_column(String(16), default="unknown")
+    notes: Mapped[str] = mapped_column(Text, default="")
+    verification_status: Mapped[str] = mapped_column(String(16), default="unverified")
+    discovered_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+    last_checked_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
+
+class QueryStat(Base):
+    """Per-query outcome tracking (spec §24, §31) — what the search scheduler
+    learns from. Poor queries are down-weighted, never deleted."""
+
+    __tablename__ = "query_stats"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    query: Mapped[str] = mapped_column(String(512), index=True)
+    country: Mapped[str] = mapped_column(String(64), default="", index=True)
+    source: Mapped[str] = mapped_column(String(128), default="")
+    jobs_found: Mapped[int] = mapped_column(Integer, default=0)
+    relevant_jobs: Mapped[int] = mapped_column(Integer, default=0)
+    applications: Mapped[int] = mapped_column(Integer, default=0)
+    responses: Mapped[int] = mapped_column(Integer, default=0)
+    runs: Mapped[int] = mapped_column(Integer, default=0)
+    last_run_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
 
 class JobAnalysis(Base):

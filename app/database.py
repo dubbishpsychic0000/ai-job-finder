@@ -77,6 +77,8 @@ def _upgrade_schema() -> None:
         "search_language": "VARCHAR(16) DEFAULT ''",
         "search_country": "VARCHAR(64) DEFAULT ''",
         "canonical_job_id": "VARCHAR(64) DEFAULT ''",
+        "freshness": "VARCHAR(16) DEFAULT 'unknown'",
+        "last_verified_at": "DATETIME",
     })
 
     _add_missing_columns(insp, "companies", {

@@ -25,6 +25,8 @@ from app.models import (
     ImmigrationProgram,
     Job,
     JobAnalysis,
+    OpportunitySource,
+    QueryStat,
     Source,
     utcnow,
 )
@@ -293,6 +295,81 @@ def _domain(url: str) -> str:
     return urlparse(url).netloc.lower()
 
 
+# ------------------------- opportunity sources (spec §6) --------------------
+def upsert_opportunity_source(session: Session, *, kind: str, url: str, title: str = "",
+                              country: str = "", source: str = "",
+                              sponsorship_signal: str = "unknown",
+                              international_recruitment_signal: str = "unknown",
+                              notes: str = "") -> tuple[OpportunitySource, bool]:
+    existing = session.execute(
+        select(OpportunitySource).where(OpportunitySource.url == url)
+    ).scalars().first()
+    if existing:
+        existing.last_checked_at = utcnow()
+        existing.notes = (existing.notes + f" | {notes}").strip(" |") if notes else existing.notes
+        return existing, False
+    row = OpportunitySource(
+        kind=kind, url=url, title=title[:512], country=country, source=source,
+        sponsorship_signal=sponsorship_signal,
+        international_recruitment_signal=international_recruitment_signal,
+        notes=notes, last_checked_at=utcnow())
+    session.add(row)
+    session.flush()
+    return row, True
+
+
+def mark_job_freshness(session: Session, job: Job, freshness: str = "",
+                       last_verified_at: datetime | None = None) -> None:
+    if freshness:
+        job.freshness = freshness
+    if last_verified_at is not None:
+        job.last_verified_at = last_verified_at
+        job.verification_status = "verified"
+    elif last_verified_at is None and freshness == "stale":
+        job.verification_status = "stale"
+
+
+def count_stale_jobs(session: Session, now: datetime | None = None) -> int:
+    from app.discovery.verification import freshness_label
+    from app.models import Job as _Job
+
+    now = now or utcnow()
+    stale = 0
+    for job in session.execute(select(_Job)).scalars().all():
+        if freshness_label(job.posted_at, now) == "stale":
+            stale += 1
+    return stale
+
+
+# ------------------------- query learning (spec §24/§31) --------------------
+def get_query_stat(session: Session, query: str, country: str = "", source: str = "") -> QueryStat | None:
+    return session.execute(
+        select(QueryStat).where(QueryStat.query == query, QueryStat.country == country,
+                                QueryStat.source == source)
+    ).scalar_one_or_none()
+
+
+def record_query(session: Session, query: str, country: str = "", source: str = "",
+                 jobs_found: int = 0, relevant_jobs: int = 0) -> QueryStat:
+    stat = get_query_stat(session, query, country, source)
+    if not stat:
+        stat = QueryStat(query=query, country=country, source=source)
+        session.add(stat)
+        session.flush()
+    stat.jobs_found += jobs_found
+    stat.relevant_jobs += relevant_jobs
+    stat.runs += 1
+    stat.last_run_at = utcnow()
+    return stat
+
+
+def best_queries(session: Session, min_runs: int = 1, limit: int = 50) -> list[QueryStat]:
+    return list(session.execute(
+        select(QueryStat).where(QueryStat.runs >= min_runs)
+        .order_by(QueryStat.relevant_jobs.desc()).limit(limit)
+    ).scalars().all())
+
+
 # ------------------------- sources -------------------------
 def get_source(session: Session, name: str) -> Source | None:
     return session.execute(select(Source).where(Source.name == name)).scalar_one_or_none()
@@ -328,6 +405,8 @@ def stats(session: Session) -> dict[str, Any]:
         "employers_contacted": _count(select(Contact)),
         "immigration_programs": _count(select(ImmigrationProgram)),
         "immigration_facts": _count(select(ImmigrationFact)),
+        "opportunity_sources": _count(select(OpportunitySource)),
+        "stale_jobs": count_stale_jobs(session),
         "total_jobs": _count(select(models.Job)),
         "total_emails": _count(select(Email)),
         "last_events": [

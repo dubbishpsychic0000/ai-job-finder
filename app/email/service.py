@@ -58,12 +58,17 @@ def resolve_attachment(cv_dir: Path, lang: str) -> str:
 
 class ApplicationEngine:
     def __init__(self, session: Session, config: AgentConfig, settings: RunnerSettings,
-                 profile: CandidateProfile, communicator: CommunicationAgent):
+                 profile: CandidateProfile, communicator: CommunicationAgent,
+                 verify_url_fn=None):
         self.session = session
         self.config = config
         self.settings = settings
         self.profile = profile
         self.communicator = communicator
+        # §20 — re-verify the posting is still live before emailing. Injectable
+        # for hermetic tests; `None` means "only verify when the safety gate
+        # freshness rule is enabled".
+        self.verify_url_fn = verify_url_fn
 
     # ------------------------------------------------------------------ UI
     async def run(self, job, decision, action: str, contact_email: str = "", target_language: str = "en") -> dict:
@@ -97,6 +102,32 @@ class ApplicationEngine:
             mem.store.record_event(self.session, "action", "no CV available — application blocked",
                                    "error", {"job_id": job.id})
             return {"sent": False, "status": "blocked", "reason": "no cv", "application_id": app.id}
+
+        # §20 — verify the posting still exists before generating an employer email.
+        verifier = self.verify_url_fn
+        if verifier:
+            from app.models import utcnow as _now
+
+            try:
+                live = bool(verifier(job.url))
+            except Exception as exc:
+                live = False
+                mem.store.record_event(self.session, "action",
+                                       f"verification error for #{job.id}: {exc}", "warn",
+                                       {"job_id": job.id})
+            if not live:
+                job.verification_status = "unverified"
+                job.last_verified_at = _now()
+                app = mem.store.add_application(self.session, job.id, decision.id, action,
+                                                score, contact_email)
+                app.status = "blocked"
+                mem.store.record_event(self.session, "action",
+                                       "posting no longer live — application blocked", "error",
+                                       {"job_id": job.id})
+                return {"sent": False, "status": "blocked", "reason": "posting not live",
+                        "application_id": app.id}
+            job.last_verified_at = _now()
+            job.verification_status = "verified"
 
         draft = await self.communicator.generate(job, action, target_language)
 

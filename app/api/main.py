@@ -96,6 +96,23 @@ def api_immigration_facts(db: Session = Depends(get_db), limit: int = Query(50, 
     } for r in rows]
 
 
+@app.get("/api/discovery/sources", summary="Discovered opportunity sources (§6)")
+def api_opportunity_sources(db: Session = Depends(get_db), limit: int = Query(50, le=500),
+                            kind: str = Query("", description="filter by source kind")):
+    stmt = select(models.OpportunitySource).order_by(models.OpportunitySource.id.desc()).limit(limit)
+    if kind:
+        stmt = stmt.where(models.OpportunitySource.kind == kind)
+    rows = db.execute(stmt).scalars().all()
+    return [{
+        "id": r.id, "kind": r.kind, "url": r.url, "title": r.title, "country": r.country,
+        "source": r.source, "sponsorship_signal": r.sponsorship_signal,
+        "international_recruitment_signal": r.international_recruitment_signal,
+        "verification_status": r.verification_status,
+        "discovered_at": r.discovered_at.isoformat(),
+        "last_checked_at": r.last_checked_at.isoformat() if r.last_checked_at else None,
+    } for r in rows]
+
+
 @app.get("/api/events", summary="Recent audit events")
 def api_events(db: Session = Depends(get_db), limit: int = Query(20, le=200)):
     rows = db.execute(select(models.Event).order_by(models.Event.id.desc()).limit(limit)).scalars().all()
