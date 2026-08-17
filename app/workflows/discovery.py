@@ -33,6 +33,7 @@ class DiscoveryReport:
     employers_discovered: int = 0
     immigration_facts: int = 0
     opportunity_sources: int = 0
+    social_signals: int = 0
 
 
 def _load_source_connectors(path: Path | None = None) -> list[tuple[dict, object]]:
@@ -103,6 +104,19 @@ async def run_discovery(session: Session, config: AgentConfig, prefs: Preference
 
         os_report = await run_opportunity_source_discovery(session, config, prefs, profile=profile)
         report.opportunity_sources = os_report.stored
+
+    # Authorized social signals: LinkedIn (index) + Meta/user-provided (§15-18).
+    if discovery_cfg.get("social_signal_discovery", False):
+        from app.workflows.social_signals import (
+            DEFAULT_SOCIAL_SOURCES_PATH,
+            run_social_signal_discovery,
+        )
+
+        spath = Path(discovery_cfg.get("social_sources_path")) if discovery_cfg.get(
+            "social_sources_path") else DEFAULT_SOCIAL_SOURCES_PATH
+        sreport = await run_social_signal_discovery(session, config, prefs,
+                                                    sources_path=spath, profile=profile)
+        report.social_signals = sreport.stored
 
     for source_cfg, connector in connectors:
         source = mem.store.upsert_source(session, source_cfg.get("name", connector.name),

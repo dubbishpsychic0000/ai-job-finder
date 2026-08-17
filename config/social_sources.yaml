@@ -1,0 +1,31 @@
+# Social signal sources (spec §15-18, §34) — AUTHORIZED channels only.
+# All live usage is off by default; see config/settings.yaml -> discovery.
+#
+#   linkedin_jobs   — surface LinkedIn opportunity signals through the public
+#                     search-engine index (site:linkedin.com/jobs) and/or URLs
+#                     you supply. access_mode: public (index) or user_provided
+#                     (your URLs only). The connector never touches LinkedIn
+#                     directly (no login / scraping).
+#   meta_fb_groups  — Meta/Facebook signals from YOUR URLs or pasted
+#                     announcements only. access_mode must be 'user_provided'
+#                     and the connector performs no network access at all.
+connectors:
+  - name: linkedin_jobs
+    kind: linkedin_jobs
+    enabled: false
+    config:
+      access_mode: public          # public = index search; user_provided = URLs only
+      urls: []                     # user-provided LinkedIn job links (optional)
+
+  - name: meta_fb_groups
+    kind: meta_fb_groups
+    enabled: false
+    config:
+      access_mode: user_provided   # REQUIRED — disables network entirely
+      country: France
+      urls:
+        - "https://www.facebook.com/groups/travauxpublics/announce/1234"
+      leads:
+        - title: "Chef de chantier — posted by group admin"
+          location: "Île-de-France, France"
+          note: "pasted by the user; not scraped (spec §17, §34)"

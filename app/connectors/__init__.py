@@ -12,6 +12,8 @@ from app.connectors.government import GovernmentPortalSource
 from app.connectors.greenhouse import GreenhouseSource
 from app.connectors.icims import ICIMSSource
 from app.connectors.lever import LeverSource
+from app.connectors.linkedin import LinkedInJobsSource
+from app.connectors.meta import MetaJobsSource
 from app.connectors.rss import RSSJobSource
 from app.connectors.search_engine import SearchEngineSource
 from app.connectors.smartrecruiters import SmartRecruitersSource
@@ -27,6 +29,8 @@ __all__ = [
     "ICIMSSource",
     "JobSource",
     "LeverSource",
+    "LinkedInJobsSource",
+    "MetaJobsSource",
     "Opportunity",
     "RSSJobSource",
     "SearchEngineSource",
@@ -53,6 +57,8 @@ def register_defaults() -> None:
         "lever": LeverSource,
         "workday": WorkdaySource,
         "icims": ICIMSSource,
+        "linkedin_jobs": LinkedInJobsSource,
+        "meta_fb_groups": MetaJobsSource,
     })
 
 

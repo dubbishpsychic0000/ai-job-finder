@@ -1,0 +1,22 @@
+# Hermetic social-signal sources for tests — enabled so the workflow runs.
+connectors:
+  - name: linkedin_jobs
+    kind: linkedin_jobs
+    enabled: true
+    config:
+      access_mode: public
+      urls:
+        - "https://www.linkedin.com/jobs/view/9001"
+
+  - name: meta_fb_groups
+    kind: meta_fb_groups
+    enabled: true
+    config:
+      access_mode: user_provided
+      country: France
+      urls:
+        - "https://www.facebook.com/groups/travaux/announce/7"
+      leads:
+        - title: "Chargé de chantier"
+          location: "Île-de-France, France"
+          note: "pasted by the user"
