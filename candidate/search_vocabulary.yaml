@@ -1,0 +1,414 @@
+# Search vocabulary — configurable, structured, multi-country, multi-language.
+#
+# Used by the search strategy generator to build targeted discovery queries.
+# Each category covers a domain of civil engineering / construction / infrastructure work.
+# The system combines occupation + skill + location + seniority to generate variations.
+
+categories:
+  A_civil_engineering:
+    occupation:
+      - "génie civil"
+      - "civil engineering"
+      - "technicien génie civil"
+      - "technicien supérieur génie civil"
+      - "civil engineering technician"
+      - "civil engineering technologist"
+      - "assistant ingénieur génie civil"
+      - "junior civil engineer"
+
+  B_construction_btp:
+    occupation:
+      - "construction"
+      - "BTP"
+      - "bâtiment"
+      - "travaux publics"
+      - "construction technician"
+      - "technicien construction"
+      - "technicien BTP"
+      - "technicien travaux"
+      - "technicien travaux publics"
+      - "technicien chantier"
+      - "technicien bâtiment"
+      - "assistant conducteur de travaux"
+      - "conducteur de travaux"
+      - "conducteur de travaux junior"
+      - "assistant chef de chantier"
+      - "chef de chantier"
+      - "responsable chantier"
+      - "superviseur chantier"
+
+  C_roads_vrd:
+    occupation:
+      - "VRD"
+      - "voirie"
+      - "réseaux divers"
+      - "travaux routiers"
+      - "routes"
+      - "infrastructure routière"
+      - "road"
+      - "road construction"
+      - "road infrastructure"
+      - "road technician"
+      - "technicien VRD"
+      - "technicien voirie"
+      - "technicien routes"
+      - "technicien travaux routiers"
+      - "technicien infrastructure"
+      - "technicien infrastructure routière"
+
+  D_design_offices:
+    occupation:
+      - "bureau d'études"
+      - "bureau d'étude"
+      - "bureau d'études techniques"
+      - "BET"
+      - "études techniques"
+      - "études de génie civil"
+      - "études VRD"
+      - "études routières"
+      - "études infrastructure"
+      - "technicien bureau d'études"
+      - "technicien études"
+      - "technicien études techniques"
+      - "technicien études VRD"
+      - "technicien études génie civil"
+      - "chargé d'études"
+      - "assistant chargé d'études"
+      - "projeteur"
+      - "dessinateur projeteur"
+      - "dessinateur génie civil"
+      - "dessinateur VRD"
+      - "technicien DAO"
+      - "technicien CAO"
+
+  E_site_works_management:
+    occupation:
+      - "conducteur de travaux"
+      - "conducteur de travaux junior"
+      - "assistant conducteur de travaux"
+      - "chef de chantier"
+      - "assistant chef de chantier"
+      - "technicien chantier"
+      - "technicien travaux"
+      - "superviseur travaux"
+      - "suivi de chantier"
+      - "suivi des travaux"
+      - "contrôle des travaux"
+      - "coordination chantier"
+
+  F_laboratory_materials:
+    occupation:
+      - "laboratoire"
+      - "laboratoire BTP"
+      - "laboratoire génie civil"
+      - "laboratoire matériaux"
+      - "laboratoire routier"
+      - "laboratoire géotechnique"
+      - "technicien laboratoire"
+      - "technicien laboratoire BTP"
+      - "technicien matériaux"
+      - "technicien laboratoire matériaux"
+      - "technicien laboratoire routier"
+      - "technicien géotechnique"
+      - "contrôle matériaux"
+      - "essais matériaux"
+      - "essais béton"
+      - "essais sols"
+      - "essais routiers"
+      - "contrôle qualité BTP"
+
+  G_geotechnical:
+    occupation:
+      - "géotechnique"
+      - "geotechnical"
+      - "technicien géotechnique"
+      - "assistant géotechnicien"
+      - "laboratoire géotechnique"
+      - "études géotechniques"
+      - "essais géotechniques"
+      - "sols"
+      - "mécanique des sols"
+
+  H_surveying_topography:
+    occupation:
+      - "topographie"
+      - "topographe"
+      - "technicien topographe"
+      - "technicien géomètre"
+      - "géomètre topographe"
+      - "géomètre"
+      - "survey technician"
+      - "land surveyor"
+      - "topographic survey"
+      - "implantation"
+      - "levé topographique"
+
+  I_quantity_cost:
+    occupation:
+      - "métré"
+      - "métreur"
+      - "technicien métreur"
+      - "étude de prix"
+      - "technicien étude de prix"
+      - "économiste de la construction"
+      - "quantitatif"
+      - "quantification"
+      - "cost estimator"
+      - "quantity surveyor"
+      - "quantity surveying"
+
+  J_planning_scheduling:
+    occupation:
+      - "planning"
+      - "planification"
+      - "planificateur"
+      - "technicien planning"
+      - "technicien planification"
+      - "planificateur chantier"
+      - "planificateur travaux"
+      - "planning chantier"
+      - "suivi planning"
+      - "ordonnancement"
+      - "project planning"
+      - "construction planner"
+      - "scheduler"
+      - "project scheduler"
+
+  K_cad_digital:
+    occupation:
+      - "AutoCAD"
+      - "Civil 3D"
+      - "Revit"
+      - "BIM"
+      - "BIM construction"
+      - "BIM génie civil"
+      - "dessinateur AutoCAD"
+      - "dessinateur CAO"
+      - "dessinateur DAO"
+      - "projeteur"
+      - "projeteur génie civil"
+      - "projeteur VRD"
+      - "modeleur BIM"
+      - "technicien BIM"
+
+  L_infrastructure_public_works:
+    occupation:
+      - "infrastructure"
+      - "infrastructures"
+      - "travaux publics"
+      - "public works"
+      - "infrastructure technician"
+      - "infrastructure construction"
+      - "ouvrages publics"
+      - "ouvrages d'art"
+      - "ponts"
+      - "tunnels"
+      - "routes"
+      - "autoroutes"
+      - "réseaux"
+      - "eau potable"
+      - "assainissement"
+      - "drainage"
+      - "hydraulique"
+
+  M_water_networks:
+    occupation:
+      - "assainissement"
+      - "eau potable"
+      - "AEP"
+      - "réseaux humides"
+      - "réseaux secs"
+      - "drainage"
+      - "hydraulique"
+      - "réseaux d'assainissement"
+      - "réseaux d'eau"
+      - "technicien réseaux"
+      - "technicien hydraulique"
+      - "technicien assainissement"
+
+# Skills to combine with occupations for broader discovery.
+skills:
+  - "AutoCAD"
+  - "Civil 3D"
+  - "Revit"
+  - "BIM"
+  - "MS Project"
+  - "HSE"
+  - "géotechnique"
+  - "topographie"
+  - "métré"
+  - "contrôle qualité"
+  - "essais matériaux"
+  - "planification"
+  - "suivi de chantier"
+
+# Software tools mentioned in the vocabulary.
+software:
+  - "AutoCAD"
+  - "Civil 3D"
+  - "Revit"
+  - "BIM"
+  - "MS Project"
+  - "Excel"
+  - "SAP"
+
+# Industries covered.
+industries:
+  - "BTP"
+  - "génie civil"
+  - "travaux publics"
+  - "construction"
+  - "infrastructure"
+  - "bureau d'études"
+
+# Seniority levels — generate separate searches.
+seniority:
+  - "junior"
+  - "débutant"
+  - "entry level"
+  - "assistant"
+  - "stagiaire"
+  - "stage"
+  - "technicien"
+  - "technicien supérieur"
+  - "jeune diplômé"
+  - "fresh graduate"
+  - "graduate"
+
+# Opportunity types — classifies every opportunity found.
+opportunity_types:
+  - "JOB"
+  - "INTERNSHIP"
+  - "APPRENTICESHIP"
+  - "TRAINING"
+  - "RECRUITMENT_EVENT"
+  - "RECRUITER_OPPORTUNITY"
+  - "IMMIGRATION_OPPORTUNITY"
+  - "SCHOLARSHIP"
+  - "GRADUATE_PROGRAM"
+
+# Application methods — determined by the analysis agent.
+application_methods:
+  - "EMAIL"
+  - "ONLINE_FORM"
+  - "COMPANY_PORTAL"
+  - "JOB_BOARD"
+  - "RECRUITER"
+  - "PHONE"
+  - "WHATSAPP"
+  - "IN_PERSON"
+  - "UNKNOWN"
+
+# Countries covered — Morocco is always included.
+countries:
+  Morocco:
+    enabled: true
+    priority: high
+    cities: []
+    terms:
+      - "Maroc"
+      - "المغرب"
+      - "Morocco"
+    city_terms:
+      - "Casablanca"
+      - "Rabat"
+      - "Salé"
+      - "Témara"
+      - "Mohammedia"
+      - "El Jadida"
+      - "Settat"
+      - "Marrakech"
+      - "Agadir"
+      - "Tanger"
+      - "Fès"
+      - "Meknès"
+      - "Oujda"
+      - "Kenitra"
+      - "Béni Mellal"
+
+  France:
+    enabled: true
+    priority: high
+    language: "fr"
+    localized_roles:
+      - "technicien génie civil"
+      - "technicien VRD"
+      - "technicien travaux publics"
+      - "technicien chantier"
+      - "bureau d'études"
+      - "technicien études"
+      - "technicien laboratoire"
+      - "technicien géotechnique"
+      - "métreur"
+      - "topographe"
+
+  Germany:
+    enabled: true
+    priority: medium
+    language: "de"
+    localized_roles:
+      - "Bautechniker"
+      - "Tiefbautechniker"
+      - "Straßenbautechniker"
+      - "Bauzeichner"
+      - "Bauingenieur"
+      - "Baustellentechniker"
+
+  Spain:
+    enabled: true
+    priority: medium
+    language: "es"
+    localized_roles:
+      - "técnico de obra"
+      - "técnico de construcción"
+      - "técnico de ingeniería civil"
+      - "técnico de carreteras"
+      - "técnico de obra civil"
+
+  Belgium:
+    enabled: true
+    priority: low
+    language: "fr"
+    localized_roles:
+      - "technicien génie civil"
+      - "technicien VRD"
+      - "technicien travaux publics"
+
+  Canada:
+    enabled: true
+    priority: low
+    language: "en"
+    localized_roles:
+      - "civil engineering technician"
+      - "construction technician"
+      - "road construction technician"
+
+  Netherlands:
+    enabled: true
+    priority: low
+    language: "nl"
+    localized_roles:
+      - "burgerlijk ingenieur technicus"
+      - "werfleider"
+      - "technieker wegenbouw"
+
+# Rejected email domains — never trust these.
+rejected_email_domains:
+  - "example.com"
+  - "example.org"
+  - "example.net"
+  - "test.com"
+  - "test.org"
+  - "placeholder.com"
+  - "fake.com"
+  - "noreply.com"
+  - "no-reply.com"
+
+# Forbidden email prefixes — never invent these.
+forbidden_email_prefixes:
+  - "hr@"
+  - "jobs@"
+  - "recruitment@"
+  - "careers@"
+  - "contact@"
+  - "info@"

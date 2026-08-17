@@ -1,0 +1,67 @@
+# Notification configuration — controls the WhatsApp notification queue and delivery strategy.
+#
+# The system NEVER sends one WhatsApp message per discovered job.
+# Instead, events enter a queue and the notification engine decides when/how to deliver.
+
+# All event types that enter the notification queue.
+notification_events:
+  - "JOB_FOUND"
+  - "JOB_RANKED"
+  - "EMAIL_DRAFT_CREATED"
+  - "EMAIL_SENT"
+  - "ONLINE_APPLICATION_REQUIRED"
+  - "NO_EMAIL_FOUND"
+  - "INTERNSHIP_FOUND"
+  - "TRAINING_FOUND"
+  - "IMMIGRATION_OPPORTUNITY"
+  - "ACTION_FAILED"
+
+# Immediate (Level 1) notifications — sent right away.
+immediate:
+  high_match: true
+  application_sent: true
+  draft_created: false
+  immigration_alert: true
+  errors: true
+  deadline_soon: true
+
+# Digest (Level 2) notifications — batched and sent periodically.
+digest:
+  interval_minutes: 180
+  include:
+    - "new_jobs"
+    - "internships"
+    - "training"
+    - "online_applications"
+    - "no_email_jobs"
+    - "actions"
+
+# WhatsApp delivery method.
+whatsapp:
+  enabled: true
+  # Use interactive buttons if the API supports it.
+  interactive_buttons: true
+  max_message_length: 4096
+  # Format for opportunity ID.
+  opportunity_id_format: "JOB-{year}-{month}{day}-{sequence}"
+
+# Interactive button configuration (if supported).
+buttons:
+  - text: "Details"
+    action: "details"
+    description: "Receive full opportunity description"
+  - text: "Open Job"
+    action: "open_url"
+    description: "Open the original job posting URL"
+  - text: "Draft"
+    action: "create_draft"
+    description: "Create a Gmail draft (if email verified)"
+  - text: "Ignore"
+    action: "ignore"
+    description: "Mark this opportunity as ignored"
+
+# Command to request full details.
+detail_command:
+  prefix: "wca job"
+  example: "wca job JOB-2026-0817-0042"
+  whatsapp_shortcut: "details 0042"
