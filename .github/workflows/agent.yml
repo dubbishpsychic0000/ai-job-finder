@@ -54,16 +54,18 @@ jobs:
         run: |
           rm -rf /tmp/vault
           git clone --depth 1 "https://x-access-token:${VAULT_TOKEN}@${VAULT_URL#https://}" /tmp/vault
-          cp -r /tmp/vault/candidate ./candidate
-          cp -r /tmp/vault/secrets ./secrets
-          mkdir -p data
+          rm -rf candidate secrets
+          mkdir -p candidate secrets data
+          cp -a /tmp/vault/candidate/. ./candidate/
+          cp -a /tmp/vault/secrets/. ./secrets/
           cp -a /tmp/vault/state/. ./data/ 2>/dev/null || true
 
       - name: Run one pipeline pass
         env:
           GEMINI_API_KEYS: ${{ secrets.GEMINI_API_KEYS }}
         run: |
-          python -m app.cli run-once --json | tee /tmp/run_report.json
+          python -m app.cli run-once --json > /tmp/run_report.json 2>&1 || { cat /tmp/run_report.json; exit 1; }
+          cat /tmp/run_report.json
 
       - name: Persist state back to vault
         if: always()
