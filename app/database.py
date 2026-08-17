@@ -65,6 +65,7 @@ def _upgrade_schema() -> None:
     _add_missing_columns(insp, "jobs", {
         "source_type": "VARCHAR(32) DEFAULT ''",
         "source_quality": "INTEGER",
+        "source_confidence": "INTEGER",
         "closing_at": "DATETIME",
         "language": "VARCHAR(16) DEFAULT ''",
         "sponsorship_signal": "VARCHAR(16) DEFAULT 'unknown'",
@@ -76,6 +77,16 @@ def _upgrade_schema() -> None:
         "search_language": "VARCHAR(16) DEFAULT ''",
         "search_country": "VARCHAR(64) DEFAULT ''",
         "canonical_job_id": "VARCHAR(64) DEFAULT ''",
+    })
+
+    _add_missing_columns(insp, "companies", {
+        "industry": "VARCHAR(128) DEFAULT ''",
+        "careers_url": "VARCHAR(1024) DEFAULT ''",
+        "recruitment_url": "VARCHAR(1024) DEFAULT ''",
+        "international_recruitment_signal": "VARCHAR(16) DEFAULT 'unknown'",
+        "sponsorship_signal": "VARCHAR(16) DEFAULT 'unknown'",
+        "last_checked_at": "DATETIME",
+        "source": "VARCHAR(128) DEFAULT ''",
     })
 
 

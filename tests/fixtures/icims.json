@@ -1,0 +1,24 @@
+{
+  "searchResults": {
+    "jobs": [
+      {
+        "job": {
+          "id": "1001",
+          "title": "Civil Engineering Technician",
+          "jobUrl": "https://careers-example.icims.com/jobs/1001",
+          "location": {"city": "Lyon", "countryCode": "FR"},
+          "postedDate": "2026-08-12"
+        }
+      },
+      {
+        "job": {
+          "id": "1002",
+          "title": "Technicien VRD",
+          "jobUrl": "https://careers-example.icims.com/jobs/1002",
+          "location": {"city": "Nantes", "countryCode": "FR"},
+          "postedDate": "2026-08-01"
+        }
+      }
+    ]
+  }
+}

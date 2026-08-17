@@ -41,6 +41,14 @@ class Company(Base):
     country: Mapped[str] = mapped_column(String(64), default="")
     sponsorship_policy: Mapped[str] = mapped_column(Text, default="")
     notes: Mapped[str] = mapped_column(Text, default="")
+    # Discovery V2 employer universe (§7)
+    industry: Mapped[str] = mapped_column(String(128), default="")
+    careers_url: Mapped[str] = mapped_column(String(1024), default="")
+    recruitment_url: Mapped[str] = mapped_column(String(1024), default="")
+    international_recruitment_signal: Mapped[str] = mapped_column(String(16), default="unknown")
+    sponsorship_signal: Mapped[str] = mapped_column(String(16), default="unknown")
+    last_checked_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    source: Mapped[str] = mapped_column(String(128), default="")
 
 
 class Job(Base):
@@ -65,6 +73,7 @@ class Job(Base):
     # Discovery V2 (§29)
     source_type: Mapped[str] = mapped_column(String(32), default="", index=True)
     source_quality: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    source_confidence: Mapped[int | None] = mapped_column(Integer, nullable=True)
     closing_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     language: Mapped[str] = mapped_column(String(16), default="")
     sponsorship_signal: Mapped[str] = mapped_column(String(16), default="unknown")

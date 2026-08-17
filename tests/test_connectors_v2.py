@@ -8,14 +8,20 @@ from __future__ import annotations
 import asyncio
 from pathlib import Path
 
+from sqlalchemy import select
+
 from app import memory as mem
+from app import models
 from app.connectors.ats_detect import detect_ats
 from app.connectors.base import Opportunity, source_type_for
 from app.connectors.company_careers import CompanyCareersSource
 from app.connectors.eures import EuresSource
 from app.connectors.generic_api import GenericAPISource
 from app.connectors.greenhouse import GreenhouseSource
+from app.connectors.icims import ICIMSSource
+from app.connectors.lever import LeverSource
 from app.connectors.smartrecruiters import SmartRecruitersSource
+from app.connectors.workday import WorkdaySource
 
 FIX = Path(__file__).parent / "fixtures"
 
@@ -34,7 +40,8 @@ def test_source_type_inference():
 
 
 def test_connectors_declare_policy():
-    for cls in (GreenhouseSource, SmartRecruitersSource, EuresSource, CompanyCareersSource):
+    for cls in (GreenhouseSource, SmartRecruitersSource, LeverSource, WorkdaySource,
+                ICIMSSource, EuresSource, CompanyCareersSource):
         assert cls.access_mode in ("public", "authorized_only", "user_provided")
         assert cls.policy_notice, f"{cls.__name__} must state its access policy (§34)"
         assert cls.source_type
@@ -208,8 +215,132 @@ def test_job_schema_v2_columns(db):
     from sqlalchemy import inspect
 
     cols = {c["name"] for c in inspect(db.get_bind()).get_columns("jobs")}
-    for col in ("source_type", "source_quality", "closing_at", "language",
+    for col in ("source_type", "source_quality", "source_confidence", "closing_at", "language",
                 "sponsorship_signal", "international_candidate_signal",
                 "relocation_signal", "work_permit_signal", "verification_status",
                 "search_query", "search_language", "search_country", "canonical_job_id"):
         assert col in cols, f"jobs.{col} missing from schema (§29)"
+
+
+def test_company_schema_v2_columns(db):
+    from sqlalchemy import inspect
+
+    cols = {c["name"] for c in inspect(db.get_bind()).get_columns("companies")}
+    for col in ("industry", "careers_url", "recruitment_url",
+                "international_recruitment_signal", "sponsorship_signal",
+                "last_checked_at", "source"):
+        assert col in cols, f"companies.{col} missing from schema (§7)"
+
+
+# ---- lever -------------------------------------------------------------------
+
+
+def test_lever_happy_path():
+    src = LeverSource(sites=["example"], data_path=FIX / "lever.json")
+    ops = asyncio.run(src.search("civil"))
+    assert ops and all(o.source_type == "ats" for o in ops)
+    assert all(o.url.startswith("https://") for o in ops)
+    assert any(o.country == "France" for o in ops)
+    assert any(o.posted_at is not None for o in ops)
+
+
+def test_lever_query_filter_and_offline_degrade(tmp_path):
+    src = LeverSource(sites=["example"], data_path=FIX / "lever.json")
+    assert len(asyncio.run(src.search(""))) == 2
+    assert len(asyncio.run(src.search("site"))) == 1
+    bad = tmp_path / "nope.json"
+    bad.write_text("{not json", encoding="utf-8")
+    none = LeverSource(sites=["example"], data_path=bad)
+    assert asyncio.run(none.search("civil")) == []  # degrade, never crash
+
+
+# ---- workday -----------------------------------------------------------------
+
+
+def test_workday_happy_path():
+    cfg = {"host": "x-wd2.myworkdayjobs.com", "tenant": "x", "company": "x"}
+    src = WorkdaySource(companies=[cfg], data_path=FIX / "workday.json")
+    ops = asyncio.run(src.search("civil"))
+    assert ops and all(o.source_type == "ats" for o in ops)
+    assert all(o.url.startswith("https://") for o in ops)
+    assert any(o.country == "France" for o in ops)
+    assert any(o.posted_at is not None for o in ops)
+
+
+def test_workday_query_filter_and_empty():
+    cfg = {"host": "x", "tenant": "x", "company": "x"}
+    src = WorkdaySource(companies=[cfg], data_path=FIX / "workday.json")
+    assert len(asyncio.run(src.search(""))) == 2
+    assert len(asyncio.run(src.search("road"))) == 1
+    none = WorkdaySource(companies=[], data_path=FIX / "workday.json")
+    assert asyncio.run(none.search("civil")) == []
+
+
+# ---- icims -------------------------------------------------------------------
+
+
+def test_icims_happy_path():
+    src = ICIMSSource(hosts=["careers-example.icims.com"], data_path=FIX / "icims.json")
+    ops = asyncio.run(src.search("technician"))
+    assert ops and all(o.source_type == "ats" for o in ops)
+    assert any("icims.com" in o.url for o in ops)
+
+
+def test_icims_offline_degrade(tmp_path):
+    bad = tmp_path / "nope.json"
+    bad.write_text("not json", encoding="utf-8")
+    none = ICIMSSource(hosts=["x"], data_path=bad)
+    assert asyncio.run(none.search("civil")) == []  # degrade, never crash
+
+
+# ---- multi-source confidence (§21/§22) ---------------------------------------
+
+
+def _v2_job_data(opp: Opportunity, company_id: int) -> dict:
+    return {
+        "source": opp.source, "external_id": opp.external_id, "dedup_key": opp.dedup_key(),
+        "title": opp.title, "company_id": company_id, "location": "Paris, France",
+        "country": opp.country, "description": "", "url": opp.url, "posted_at": None,
+        "employment_type": "full_time", "salary": "", "contact_email": "", "status": "new",
+        "source_type": opp.effective_source_type(), "source_quality": opp.effective_quality(),
+        "source_confidence": opp.effective_quality(), "closing_at": None, "language": "",
+        "sponsorship_signal": "unknown", "international_candidate_signal": "unknown",
+        "relocation_signal": "unknown", "work_permit_signal": "unknown",
+        "verification_status": "verified", "search_query": "", "search_language": "",
+        "search_country": "", "canonical_job_id": opp.canonical_job_id(),
+    }
+
+
+def test_dedup_confidence_boost_cross_source(db):
+    from app.deduplication import find_duplicates
+
+    first = Opportunity(source="greenhouse:x", source_type="ats", source_quality=95,
+                        external_id="greenhouse:x:1", title="Civil Engineering Technician",
+                        company="Bouygues", country="France", url="https://boards.greenhouse.io/x/1")
+    again = Opportunity(source="company_careers", source_type="company_career",
+                        external_id="https://b/careers/j1", title="Civil Engineering Technician",
+                        company="Bouygues", country="France", url="https://b/careers/j1")
+    company = mem.store.get_or_create_company(db, first.company, first.url, first.country)
+    mem.store.upsert_job(db, _v2_job_data(first, company.id))
+    db.flush()
+    dup = find_duplicates(db, [again])
+    assert dup == {0: "exact"}
+    stored = mem.store.find_job_by_key(db, first.dedup_key())
+    assert stored.source_confidence >= 95 + 5, "cross-source sighting must boost confidence (§22)"
+
+
+# ---- discovery persistence ---------------------------------------------------
+
+
+def test_discovery_persists_v2_metadata(db, config, prefs, profile):
+    from app.workflows.discovery import run_discovery
+
+    src_path = FIX / "sources_demo.yaml"
+    asyncio.run(run_discovery(db, config, prefs, src_path, profile=profile))
+    jobs = db.execute(select(models.Job)).scalars().all()
+    assert jobs, "demo discovery must persist jobs"
+    for job in jobs:
+        assert job.source_type, "source_type must persist (§29)"
+        assert job.source_confidence == job.source_quality
+        assert job.canonical_job_id, "canonical_job_id must persist (§21)"
+    assert any(j.search_query for j in jobs), "search metadata must persist (§29)"

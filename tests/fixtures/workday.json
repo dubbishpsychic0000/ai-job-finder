@@ -1,0 +1,19 @@
+{
+  "total": 2,
+  "jobPostings": [
+    {
+      "title": "Civil Engineering Technician",
+      "externalPath": "/wday/cxs/example/example/job-abc",
+      "postedOn": "2026-08-10T10:00:00.000Z",
+      "locationsText": "Boulogne-Billancourt, France",
+      "jobDescription": "<p>Road construction and infrastructure technician.</p>"
+    },
+    {
+      "title": "Road Works Supervisor",
+      "externalPath": "/wday/cxs/example/example/job-def",
+      "postedOn": "2026-07-01T10:00:00.000Z",
+      "locationsText": "Berlin, Germany",
+      "jobDescription": "<p>Supervise urban roadworks crews.</p>"
+    }
+  ]
+}

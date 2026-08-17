@@ -40,6 +40,9 @@ discovery:
   max_queries_per_run: 40             # global cap on generated queries per run
   vocab_cache_path: "data/search_vocab_cache.json"
   vocab_llm: false                    # expand roles via LLM (cached on disk)
+  source_quality: {}                  # optional per-source-type overrides (§22)
+  confidence_boost_per_source: 5      # confidence added per extra source seen (§21/§22)
+  confidence_cap: 100
 
 search_plan:
   max_combinations_per_country: 3

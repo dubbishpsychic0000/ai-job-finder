@@ -1,0 +1,19 @@
+[
+  {
+    "id": "abc123",
+    "text": "Civil Engineering Technician",
+    "company": "Example Construction",
+    "hostedUrl": "https://jobs.lever.co/example/abc123",
+    "applyUrl": "https://jobs.lever.co/example/abc123/apply",
+    "categories": {"location": "Paris, France", "commitment": "Full Time"},
+    "createdAt": 1755600000000,
+    "descriptionPlain": "We are hiring a civil engineering technician for road and drainage works."
+  },
+  {
+    "id": "def456",
+    "text": "Site Technician",
+    "hostedUrl": "https://jobs.lever.co/example/def456",
+    "categories": {"location": "Berlin, Germany"},
+    "createdAt": 1755000000000
+  }
+]

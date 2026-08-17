@@ -115,8 +115,16 @@ async def run_discovery(session: Session, config: AgentConfig, prefs: Preference
                         report.duplicates += 1
                         continue
                     seen_canonical.add(canonical)
+                    src_type = opp.effective_source_type()
+                    qmap = discovery_cfg.get("source_quality") or {}
+                    quality = int(qmap.get(src_type, opp.effective_quality())) if qmap else opp.effective_quality()
+                    careers_url = (opp.raw or {}).get("page", "") if src_type in ("company_career", "ats") else ""
                     company = mem.store.get_or_create_company(
-                        session, opp.company or "Unknown", opp.url, opp.country)
+                        session, opp.company or "Unknown", opp.url, opp.country,
+                        careers_url=careers_url, source=opp.source,
+                        sponsorship_signal=opp.sponsorship_signal,
+                        international_recruitment_signal=opp.international_candidate_signal,
+                    )
                     job_data = {
                         "source": opp.source,
                         "external_id": opp.external_id,
@@ -132,8 +140,9 @@ async def run_discovery(session: Session, config: AgentConfig, prefs: Preference
                         "salary": opp.salary or "",
                         "contact_email": opp.contact_email or "",
                         "status": "new",
-                        "source_type": opp.effective_source_type(),
-                        "source_quality": opp.effective_quality(),
+                        "source_type": src_type,
+                        "source_quality": quality,
+                        "source_confidence": quality,
                         "closing_at": opp.closing_at,
                         "language": opp.language or combo.get("lang", ""),
                         "sponsorship_signal": opp.sponsorship_signal,

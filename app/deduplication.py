@@ -51,6 +51,7 @@ def find_duplicates(session: Session, opportunities) -> dict[int, str]:
             )
         ).scalar_one_or_none()
         if existing_canon:
+            _boost_source_confidence(existing_canon)
             dup[idx] = "exact"
             continue
 
@@ -68,6 +69,17 @@ def find_duplicates(session: Session, opportunities) -> dict[int, str]:
                 dup[idx] = "probable"
                 break
     return dup
+
+
+def _boost_source_confidence(job: models.Job) -> None:
+    """§22 — a vacancy found from another independent source gets a confidence
+    boost. Boosts per extra source, capped at the configured maximum."""
+    from app.config import get_config
+
+    cap = int(get_config().discovery.get("confidence_cap", 100))
+    boost = int(get_config().discovery.get("confidence_boost_per_source", 5))
+    base = job.source_confidence if job.source_confidence is not None else (job.source_quality or 0)
+    job.source_confidence = min(cap, base + boost)
 
 
 def _same_company(session: Session, company_id: int | None, name: str) -> bool:
