@@ -12,7 +12,7 @@ name: Agent 24-7
 
 on:
   schedule:
-    - cron: "13 */12 * * *" # every 12h, matching search_cadence_hours
+    - cron: "13 */2 * * *" # every 2h (UTC)
   workflow_dispatch:
     inputs:
       email_mode:
@@ -32,8 +32,10 @@ jobs:
     timeout-minutes: 55
     env:
       LLM_PROVIDER: gemini
-      EMAIL_MODE: ${{ inputs.email_mode || 'live' }}
-      ENABLE_EMAIL: ${{ (inputs.email_mode || 'live') != 'dry_run' && 'true' || 'false' }}
+      # Scheduled jobs must remain review-first. A human-triggered run can
+      # explicitly choose draft/live after Gmail has been configured.
+      EMAIL_MODE: ${{ inputs.email_mode || 'dry_run' }}
+      ENABLE_EMAIL: ${{ (inputs.email_mode || 'dry_run') != 'dry_run' && 'true' || 'false' }}
     steps:
       - name: Checkout public repo
         uses: actions/checkout@v4
