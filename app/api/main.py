@@ -52,7 +52,21 @@ def api_jobs(db: Session = Depends(get_db),
         "id": j.id, "title": j.title, "company": j.company.name if j.company else "",
         "location": j.location, "country": j.country, "status": j.status,
         "url": j.url, "score": _latest_score(db, j.id),
+        "opportunity_id": mem.store.opportunity_id(j), "opportunity_type": j.opportunity_type,
+        "application_method": j.application_method, "application_url": j.application_url,
     } for j in jobs]
+
+
+@app.get("/api/jobs/{opportunity_id}", summary="Complete opportunity details")
+def api_job_details(opportunity_id: str, db: Session = Depends(get_db)):
+    from fastapi import HTTPException
+
+    from app.notifications.service import NotificationService
+
+    result = NotificationService(db).details(opportunity_id)
+    if not result:
+        raise HTTPException(status_code=404, detail="Opportunity not found")
+    return result
 
 
 @app.get("/api/applications", summary="Application state machine view")

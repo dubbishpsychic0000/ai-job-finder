@@ -164,7 +164,7 @@ class NullLLM:
         except json.JSONDecodeError:
             return {"decision": "IGNORE", "confidence": 0.5, "reason": "unparsable decision context"}
         score = p.get("overall_score", 0) or 0.0
-        decision = p.get("band", "ignore").upper()
+        decision = str(p.get("band", "ignore")).lower()
         thresholded = {
             "apply": "APPLY",
             "investigate": "ASK_EMPLOYER",

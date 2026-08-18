@@ -47,9 +47,10 @@ class DecisionResult:
 
 
 class DecisionAgent:
-    def __init__(self, llm: LLMProvider, config: AgentConfig):
+    def __init__(self, llm: LLMProvider, config: AgentConfig, profile=None):
         self.llm = llm
         self.config = config
+        self.profile = profile
 
     def hard_rules(self, session: Session, job, overall: float, band: str) -> tuple[str | None, list[str]]:
         """Return (blocking_decision, fired_rules). None means no rule blocked."""
@@ -77,15 +78,20 @@ class DecisionAgent:
         analysis = mem.store.get_analysis(session, job.id)
         if analysis and analysis.experience_max:
             buffer = rules.get("tolerance_years_buffer", 2)
-            from app.config import get_profile
-
-            max_allowed = get_profile().experience_years + buffer
+            # Use the candidate injected into this run. Reading the live YAML
+            # here made decisions depend on an unrelated local profile.
+            if self.profile is not None:
+                max_allowed = self.profile.experience_years + buffer
+            else:  # backwards-compatible direct construction
+                from app.config import get_profile
+                max_allowed = get_profile().experience_years + buffer
             if analysis.experience_max > max_allowed:
                 fired.append(f"experience_requires_{analysis.experience_max}y")
 
         if fired and "low_score" in fired:
             return "IGNORE", fired
-        if fired and "stale_posting_" in next(iter(fired), ""):
+        if any(rule.startswith("stale_posting_") or rule.startswith("experience_requires_")
+               for rule in fired):
             return "IGNORE", fired
         return None, fired
 

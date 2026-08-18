@@ -89,6 +89,10 @@ class Job(Base):
     # Phase 5 freshness/verification (§19, §20, §29)
     freshness: Mapped[str] = mapped_column(String(16), default="unknown")
     last_verified_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    # Detailed opportunity handling (Worldwide Job Discovery V3).
+    opportunity_type: Mapped[str] = mapped_column(String(32), default="JOB", index=True)
+    application_method: Mapped[str] = mapped_column(String(32), default="UNKNOWN")
+    application_url: Mapped[str] = mapped_column(String(1024), default="")
 
 
 class OpportunitySource(Base):
@@ -209,6 +213,40 @@ class Email(Base):
     message_id: Mapped[str] = mapped_column(String(255), default="")  # Gmail message id (live)
     draft_id: Mapped[str] = mapped_column(String(255), default="")    # Gmail Draft id (draft mode)
     error: Mapped[str] = mapped_column(Text, default="")
+
+
+class EmailVerification(Base):
+    """Auditable evidence for a recipient address.
+
+    A value in ``jobs.contact_email`` is deliberately not evidence on its own:
+    this table records where the address was actually observed and why it may
+    be used by the outbound safety boundary.
+    """
+
+    __tablename__ = "email_verifications"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    job_id: Mapped[int | None] = mapped_column(ForeignKey("jobs.id"), nullable=True, index=True)
+    email: Mapped[str] = mapped_column(String(255), index=True)
+    source_url: Mapped[str] = mapped_column(String(1024), default="")
+    source_domain: Mapped[str] = mapped_column(String(255), default="")
+    verified: Mapped[bool] = mapped_column(default=False, index=True)
+    verification_method: Mapped[str] = mapped_column(String(64), default="")
+    verified_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    confidence: Mapped[int] = mapped_column(Integer, default=0)
+
+
+class Notification(Base):
+    """A queued notification. Delivery is intentionally separate from action."""
+
+    __tablename__ = "notifications"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    event_type: Mapped[str] = mapped_column(String(64), index=True)
+    job_id: Mapped[int | None] = mapped_column(ForeignKey("jobs.id"), nullable=True, index=True)
+    priority: Mapped[str] = mapped_column(String(16), default="normal", index=True)
+    payload: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    status: Mapped[str] = mapped_column(String(16), default="queued", index=True)  # queued|delivered|ignored
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, index=True)
+    delivered_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
 
 class ImmigrationProgram(Base):

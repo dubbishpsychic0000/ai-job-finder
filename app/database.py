@@ -79,6 +79,9 @@ def _upgrade_schema() -> None:
         "canonical_job_id": "VARCHAR(64) DEFAULT ''",
         "freshness": "VARCHAR(16) DEFAULT 'unknown'",
         "last_verified_at": "DATETIME",
+        "opportunity_type": "VARCHAR(32) DEFAULT 'JOB'",
+        "application_method": "VARCHAR(32) DEFAULT 'UNKNOWN'",
+        "application_url": "VARCHAR(1024) DEFAULT ''",
     })
 
     _add_missing_columns(insp, "companies", {

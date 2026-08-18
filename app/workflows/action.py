@@ -71,11 +71,28 @@ async def run_actions(session: Session, config: AgentConfig, settings: RunnerSet
         try:
             lang = lang_for_country(job.country)
             if decision.decision in ("APPLY", "ASK_EMPLOYER"):
+                # Portals/forms are user-controlled actions; never replace one
+                # with a guessed email address.
+                if job.application_method in ("ONLINE_FORM", "COMPANY_PORTAL", "JOB_BOARD"):
+                    report.blocked.append({"job_id": job.id, "reason": "online application required",
+                                           "application_url": job.application_url or job.url})
+                    mem.store.record_event(session, "action", "online application required — no email sent",
+                                           "info", {"job_id": job.id, "url": job.application_url or job.url})
+                    mem.store.enqueue_notification(session, "ONLINE_APPLICATION_REQUIRED", job_id=job.id,
+                                                   payload={"url": job.application_url or job.url})
+                    job.status = "acted"
+                    continue
                 to_addr = job.contact_email
                 if not to_addr:
-                    report.blocked.append({"job_id": job.id, "reason": "no contact email"})
+                    app = mem.store.add_application(session, job.id, decision.id, decision.decision,
+                                                    decision.overall_score, "")
+                    app.status = "blocked"
+                    report.blocked.append({"job_id": job.id, "reason": "no contact email",
+                                           "application_id": app.id})
                     mem.store.record_event(session, "action", "no contact email — cannot email",
-                                           "warn", {"job_id": job.id})
+                                           "warn", {"job_id": job.id, "application_id": app.id})
+                    mem.store.enqueue_notification(session, "NO_EMAIL_FOUND", job_id=job.id,
+                                                   payload={"url": job.application_url or job.url})
                     continue
                 result = await engine.run(job, decision, decision.decision, to_addr, lang)
                 if result.get("application_id"):  # §24 — query ledger learns the outcome
@@ -84,6 +101,12 @@ async def run_actions(session: Session, config: AgentConfig, settings: RunnerSet
                         applications=1)
                 target = report.applied if decision.decision == "APPLY" else report.asked
                 target.append({"job_id": job.id, **result})
+                if result.get("status") == "drafted":
+                    mem.store.enqueue_notification(session, "EMAIL_DRAFT_CREATED", job_id=job.id,
+                                                   payload=result)
+                elif result.get("status") == "sent":
+                    mem.store.enqueue_notification(session, "EMAIL_SENT", job_id=job.id,
+                                                   priority="high", payload=result)
                 if result["status"] == "blocked":
                     report.blocked.append({"job_id": job.id, "reason": result.get("report", result.get("reason"))})
             elif decision.decision == "INVESTIGATE":

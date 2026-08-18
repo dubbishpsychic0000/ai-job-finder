@@ -14,6 +14,8 @@ from app import memory as mem
 from app.config import ROOT_DIR, AgentConfig, CandidateProfile, Preferences, load_yaml
 from app.connectors import registry
 from app.deduplication import find_duplicates
+from app.discovery.email_verification import EmailVerificationService
+from app.discovery.opportunity_details import classify_opportunity, detect_application_method
 from app.discovery.verification import freshness_label
 from app.discovery.vocabulary import CandidateVocabulary
 from app.normalization import normalize
@@ -197,9 +199,21 @@ async def run_discovery(session: Session, config: AgentConfig, prefs: Preference
                     "search_country": combo.get("country", opp.country),
                     "canonical_job_id": canonical,
                     "freshness": freshness_label(opp.posted_at),
+                    "opportunity_type": classify_opportunity(opp.title, opp.description, src_type),
+                    "application_method": "UNKNOWN",
+                    "application_url": "",
                 }
-                _, created = mem.store.upsert_job(session, job_data)
+                job, created = mem.store.upsert_job(session, job_data)
                 if created:
+                    verification = EmailVerificationService(session).verify_job(job, source_type=src_type)
+                    # Never copy an unverified string into a job as a sendable recipient.
+                    job.contact_email = verification.email if verification.verified else ""
+                    method, application_url = detect_application_method(
+                        text=f"{job.title}\n{job.description}", url=job.url, source_type=src_type,
+                        has_verified_email=verification.verified)
+                    job.application_method, job.application_url = method, application_url
+                    mem.store.enqueue_notification(session, "JOB_FOUND", job_id=job.id,
+                                                   payload={"opportunity_id": mem.store.opportunity_id(job)})
                     report.new_jobs += 1
                     combo_new += 1
             mem.store.record_query(session, combo["query"], combo.get("country", ""),

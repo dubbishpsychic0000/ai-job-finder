@@ -20,7 +20,7 @@ from pathlib import Path
 from typing import Any
 
 from app import config as _cfg
-from app.config import ROOT_DIR, CandidateProfile, Preferences
+from app.config import ROOT_DIR, CandidateProfile, Preferences, load_yaml
 
 logger = logging.getLogger(__name__)
 
@@ -139,11 +139,21 @@ class CandidateVocabulary:
     """Expands the candidate into the searchable term space (deterministic)."""
 
     def __init__(self, profile: CandidateProfile | None = None,
-                 prefs: Preferences | None = None, cache_path: str | Path | None = None):
+                 prefs: Preferences | None = None, cache_path: str | Path | None = None,
+                 vocabulary_path: str | Path | None = None):
         self.profile = profile or _cfg.get_profile()
         self.prefs = prefs or _cfg.get_preferences()
         self.cache_path = Path(cache_path) if cache_path else None
+        self.vocabulary_path = Path(vocabulary_path) if vocabulary_path else ROOT_DIR / "candidate" / "search_vocabulary.yaml"
+        self.vocabulary = self._load_vocabulary()
         self.extra_terms: list[str] = []  # populated by llm_expanded_roles()
+
+    def _load_vocabulary(self) -> dict[str, Any]:
+        try:
+            return load_yaml(self.vocabulary_path)
+        except (OSError, ValueError):
+            logger.warning("search vocabulary unreadable at %s", self.vocabulary_path)
+            return {}
 
     # ---- deterministic vocabulary -------------------------------------------------
 
@@ -159,6 +169,8 @@ class CandidateVocabulary:
                     terms.append(f"{prefix}{syn}")
             for prefix in JUNIOR_PREFIXES:
                 terms.append(f"{prefix}{role.strip()}")
+        for category in (self.vocabulary.get("categories") or {}).values():
+            terms.extend(category.get("occupation", []))
         if with_skills:
             terms.extend(skill.strip() for skill in self.profile.skills)
         terms.extend(self.extra_terms)
@@ -167,11 +179,26 @@ class CandidateVocabulary:
     def localized_terms(self, lang: str) -> list[str]:
         """Localized role terms for a language (curated map + preferences)."""
         prefs_terms = (self.prefs.localized_roles or {}).get(lang, [])
-        return _dedup_stable(list(prefs_terms) + LOCALIZED_SYNONYMS.get(lang, []))
+        configured: list[str] = []
+        for country in (self.vocabulary.get("countries") or {}).values():
+            if country.get("language") == lang:
+                configured.extend(country.get("localized_roles", []))
+        return _dedup_stable(list(prefs_terms) + LOCALIZED_SYNONYMS.get(lang, []) + configured)
 
     def country_terms(self, country: str) -> list[str]:
         """Localized role terms for a target country."""
-        return self.localized_terms(LANG_OF_COUNTRY.get(country, "en"))
+        country_cfg = (self.vocabulary.get("countries") or {}).get(country, {})
+        return _dedup_stable(self.localized_terms(country_cfg.get("language") or LANG_OF_COUNTRY.get(country, "en")) +
+                             list(country_cfg.get("localized_roles", [])))
+
+    def country_locations(self, country: str) -> list[str]:
+        """Configured city queries; Morocco's empty ``cities`` means all cities."""
+        cfg = (self.vocabulary.get("countries") or {}).get(country, {})
+        cities = cfg.get("cities")
+        return list(cities) if cities else list(cfg.get("city_terms", []))
+
+    def terms_for(self, key: str) -> list[str]:
+        return _dedup_stable(list(self.vocabulary.get(key, [])))
 
     # ---- optional LLM expansion (cached on disk) ----------------------------------
 

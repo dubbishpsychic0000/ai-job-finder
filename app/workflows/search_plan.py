@@ -33,6 +33,14 @@ OPPORTUNISTIC_INTENTS = (
     ("remote", 0.40, lambda term, country, lang: f'{term} remote'),
 )
 
+COMBINATION_INTENTS = (
+    ("skill", 0.76, lambda role, value: f'{role} {value}'),
+    ("software", 0.74, lambda role, value: f'{role} {value}'),
+    ("industry", 0.72, lambda role, value: f'{role} {value}'),
+    ("seniority", 0.78, lambda role, value: f'{role} {value}'),
+    ("internship", 0.68, lambda role, value: f'{role} {value}'),
+)
+
 
 class SearchPlan:
     def __init__(self, prefs: Preferences, profile=None, cache_path=None, vocab=None):
@@ -42,19 +50,22 @@ class SearchPlan:
     def build(self, max_per_country: int = 3, max_queries_per_run: int | None = None) -> list[dict]:
         def core_for(country: str, lang: str, seen: set[tuple[str, str]]) -> list[dict]:
             items: list[tuple[float, dict]] = []
+            local_seen = set(seen)
             for term in self.vocab.roles()[:max_per_country]:
                 for intent, weight, builder in INTENT_TEMPLATES:
                     query = builder(term, country, lang)
-                    if (query.lower(), country.lower()) in seen:
+                    if (query.lower(), country.lower()) in local_seen:
                         continue
+                    local_seen.add((query.lower(), country.lower()))
                     items.append((weight, {
                         "query": query, "location": country, "country": country,
                         "lang": lang, "intent": intent, "weight": weight,
                     }))
             for term in self.vocab.country_terms(country)[:max_per_country]:
                 query = LOCAL_INTENT[2](term, country, lang)
-                if (query.lower(), country.lower()) in seen:
+                if (query.lower(), country.lower()) in local_seen:
                     continue
+                local_seen.add((query.lower(), country.lower()))
                 items.append((LOCAL_INTENT[1], {
                     "query": query, "location": country, "country": country,
                     "lang": lang, "intent": LOCAL_INTENT[0], "weight": LOCAL_INTENT[1],
@@ -69,6 +80,37 @@ class SearchPlan:
             for item in core_for(country, lang, seen):
                 seen.add((item["query"].lower(), country.lower()))
                 plan.append(item)
+
+            # Broad structured searches: title + skill/software/industry/
+            # seniority, then selected city terms.  These are lower-weight
+            # than exact roles, so a tight budget retains the focused plan.
+            roles = self.vocab.roles()[:max_per_country]
+            combination_sources = (
+                ("skill", self.vocab.terms_for("skills")[:2]),
+                ("software", self.vocab.terms_for("software")[:2]),
+                ("industry", self.vocab.terms_for("industries")[:2]),
+                ("seniority", self.vocab.terms_for("seniority")[:2]),
+                ("internship", ["stage", "internship"]),
+            )
+            template_by_intent = {name: (weight, builder) for name, weight, builder in COMBINATION_INTENTS}
+            for role in roles:
+                for intent, values in combination_sources:
+                    weight, builder = template_by_intent[intent]
+                    for value in values:
+                        query = builder(role, value)
+                        if (query.lower(), country.lower()) in seen:
+                            continue
+                        seen.add((query.lower(), country.lower()))
+                        plan.append({"query": query, "location": country, "country": country,
+                                     "lang": lang, "intent": intent, "weight": weight})
+                for city in self.vocab.country_locations(country)[:max_per_country]:
+                    query = role
+                    key = (f"{query}|{city}".lower(), country.lower())
+                    if key in seen:
+                        continue
+                    seen.add(key)
+                    plan.append({"query": query, "location": city, "country": country,
+                                 "lang": lang, "intent": "city", "weight": 0.82})
 
         # Opportunistic categories (§5) only fill leftover budget headroom.
         opportunistic: list[dict] = []

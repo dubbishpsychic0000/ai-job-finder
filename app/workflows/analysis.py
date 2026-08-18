@@ -18,6 +18,8 @@ from app.agents.job_analyzer import JobAnalyzer
 from app.agents.llm import LLMProvider
 from app.agents.mobility_agent import MobilityAgent
 from app.config import AgentConfig, CandidateProfile
+from app.discovery.email_verification import EmailVerificationService
+from app.discovery.opportunity_details import classify_opportunity, detect_application_method
 from app.scoring.engine import compute_scores
 
 logger = logging.getLogger(__name__)
@@ -43,6 +45,15 @@ async def analyze_job(session: Session, job, analyzer: JobAnalyzer, matcher: Can
     else:
         analysis = existing.raw_json or {}
 
+    # Classification/application routing is deterministic and retained in the
+    # job record, independent of whether an LLM is available.
+    job.opportunity_type = classify_opportunity(job.title, job.description, job.source_type)
+    verification = EmailVerificationService(session).verify_job(job, source_type=job.source_type)
+    job.contact_email = verification.email if verification.verified else ""
+    job.application_method, job.application_url = detect_application_method(
+        text=f"{job.title}\n{job.description}", url=job.url, source_type=job.source_type,
+        has_verified_email=verification.verified)
+
     match = await matcher.match(job, analysis)
     mobility_res = await mobility.analyze(job, analysis)
 
@@ -65,6 +76,10 @@ async def analyze_job(session: Session, job, analyzer: JobAnalyzer, matcher: Can
     mem.store.record_event(session, "analysis",
                            f"#{job.id} {job.title[:40]} -> {result.decision} ({overall:.0f}%)",
                            "info", {"job_id": job.id, "decision": result.decision})
+    event = "INTERNSHIP_FOUND" if job.opportunity_type == "INTERNSHIP" else "JOB_RANKED"
+    priority = "high" if overall >= 90 else "normal"
+    mem.store.enqueue_notification(session, event, job_id=job.id, priority=priority,
+                                   payload={"score": overall, "opportunity_id": mem.store.opportunity_id(job)})
     return {
         "job_id": job.id,
         "title": job.title,
@@ -82,7 +97,7 @@ async def run_analysis(session: Session, config: AgentConfig, profile: Candidate
     analyzer = JobAnalyzer(llm)
     matcher = CandidateMatcher(llm, profile)
     mobility = MobilityAgent(llm)
-    decision_agent = DecisionAgent(llm, config)
+    decision_agent = DecisionAgent(llm, config, profile=profile)
 
     jobs = mem.store.get_jobs_by_status(session, ["new"])
     for job in jobs:

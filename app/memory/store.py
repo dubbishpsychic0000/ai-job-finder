@@ -20,11 +20,13 @@ from app.models import (
     Contact,
     Decision,
     Email,
+    EmailVerification,
     Event,
     ImmigrationFact,
     ImmigrationProgram,
     Job,
     JobAnalysis,
+    Notification,
     OpportunitySource,
     QueryStat,
     Source,
@@ -112,6 +114,18 @@ def get_jobs_by_status(session: Session, statuses: Iterable[str]) -> list[Job]:
 
 def get_job(session: Session, job_id: int) -> Job | None:
     return session.get(Job, job_id)
+
+
+def opportunity_id(job: Job) -> str:
+    """Stable, user-facing ID suitable for `wca job JOB-YYYY-MMDD-NNNN`."""
+    discovered = job.discovered_at or utcnow()
+    return f"JOB-{discovered:%Y-%m%d}-{job.id:04d}"
+
+
+def get_job_by_opportunity_id(session: Session, value: str) -> Job | None:
+    import re
+    match = re.fullmatch(r"JOB-\d{4}-\d{4}-(\d+)", (value or "").strip(), re.I)
+    return get_job(session, int(match.group(1))) if match else None
 
 
 # ------------------------- analysis / decisions -------------------------
@@ -229,6 +243,55 @@ def add_email(session: Session, application_id: int | None, to_addr: str, subjec
     session.add(e)
     session.flush()
     return e
+
+
+# ------------------------- email verification -------------------------
+def add_email_verification(session: Session, *, job_id: int | None, email: str,
+                           source_url: str = "", source_domain: str = "",
+                           verified: bool = False, verification_method: str = "",
+                           confidence: int = 0) -> EmailVerification:
+    existing = session.execute(select(EmailVerification).where(
+        EmailVerification.job_id == job_id, EmailVerification.email == email.lower()
+    )).scalar_one_or_none()
+    now = utcnow()
+    if existing:
+        existing.source_url = source_url or existing.source_url
+        existing.source_domain = source_domain or existing.source_domain
+        existing.verified = verified
+        existing.verification_method = verification_method or existing.verification_method
+        existing.confidence = max(existing.confidence, confidence)
+        existing.verified_at = now if verified else existing.verified_at
+        return existing
+    row = EmailVerification(job_id=job_id, email=email.lower(), source_url=source_url,
+                            source_domain=source_domain, verified=verified,
+                            verification_method=verification_method, confidence=confidence,
+                            verified_at=now if verified else None)
+    session.add(row)
+    session.flush()
+    return row
+
+
+def get_verified_email(session: Session, job_id: int) -> EmailVerification | None:
+    return session.execute(select(EmailVerification).where(
+        EmailVerification.job_id == job_id, EmailVerification.verified.is_(True)
+    ).order_by(EmailVerification.confidence.desc(), EmailVerification.id.desc())).scalars().first()
+
+
+# ------------------------- notification queue --------------------------
+def enqueue_notification(session: Session, event_type: str, *, job_id: int | None = None,
+                         priority: str = "normal", payload: dict | None = None) -> Notification:
+    row = Notification(event_type=event_type, job_id=job_id, priority=priority,
+                       payload=payload or {})
+    session.add(row)
+    session.flush()
+    return row
+
+
+def queued_notifications(session: Session, *, priorities: tuple[str, ...] | None = None) -> list[Notification]:
+    stmt = select(Notification).where(Notification.status == "queued").order_by(Notification.created_at, Notification.id)
+    if priorities:
+        stmt = stmt.where(Notification.priority.in_(priorities))
+    return list(session.execute(stmt).scalars().all())
 
 
 # ------------------------- contacts -------------------------

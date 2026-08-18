@@ -145,6 +145,17 @@ def cmd_stats(_args) -> None:
     console.print(t)
 
 
+def cmd_job(args) -> None:
+    """Print complete on-demand details without sending any notification."""
+    from app.notifications.service import NotificationService
+    with session_scope() as s:
+        detail = NotificationService(s).details(args.opportunity_id)
+    if not detail:
+        console.print("[yellow]Opportunity not found.[/yellow]")
+        raise SystemExit(1)
+    console.print_json(json.dumps(detail, ensure_ascii=False))
+
+
 def cmd_pause(_args) -> None:
     from app.scheduler.control import set_paused
 
@@ -231,6 +242,8 @@ def main(argv: list[str] | None = None) -> None:
     for name in ("discover", "analyze", "act", "followups", "search-plan",
                  "stats", "pause", "resume", "scheduler"):
         sub.add_parser(name)
+    job = sub.add_parser("job", help="show complete details for an opportunity ID")
+    job.add_argument("opportunity_id", help="e.g. JOB-2026-0817-0042")
     dash = sub.add_parser("dashboard")
     dash.add_argument("--host", default="127.0.0.1")
     dash.add_argument("--port", default=8000, type=int)
@@ -250,6 +263,7 @@ def main(argv: list[str] | None = None) -> None:
         "followups": cmd_followups,
         "search-plan": cmd_search_plan,
         "stats": cmd_stats,
+        "job": cmd_job,
         "pause": cmd_pause,
         "resume": cmd_resume,
         "scheduler": cmd_scheduler,

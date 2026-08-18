@@ -28,6 +28,7 @@ class RunResult:
     analysis: dict = field(default_factory=dict)
     action: dict = field(default_factory=dict)
     followup: dict = field(default_factory=dict)
+    notifications: dict = field(default_factory=dict)
 
 
 def run_pipeline(session: Session | None = None, *, sources_path: Path | None = None,
@@ -77,6 +78,12 @@ def run_pipeline(session: Session | None = None, *, sources_path: Path | None = 
                 communicator = CommunicationAgent(llm, profile)
                 fu = _followups(s, config, settings, communicator)
                 result.followup = {"sent": fu.sent, "blocked": fu.blocked, "errors": fu.errors}
+            # Rendering/delivery is intentionally after all actions and never
+            # controls discovery, decisions, or email safety.
+            from app.notifications.service import NotificationService
+            notifications = NotificationService(s)
+            result.notifications = {"immediate": notifications.immediate(),
+                                    "digest": notifications.digest()}
         return result
 
     return _run()
