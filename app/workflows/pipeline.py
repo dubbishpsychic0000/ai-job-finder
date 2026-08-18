@@ -81,9 +81,21 @@ def run_pipeline(session: Session | None = None, *, sources_path: Path | None = 
             # Rendering/delivery is intentionally after all actions and never
             # controls discovery, decisions, or email safety.
             from app.notifications.service import NotificationService
+            from app.notifications.whatsapp import MetaWhatsAppProvider
+
             notifications = NotificationService(s)
-            result.notifications = {"immediate": notifications.immediate(),
-                                    "digest": notifications.digest()}
+            whatsapp = MetaWhatsAppProvider()
+            if whatsapp.configured:
+                result.notifications = {
+                    "immediate": notifications.immediate(sender=whatsapp.send),
+                    "digest": notifications.digest(sender=whatsapp.send),
+                    "whatsapp_configured": True,
+                }
+            else:
+                # Do not mark a notification delivered merely because no
+                # transport has been configured yet.
+                result.notifications = {"immediate": [], "digest": None,
+                                        "whatsapp_configured": False}
         return result
 
     return _run()

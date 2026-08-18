@@ -1,6 +1,7 @@
 """Notification queue, digest rendering, and full opportunity detail lookup."""
 from __future__ import annotations
 
+from collections.abc import Callable
 from datetime import timedelta
 from pathlib import Path
 from typing import Any
@@ -26,7 +27,7 @@ class NotificationService:
         return mem.store.enqueue_notification(self.session, event_type, job_id=job_id,
                                               priority=priority, payload=payload)
 
-    def immediate(self) -> list[str]:
+    def immediate(self, sender: Callable[[str], bool] | None = None) -> list[str]:
         """Render only high-priority items and mark them delivered.
 
         Transport (WhatsApp, etc.) is deliberately outside this class, keeping
@@ -37,8 +38,10 @@ class NotificationService:
         for row in mem.store.queued_notifications(self.session, priorities=("high", "urgent")):
             if not self._immediate_enabled(row, settings):
                 continue
-            results.append(self._render_event(row))
-            self._deliver(row)
+            message = self._render_event(row)
+            results.append(message)
+            if sender is None or sender(message):
+                self._deliver(row)
         return results
 
     def digest_due(self, now=None) -> bool:
@@ -49,7 +52,7 @@ class NotificationService:
         ).order_by(Notification.delivered_at.desc())).scalars().first()
         return last is None or now - last >= timedelta(minutes=minutes)
 
-    def digest(self, *, force: bool = False) -> str | None:
+    def digest(self, *, force: bool = False, sender: Callable[[str], bool] | None = None) -> str | None:
         if not force and not self.digest_due():
             return None
         rows = mem.store.queued_notifications(self.session)
@@ -70,9 +73,12 @@ class NotificationService:
                 activity["drafts"] += 1
             if row.event_type == "EMAIL_SENT":
                 activity["sent"] += 1
-            self._deliver(row)
         lines.extend(["", "Agent activity", f"🆕 {activity['jobs']} opportunities", f"📧 {activity['drafts']} drafts created · {activity['sent']} emails sent", f"🌐 {activity['online']} online applications · ⚠️ {activity['no_email']} without verified email"])
-        return "\n".join(lines)[:int((self.config.get("whatsapp") or {}).get("max_message_length", 4096))]
+        message = "\n".join(lines)[:int((self.config.get("whatsapp") or {}).get("max_message_length", 4096))]
+        if sender is None or sender(message):
+            for row in rows:
+                self._deliver(row)
+        return message
 
     def details(self, opportunity_id: str) -> dict[str, Any] | None:
         job = mem.store.get_job_by_opportunity_id(self.session, opportunity_id)
