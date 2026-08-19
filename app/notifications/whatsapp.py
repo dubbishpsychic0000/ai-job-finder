@@ -72,7 +72,15 @@ class MetaWhatsAppProvider:
                                   json=payload, timeout=20)
             if response.ok:
                 return True
-            logger.warning("WhatsApp API rejected notification: HTTP %s", response.status_code)
+            # Meta returns useful object/permission diagnostics here. It never
+            # receives the token in its response; still truncate the detail so
+            # logs remain safe and readable.
+            try:
+                detail = response.json()
+            except ValueError:
+                detail = response.text
+            logger.warning("WhatsApp API rejected notification: HTTP %s: %s",
+                           response.status_code, str(detail)[:800])
         except requests.RequestException as exc:
             logger.warning("WhatsApp notification failed: %s", exc)
         return False
