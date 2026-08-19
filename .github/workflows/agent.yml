@@ -20,6 +20,10 @@ on:
         type: choice
         default: dry_run
         options: [dry_run, draft, live]
+      whatsapp_test:
+        description: "Send one WhatsApp connection-test template message"
+        type: boolean
+        default: false
 
 # One run at a time: the agent shares a SQLite DB + global pause control.
 concurrency:
@@ -74,6 +78,13 @@ jobs:
         run: |
           python -m app.cli run-once --json > /tmp/run_report.json 2>&1 || { cat /tmp/run_report.json; exit 1; }
           cat /tmp/run_report.json
+
+      - name: Send WhatsApp connection test
+        if: ${{ inputs.whatsapp_test == true }}
+        env:
+          WHATSAPP_ACCESS_TOKEN: ${{ secrets.WHATSAPP_ACCESS_TOKEN }}
+        run: |
+          python -c "from app.notifications.whatsapp import MetaWhatsAppProvider; import sys; sys.exit(0 if MetaWhatsAppProvider().send('WhatsApp connection test: your Worldwide Career Agent is configured and ready.') else 1)"
 
       - name: Persist state back to vault
         if: always()
