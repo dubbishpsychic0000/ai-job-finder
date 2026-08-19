@@ -63,11 +63,18 @@ jobs:
           VAULT_TOKEN: ${{ secrets.VAULT_TOKEN }}
           VAULT_URL: https://github.com/dubbishpsychic0000/ai-job-finder-vault.git
         run: |
+          # The private vault intentionally contains personal candidate data.
+          # Preserve public, versioned V3 defaults when an older vault lacks them.
+          mkdir -p /tmp/candidate-defaults
+          cp candidate/search_vocabulary.yaml candidate/notification_config.yaml /tmp/candidate-defaults/
           rm -rf /tmp/vault
           git clone --depth 1 "https://x-access-token:${VAULT_TOKEN}@${VAULT_URL#https://}" /tmp/vault
           rm -rf candidate secrets
           mkdir -p candidate secrets data
           cp -a /tmp/vault/candidate/. ./candidate/
+          for file in search_vocabulary.yaml notification_config.yaml; do
+            test -f "candidate/$file" || cp "/tmp/candidate-defaults/$file" "candidate/$file"
+          done
           cp -a /tmp/vault/secrets/. ./secrets/
           cp -a /tmp/vault/state/. ./data/ 2>/dev/null || true
 
@@ -80,7 +87,7 @@ jobs:
           cat /tmp/run_report.json
 
       - name: Send WhatsApp connection test
-        if: ${{ inputs.whatsapp_test == true }}
+        if: ${{ always() && inputs.whatsapp_test == true }}
         env:
           WHATSAPP_ACCESS_TOKEN: ${{ secrets.WHATSAPP_ACCESS_TOKEN }}
         run: |
