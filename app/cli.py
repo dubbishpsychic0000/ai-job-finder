@@ -57,6 +57,7 @@ def cmd_run_once(args) -> None:
             "asked": result.action.get("asked"),
             "investigated": result.action.get("investigated", 0),
             "blocked": len(result.action.get("blocked", [])),
+            "drafts": result.action.get("drafts", 0),
         },
         "followup": result.followup,
     }

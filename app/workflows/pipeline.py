@@ -4,6 +4,7 @@ into a "run" that the scheduler can invoke (cron / docker), or the CLI once.
 from __future__ import annotations
 
 import logging
+import os
 from collections import Counter
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -93,14 +94,17 @@ def run_pipeline(session: Session | None = None, *, sources_path: Path | None = 
                 # run, including zero-result runs.  Event notifications remain
                 # separate so a useful alert is never suppressed by the digest
                 # interval.
-                run_summary = render_run_summary(result)
                 result.notifications = {
                     "immediate": notifications.immediate(sender=whatsapp.send),
                     "digest": notifications.digest(sender=whatsapp.send),
-                    "run_summary": run_summary,
-                    "run_summary_sent": whatsapp.send(run_summary),
                     "whatsapp_configured": True,
                 }
+                # GitHub Actions owns its final status message so it can also
+                # report a pipeline failure. Local runs still send one here.
+                if os.getenv("WHATSAPP_RUN_SUMMARY_MANAGED") != "workflow":
+                    run_summary = render_run_summary(result)
+                    result.notifications["run_summary"] = run_summary
+                    result.notifications["run_summary_sent"] = whatsapp.send(run_summary)
             else:
                 # Do not mark a notification delivered merely because no
                 # transport has been configured yet.

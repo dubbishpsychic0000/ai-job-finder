@@ -41,6 +41,9 @@ jobs:
       WHATSAPP_TEMPLATE_NAME: ${{ vars.WHATSAPP_TEMPLATE_NAME }}
       WHATSAPP_TEMPLATE_LANGUAGE: ${{ vars.WHATSAPP_TEMPLATE_LANGUAGE || 'en_US' }}
       WHATSAPP_GRAPH_API_VERSION: ${{ vars.WHATSAPP_GRAPH_API_VERSION || 'v23.0' }}
+      # A final workflow step sends exactly one WhatsApp status on every run,
+      # including pipeline failures.
+      WHATSAPP_RUN_SUMMARY_MANAGED: workflow
       # The agent sends only after the existing verification/safety gate.
       # At its hard daily limit (10), ApplicationEngine switches to Gmail drafts
       # and triggers an immediate WhatsApp alert instead.
@@ -86,8 +89,44 @@ jobs:
           GEMINI_API_KEYS: ${{ secrets.GEMINI_API_KEYS }}
           WHATSAPP_ACCESS_TOKEN: ${{ secrets.WHATSAPP_ACCESS_TOKEN }}
         run: |
-          python -m app.cli run-once --json > /tmp/run_report.json 2>&1 || { cat /tmp/run_report.json; exit 1; }
+          set +e
+          python -m app.cli run-once --json > /tmp/run_report.json 2> /tmp/run.log
+          echo $? > /tmp/pipeline_exit_code
+          cat /tmp/run.log
           cat /tmp/run_report.json
+          exit $(cat /tmp/pipeline_exit_code)
+
+      - name: Send WhatsApp run status
+        if: ${{ always() }}
+        env:
+          WHATSAPP_ACCESS_TOKEN: ${{ secrets.WHATSAPP_ACCESS_TOKEN }}
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          from app.notifications.whatsapp import MetaWhatsAppProvider
+
+          exit_code = Path('/tmp/pipeline_exit_code').read_text().strip() if Path('/tmp/pipeline_exit_code').exists() else 'unknown'
+          message = f'Career Agent run: FAILED (exit {exit_code}). Check GitHub Actions logs.'
+          report_path = Path('/tmp/run_report.json')
+          if exit_code == '0' and report_path.exists():
+              try:
+                  report = json.loads(report_path.read_text(encoding='utf-8'))
+                  discovery = report.get('discovery', {})
+                  analysis = report.get('analysis', {})
+                  action = report.get('action', {})
+                  decisions = ', '.join(f'{k} {v}' for k, v in analysis.get('decisions', {}).items()) or 'none'
+                  message = (
+                      f"Career Agent run complete. Jobs: {discovery.get('new_jobs', 0)} new / "
+                      f"{discovery.get('fetched', 0)} fetched. Decisions: {decisions}. "
+                      f"Gmail drafts: {action.get('drafts', 0)}. "
+                      f"No action: {action.get('applied', 0) == 0 and action.get('asked', 0) == 0}."
+                  )
+              except (OSError, ValueError, TypeError):
+                  message = 'Career Agent run complete, but its report could not be read. Check GitHub Actions logs.'
+          if not MetaWhatsAppProvider().send(message):
+              raise SystemExit('WhatsApp status message was rejected by Meta')
+          PY
 
       - name: Send WhatsApp connection test
         if: ${{ always() && inputs.whatsapp_test == true }}
