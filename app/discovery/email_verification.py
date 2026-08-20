@@ -5,6 +5,7 @@ import re
 from dataclasses import dataclass
 from urllib.parse import urlparse
 
+import requests
 from sqlalchemy.orm import Session
 
 from app import memory as mem
@@ -70,13 +71,40 @@ class EmailVerificationService:
         stored = getattr(job, "contact_email", "")
         if stored and stored not in candidates:
             candidates.insert(0, stored)
+        # An official ATS/company-career page may publish a contact address
+        # outside the search-result snippet. We read only that public page;
+        # protected pages, logins, CAPTCHAs and non-official job-board links
+        # are deliberately never fetched for contact discovery.
+        source_url = getattr(job, "url", "")
+        if not candidates and source_type in {"ats", "company_career"}:
+            candidates = self._public_page_emails(source_url)
         if not candidates:
-            return Verification(reason="no email found")
+            return Verification(reason="no email found on posting or eligible public career page")
         # First verifiable address wins; a fake/example address never does.
         for address in candidates:
-            result = self.verify(address, source_url=getattr(job, "url", ""), source_type=source_type,
+            result = self.verify(address, source_url=source_url, source_type=source_type,
                                  job_id=getattr(job, "id", None))
             if result.verified:
                 return result
-        return self.verify(candidates[0], source_url=getattr(job, "url", ""), source_type=source_type,
+        return self.verify(candidates[0], source_url=source_url, source_type=source_type,
                            job_id=getattr(job, "id", None))
+
+    def _public_page_emails(self, url: str) -> list[str]:
+        parsed = urlparse(url)
+        if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+            return []
+        try:
+            response = requests.get(
+                url,
+                headers={"User-Agent": "WorldwideCareerAgent/0.1 (public contact verification)"},
+                timeout=15,
+                allow_redirects=True,
+            )
+            if response.status_code in {401, 403, 429} or not response.ok:
+                return []
+            content_type = response.headers.get("Content-Type", "").lower()
+            if content_type and "html" not in content_type:
+                return []
+            return self.extract(response.text[:250_000])
+        except requests.RequestException:
+            return []
