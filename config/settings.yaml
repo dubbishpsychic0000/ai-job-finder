@@ -37,8 +37,9 @@ email:
 discovery:
   full_text_description_max_chars: 8000
   results_per_source: 25
-  max_per_country: 3                  # role/localized terms kept per country
-  max_queries_per_run: 40             # global cap on generated queries per run
+  max_per_country: 5                  # more role/localized terms kept per country
+  max_queries_per_run: 60             # wider global cap, still rate-limited below
+  min_exploration_per_country: 3      # retain fresh searches despite old zero-result history
   vocab_cache_path: "data/search_vocab_cache.json"
   vocab_llm: false                    # expand roles via LLM (cached on disk)
   source_quality: {}                  # optional per-source-type overrides (§22)
@@ -52,7 +53,7 @@ discovery:
   opportunity_source_discovery: false  # search-engine expansion → opportunity sources (§6) — live web
   opportunity_sources_per_country: 5
   max_daily_search_queries: 0      # §25 daily discovery budget (0 = unlimited)
-  max_requests_per_source: 40      # §25 per-source request budget per run (0 = unlimited)
+  max_requests_per_source: 60      # §25 per-source request budget per run (0 = unlimited)
   parallel_fetch: false            # §26 — dispatch all source searches concurrently (results identical)
   social_signal_discovery: false    # LinkedIn/Meta + user-provided social signals (§15-18) — authorized only
   social_sources_path: "config/social_sources.yaml"

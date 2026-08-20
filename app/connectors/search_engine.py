@@ -16,6 +16,7 @@ import urllib.parse
 import requests
 from bs4 import BeautifulSoup
 
+from app.connectors.ats_detect import detect_ats
 from app.connectors.base import Opportunity, infer_country
 
 logger = logging.getLogger(__name__)
@@ -89,6 +90,11 @@ class SearchEngineSource:
                 continue
             out.append(Opportunity(
                 source="search_engine",
+                # A public ATS URL is an official application route.  This
+                # distinction allows a contact visibly supplied by that ATS
+                # result to pass the existing evidence-based verification
+                # gate; no address is guessed or fetched from protected pages.
+                source_type="ats" if detect_ats(href) else "search_engine",
                 external_id=href,
                 title=title[:200],
                 company="",

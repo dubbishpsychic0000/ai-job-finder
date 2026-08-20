@@ -50,6 +50,23 @@ def build_adaptive_plan(session: Session, prefs: Preferences, config: AgentConfi
         for _ in range(repeats_for(stat)):
             expanded.append((idx, item))
 
+    # Keep exploring every target country even when old zero-result searches
+    # were down-weighted.  Otherwise a new source, a changed labour market, or
+    # a newly added role can be starved forever by its historical ledger.
+    exploration_per_country = int(dcfg.get("min_exploration_per_country", 0))
+    if exploration_per_country > 0:
+        present = {(item["query"], item["country"]) for _idx, item in expanded}
+        exploration_counts: dict[str, int] = {}
+        for idx, item in enumerate(base):
+            country = item["country"]
+            key = (item["query"], country)
+            if exploration_counts.get(country, 0) >= exploration_per_country:
+                continue
+            if key not in present:
+                expanded.append((idx, item))
+                present.add(key)
+            exploration_counts[country] = exploration_counts.get(country, 0) + 1
+
     if remaining is not None:
         expanded = expanded[:max(0, remaining)]
 

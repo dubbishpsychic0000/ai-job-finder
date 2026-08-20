@@ -9,7 +9,7 @@ connectors:
     name: public_web_search
     mode: real
     enabled: true
-    results_per_query: 8
+    results_per_query: 12
 
   # Public ATS/company sources. They are intentionally disabled until a real
   # public company identifier is supplied; no placeholder source can emit jobs.
