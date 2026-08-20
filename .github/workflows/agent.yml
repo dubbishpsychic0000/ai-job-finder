@@ -124,8 +124,10 @@ jobs:
                   )
               except (OSError, ValueError, TypeError):
                   message = 'Career Agent run complete, but its report could not be read. Check GitHub Actions logs.'
-          if not MetaWhatsAppProvider().send(message):
+          provider = MetaWhatsAppProvider()
+          if not provider.send(message):
               raise SystemExit('WhatsApp status message was rejected by Meta')
+          print(f'WhatsApp accepted by Meta; message id: {provider.last_message_id or "not returned"}')
           PY
 
       - name: Send WhatsApp connection test
@@ -133,7 +135,7 @@ jobs:
         env:
           WHATSAPP_ACCESS_TOKEN: ${{ secrets.WHATSAPP_ACCESS_TOKEN }}
         run: |
-          python -c "from app.notifications.whatsapp import MetaWhatsAppProvider; import sys; sys.exit(0 if MetaWhatsAppProvider().send('WhatsApp connection test: your Worldwide Career Agent is configured and ready.') else 1)"
+          python -c "from app.notifications.whatsapp import MetaWhatsAppProvider; import sys; p=MetaWhatsAppProvider(); ok=p.send('WhatsApp connection test: your Worldwide Career Agent is configured and ready.'); print(f'WhatsApp accepted by Meta; message id: {p.last_message_id or \"not returned\"}'); sys.exit(0 if ok else 1)"
 
       - name: Persist state back to vault
         if: always()

@@ -47,6 +47,7 @@ class MetaWhatsAppProvider:
     def __init__(self, settings: WhatsAppSettings | None = None, post=requests.post):
         self.settings = settings or WhatsAppSettings.from_env()
         self._post = post
+        self.last_message_id = ""
 
     @property
     def configured(self) -> bool:
@@ -61,8 +62,9 @@ class MetaWhatsAppProvider:
         # Meta template text parameters reject newlines/tabs.  Keep summaries
         # readable while making every approved one-variable template valid.
         text = re.sub(r"\s+", " ", message).strip()[:1024]
+        recipient = re.sub(r"\D", "", self.settings.recipient)
         payload = {
-            "messaging_product": "whatsapp", "to": self.settings.recipient, "type": "template",
+            "messaging_product": "whatsapp", "to": recipient, "type": "template",
             "template": {
                 "name": self.settings.template_name,
                 "language": {"code": self.settings.template_language},
@@ -82,6 +84,7 @@ class MetaWhatsAppProvider:
                     message_id = (response.json().get("messages") or [{}])[0].get("id", "")
                 except (AttributeError, ValueError):
                     message_id = ""
+                self.last_message_id = message_id
                 logger.info("WhatsApp accepted by Meta%s",
                             f" (message id {message_id})" if message_id else "")
                 return True
