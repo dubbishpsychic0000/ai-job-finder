@@ -102,8 +102,9 @@ async def run_actions(session: Session, config: AgentConfig, settings: RunnerSet
                 target = report.applied if decision.decision == "APPLY" else report.asked
                 target.append({"job_id": job.id, **result})
                 if result.get("status") == "drafted":
+                    priority = "high" if result.get("daily_limit_reached") else "normal"
                     mem.store.enqueue_notification(session, "EMAIL_DRAFT_CREATED", job_id=job.id,
-                                                   payload=result)
+                                                   priority=priority, payload=result)
                 elif result.get("status") == "sent":
                     mem.store.enqueue_notification(session, "EMAIL_SENT", job_id=job.id,
                                                    priority="high", payload=result)

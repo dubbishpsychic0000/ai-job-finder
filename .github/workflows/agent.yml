@@ -41,10 +41,11 @@ jobs:
       WHATSAPP_TEMPLATE_NAME: ${{ vars.WHATSAPP_TEMPLATE_NAME }}
       WHATSAPP_TEMPLATE_LANGUAGE: ${{ vars.WHATSAPP_TEMPLATE_LANGUAGE || 'en_US' }}
       WHATSAPP_GRAPH_API_VERSION: ${{ vars.WHATSAPP_GRAPH_API_VERSION || 'v23.0' }}
-      # Scheduled jobs must remain review-first. A human-triggered run can
-      # explicitly choose draft/live after Gmail has been configured.
-      EMAIL_MODE: ${{ inputs.email_mode || 'dry_run' }}
-      ENABLE_EMAIL: ${{ (inputs.email_mode || 'dry_run') != 'dry_run' && 'true' || 'false' }}
+      # The agent sends only after the existing verification/safety gate.
+      # At its hard daily limit (10), ApplicationEngine switches to Gmail drafts
+      # and triggers an immediate WhatsApp alert instead.
+      EMAIL_MODE: ${{ inputs.email_mode || 'live' }}
+      ENABLE_EMAIL: ${{ (inputs.email_mode || 'live') != 'dry_run' && 'true' || 'false' }}
     steps:
       - name: Checkout public repo
         uses: actions/checkout@v4

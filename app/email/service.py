@@ -165,8 +165,10 @@ class ApplicationEngine:
                 mem.store.record_event(self.session, "action",
                                        f"daily outbound cap reached - kept as draft for {contact_email}",
                                        "info", {"job_id": job.id, "application_id": app.id})
-                return self._finalize_draft(job, app, email, contact_email, draft["subject"],
-                                            draft["body"], attachment, score)
+                result = self._finalize_draft(job, app, email, contact_email, draft["subject"],
+                                              draft["body"], attachment, score)
+                result["daily_limit_reached"] = True
+                return result
             email.status = "blocked"
             app.status = "blocked"
             mem.store.record_event(self.session, "action",

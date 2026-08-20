@@ -46,3 +46,16 @@ def test_type_and_route_detection_do_not_make_up_email_routes():
     method, url = detect_application_method(text="Apply online today", url="https://example.test/app")
     assert (method, url) == ("ONLINE_FORM", "https://example.test/app")
     assert detect_application_method(text="A great job", has_verified_email=False)[0] == "UNKNOWN"
+
+
+def test_daily_limit_draft_is_an_immediate_notification(db):
+    company = get_or_create_company(db, "Daily Cap Co", "https://daily.example", "Morocco")
+    job = Job(source="company_careers", external_id="cap", dedup_key="v3-cap", title="Technicien BTP",
+              company_id=company.id, country="Morocco", url="https://daily.example/jobs/1")
+    db.add(job)
+    db.flush()
+    row = enqueue_notification(db, "EMAIL_DRAFT_CREATED", job_id=job.id, priority="high",
+                               payload={"daily_limit_reached": True})
+    messages = NotificationService(db).immediate()
+    assert row.status == "delivered"
+    assert messages and "DAILY EMAIL LIMIT REACHED" in messages[0]

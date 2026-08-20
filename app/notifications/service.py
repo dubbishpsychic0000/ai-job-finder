@@ -104,6 +104,7 @@ class NotificationService:
 
     def _immediate_enabled(self, row: Notification, settings: dict) -> bool:
         return ((row.event_type == "EMAIL_SENT" and settings.get("application_sent", True)) or
+                (row.event_type == "EMAIL_DRAFT_CREATED" and row.priority in {"high", "urgent"}) or
                 (row.event_type == "IMMIGRATION_OPPORTUNITY" and settings.get("immigration_alert", True)) or
                 (row.event_type == "ACTION_FAILED" and settings.get("errors", True)) or
                 (row.event_type == "JOB_RANKED" and settings.get("high_match", True)))
@@ -122,6 +123,8 @@ class NotificationService:
         if row.event_type == "EMAIL_SENT":
             return f"📤 EMAIL SENT — {job.title if job else ''}"
         if row.event_type == "EMAIL_DRAFT_CREATED":
+            if row.payload.get("daily_limit_reached"):
+                return f"⚠️ DAILY EMAIL LIMIT REACHED — Gmail draft created for {job.title if job else ''}"
             return f"📧 EMAIL DRAFT CREATED — {job.title if job else ''}"
         if not job:
             return f"{row.event_type}"
