@@ -72,6 +72,8 @@ def run_pipeline(session: Session | None = None, *, sources_path: Path | None = 
                 "investigated": len(action.investigated),
                 "blocked": action.blocked,
                 "errors": action.errors,
+                "drafts": sum(1 for item in (action.applied + action.asked)
+                              if item.get("status") == "drafted"),
             }
             if do_followups and not settings.global_pause and not _is_paused():
                 from app.agents.communication_agent import CommunicationAgent
@@ -113,15 +115,14 @@ def render_run_summary(result: RunResult) -> str:
     """Compact, non-sensitive WhatsApp heartbeat for one completed run."""
     discovery = result.discovery
     action = result.action
-    drafts = sum(1 for item in (action.get("applied", []) + action.get("asked", []))
-                 if item.get("status") == "drafted")
+    drafts = int(action.get("drafts", 0))
     errors = (len(discovery.get("errors", [])) + len(action.get("errors", [])) +
               len(result.analysis.get("errors", [])) + len(result.followup.get("errors", [])))
     return (
         "Career Agent run complete\n"
         f"Jobs: {discovery.get('new_jobs', 0)} new / {discovery.get('fetched', 0)} fetched\n"
-        f"Actions: {len(action.get('applied', []))} apply, {len(action.get('asked', []))} ask, "
-        f"{len(action.get('investigated', []))} investigated\n"
+        f"Actions: {action.get('applied', 0)} apply, {action.get('asked', 0)} ask, "
+        f"{action.get('investigated', 0)} investigated\n"
         f"Gmail drafts: {drafts} | Errors: {errors}"
     )
 
