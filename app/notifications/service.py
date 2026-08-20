@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable
-from datetime import timedelta
+from datetime import timedelta, timezone
 from pathlib import Path
 from typing import Any
 
@@ -50,6 +50,14 @@ class NotificationService:
         last = self.session.execute(select(Notification.delivered_at).where(
             Notification.status == "delivered"
         ).order_by(Notification.delivered_at.desc())).scalars().first()
+        # SQLite returns ``DateTime`` values without tzinfo even when the
+        # application wrote UTC-aware datetimes.  Treat such persisted values
+        # as UTC so scheduled notification checks work on both SQLite and
+        # PostgreSQL.
+        if last is not None and last.tzinfo is None:
+            last = last.replace(tzinfo=timezone.utc)
+        if now.tzinfo is None:
+            now = now.replace(tzinfo=timezone.utc)
         return last is None or now - last >= timedelta(minutes=minutes)
 
     def digest(self, *, force: bool = False, sender: Callable[[str], bool] | None = None) -> str | None:

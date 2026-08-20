@@ -20,3 +20,18 @@ def test_run_summary_counts_drafts_and_errors():
     ))
     assert "2 new / 7 fetched" in text
     assert "Gmail drafts: 2 | Errors: 2" in text
+
+
+def test_notification_digest_handles_sqlite_naive_delivery_time(db):
+    """SQLite round-trips DateTime values without timezone metadata."""
+    from datetime import timedelta
+
+    from app import memory as mem
+    from app.models import utcnow
+    from app.notifications.service import NotificationService
+
+    row = mem.store.enqueue_notification(db, "JOB_FOUND")
+    row.status = "delivered"
+    row.delivered_at = (utcnow() - timedelta(minutes=1)).replace(tzinfo=None)
+    db.flush()
+    assert NotificationService(db).digest_due(now=utcnow()) is False
