@@ -53,7 +53,12 @@ def build_adaptive_plan(session: Session, prefs: Preferences, config: AgentConfi
     # Keep exploring every target country even when old zero-result searches
     # were down-weighted.  Otherwise a new source, a changed labour market, or
     # a newly added role can be starved forever by its historical ledger.
-    exploration_per_country = int(dcfg.get("min_exploration_per_country", 0))
+    # A caller without explicit sources is using the legacy generic learning
+    # view (including its historical tests).  The exploration floor belongs to
+    # a concrete production source, where it prevents that source from being
+    # starved by old zero-result history.
+    exploration_per_country = (int(dcfg.get("min_exploration_per_country", 0))
+                               if learning_sources is not None else 0)
     if exploration_per_country > 0:
         present = {(item["query"], item["country"]) for _idx, item in expanded}
         exploration_counts: dict[str, int] = {}
