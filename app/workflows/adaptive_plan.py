@@ -27,7 +27,8 @@ def build_adaptive_plan(session: Session, prefs: Preferences, config: AgentConfi
                         *, vocab: CandidateVocabulary | None = None,
                         profile: CandidateProfile | None = None,
                         max_per_country: int = 3,
-                        max_queries_per_run: int | None = None) -> list[dict]:
+                        max_queries_per_run: int | None = None,
+                        learning_sources: set[str] | None = None) -> list[dict]:
     """Build the run's search schedule from the baseline plan + learned history."""
     base = SearchPlan(prefs, vocab=vocab).build(max_per_country=max_per_country,
                                                 max_queries_per_run=max_queries_per_run)
@@ -35,7 +36,7 @@ def build_adaptive_plan(session: Session, prefs: Preferences, config: AgentConfi
     ranking = {cs.country: idx for idx, cs in enumerate(
         rank_countries(prefs.countries, prefs, profile, session=session,
                        weights=dcfg.get("country_ranking_weights")))}
-    has_history = any(aggregate_query_stat(session, item["query"], item["country"]) is not None
+    has_history = any(aggregate_query_stat(session, item["query"], item["country"], learning_sources) is not None
                       for item in base)
     remaining = budget_remaining(session, int(dcfg.get("max_daily_search_queries") or 0))
 
@@ -45,7 +46,7 @@ def build_adaptive_plan(session: Session, prefs: Preferences, config: AgentConfi
 
     expanded: list[tuple[int, dict]] = []
     for idx, item in enumerate(base):
-        stat = aggregate_query_stat(session, item["query"], item["country"])
+        stat = aggregate_query_stat(session, item["query"], item["country"], learning_sources)
         for _ in range(repeats_for(stat)):
             expanded.append((idx, item))
 

@@ -44,8 +44,10 @@ jobs:
       # The agent sends only after the existing verification/safety gate.
       # At its hard daily limit (10), ApplicationEngine switches to Gmail drafts
       # and triggers an immediate WhatsApp alert instead.
-      EMAIL_MODE: ${{ inputs.email_mode || 'live' }}
-      ENABLE_EMAIL: ${{ (inputs.email_mode || 'live') != 'dry_run' && 'true' || 'false' }}
+      # Real-source rollout: scheduled runs create reviewable Gmail drafts only.
+      # A manual dispatch may still explicitly choose live after review.
+      EMAIL_MODE: ${{ inputs.email_mode || 'draft' }}
+      ENABLE_EMAIL: ${{ (inputs.email_mode || 'draft') != 'dry_run' && 'true' || 'false' }}
     steps:
       - name: Checkout public repo
         uses: actions/checkout@v4

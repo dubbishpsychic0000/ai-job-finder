@@ -46,6 +46,8 @@ python -m venv .venv
 pip install -r requirements.txt
 
 wca init                          # create the database
+wca discover --real               # public production sources only; no outbound email
+wca discover --demo               # offline fixture check only
 wca run-once                      # full pipeline: discover -> analyze -> decide -> act
 wca stats                         # dashboard-style summary
 wca dashboard                     # web dashboard at http://127.0.0.1:8000
@@ -72,9 +74,12 @@ wca dashboard                     # web dashboard at http://127.0.0.1:8000
   keys and OAuth files. Emails are signed with `name`, `title` and `phone`
   (all read from `candidate/profile.yaml`, never guessed), and the attachment
   carries your name: `CV_<Name>_FR.pdf` / `CV_<Name>_EN.pdf` / `CV_<Name>.pdf`.
-- The **demo connector** (`config/sources.yaml`, `static_files` onto the test
-  fixtures) runs offline so you can verify behaviour with zero external access.
-- Real web connectors (RSS, search) are ships disabled; enable them deliberately.
+- `config/sources.yaml` is production-only: its enabled source is public web
+  discovery and it contains no sample jobs. `config/sources_demo.yaml` holds
+  the offline fixture connector and is used only with `wca discover --demo`.
+- Every discovery run prints per-source diagnostics: queries, fetched and
+  normalized listings, duplicates, new jobs, and any connector error. The
+  dashboard's Analytics endpoint keeps the same source health history.
 
 ## Enable live operation
 
@@ -92,7 +97,19 @@ wca dashboard                     # web dashboard at http://127.0.0.1:8000
    - Your CV(s) into `candidate/cv/` (see `candidate/cv/README.txt`).
 2. Update `candidate/profile.yaml` and `candidate/preferences.yaml` — these are the
    **only** facts the agent may claim.
-3. Enable the real connectors in `config/sources.yaml` (RSS feeds, career pages).
+3. Add verified public company pages or ATS identifiers to `config/sources.yaml`.
+   Do not add login-only sources or scrape LinkedIn/Facebook. The connector layer
+   detects ATS technologies (Workday, Greenhouse, Lever, SmartRecruiters, iCIMS,
+   Oracle/SAP, Recruitee, etc.) using public markers only.
+
+### GitHub Actions rollout
+
+The scheduled workflow runs every two hours. During the real-source rollout it
+uses `EMAIL_MODE=draft`, so qualifying outreach is prepared as Gmail drafts for
+your review, never sent automatically. Run **Actions → Agent 24-7 → Run workflow**
+and choose `dry_run`, `draft`, or (only after review) `live` for a manual run.
+WhatsApp notifications require the configured Meta token and approved template;
+they are only sent for qualifying events, not when a source finds zero new jobs.
 
 ### Email rollout checklist (safe)
 

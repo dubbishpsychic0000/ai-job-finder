@@ -23,6 +23,7 @@ from app.normalization import normalize
 logger = logging.getLogger(__name__)
 
 DEFAULT_SOURCES_PATH = ROOT_DIR / "config" / "sources.yaml"
+DEMO_SOURCES_PATH = ROOT_DIR / "config" / "sources_demo.yaml"
 
 
 @dataclass
@@ -36,6 +37,9 @@ class DiscoveryReport:
     immigration_facts: int = 0
     opportunity_sources: int = 0
     social_signals: int = 0
+    # One entry per configured connector.  This makes a zero-result run
+    # explainable without treating it as an error.
+    source_reports: list[dict] = field(default_factory=list)
 
 
 def _load_source_connectors(path: Path | None = None) -> list[tuple[dict, object]]:
@@ -53,6 +57,7 @@ def _load_source_connectors(path: Path | None = None) -> list[tuple[dict, object
         opts.pop("kind", None)
         opts.pop("name", None)
         opts.pop("enabled", None)
+        opts.pop("mode", None)  # metadata for diagnostics, not connector options
         try:
             connectors.append((c, registry[kind](**opts)))
         except Exception as exc:
@@ -84,10 +89,12 @@ async def run_discovery(session: Session, config: AgentConfig, prefs: Preference
         logger.info("vocab_llm enabled; vocabulary now %d terms", len(vocab.roles()))
     from app.workflows.adaptive_plan import build_adaptive_plan
 
+    connectors = _load_source_connectors(sources_path)
     plan = build_adaptive_plan(session, prefs, config, vocab=vocab, profile=profile,
                                max_per_country=max_per_country,
-                               max_queries_per_run=max_queries)
-    connectors = _load_source_connectors(sources_path)
+                               max_queries_per_run=max_queries,
+                               learning_sources={c.get("name", connector.name)
+                                                 for c, connector in connectors})
 
     # Employer + agency universe (§7, §9) — opt-in so the job pipeline stays hermetic.
     if discovery_cfg.get("employer_discovery", False):
@@ -125,6 +132,18 @@ async def run_discovery(session: Session, config: AgentConfig, prefs: Preference
 
     for source_cfg, connector in connectors:
         source_name = source_cfg.get("name", connector.name)
+        source_report = {
+            "name": source_name,
+            "kind": source_cfg.get("kind", getattr(connector, "kind", "?")),
+            "mode": source_cfg.get("mode", "real"),
+            "queries": 0,
+            "fetched": 0,
+            "normalized": 0,
+            "duplicates": 0,
+            "new": 0,
+            "error": "",
+            "rate_status": "ok",
+        }
         source = mem.store.upsert_source(session, source_name,
                                          getattr(connector, "kind", "?"), str(source_cfg.get("path", "")))
         items_found = 0
@@ -147,16 +166,20 @@ async def run_discovery(session: Session, config: AgentConfig, prefs: Preference
             processed = [normalize(o) for o in results]
             processed = [o for o in processed if o is not None]
             report.opportunities_fetched += len(processed)
+            source_report["fetched"] += len(results)
+            source_report["normalized"] += len(processed)
             dup = find_duplicates(session, processed)
             seen_canonical = set()
             combo_new = 0
             for idx, opp in enumerate(processed):
                 if idx in dup:
                     report.duplicates += 1
+                    source_report["duplicates"] += 1
                     continue
                 canonical = opp.canonical_job_id()
                 if canonical in seen_canonical:  # same vacancy from another source this run
                     report.duplicates += 1
+                    source_report["duplicates"] += 1
                     continue
                 seen_canonical.add(canonical)
                 src_type = opp.effective_source_type()
@@ -216,6 +239,7 @@ async def run_discovery(session: Session, config: AgentConfig, prefs: Preference
                                                    payload={"opportunity_id": mem.store.opportunity_id(job)})
                     report.new_jobs += 1
                     combo_new += 1
+                    source_report["new"] += 1
             mem.store.record_query(session, combo["query"], combo.get("country", ""),
                                    source_name, jobs_found=len(processed),
                                    relevant_jobs=combo_new)
@@ -232,6 +256,7 @@ async def run_discovery(session: Session, config: AgentConfig, prefs: Preference
         try:
             if parallel:  # §26 — all searches dispatched at once, writes stay ordered
                 report.combinations_attempted += len(combos)
+                source_report["queries"] += len(combos)
                 batch = await asyncio.gather(*(search(c) for c in combos), return_exceptions=True)
                 for combo, results in zip(combos, batch, strict=True):
                     if isinstance(results, BaseException):
@@ -240,6 +265,7 @@ async def run_discovery(session: Session, config: AgentConfig, prefs: Preference
             else:
                 for combo in combos:
                     report.combinations_attempted += 1
+                    source_report["queries"] += 1
                     items_found += process(combo, await search(combo), source_name)
         except Exception as exc:  # connector-level isolation
             logger.exception("Discovery connector %s failed", source_name)
@@ -247,8 +273,12 @@ async def run_discovery(session: Session, config: AgentConfig, prefs: Preference
             mem.store.record_event(session, "discovery", f"connector failed: {exc}",
                                    "error", {"source": source_name})
             failure = f"{source_name}: {exc}"
+            source_report["error"] = str(exc)
+            if "429" in str(exc) or "rate limit" in str(exc).lower():
+                source_report["rate_status"] = "limited"
         finally:
             mem.store.mark_source_fetched(session, source, items_found, error=failure)
+            report.source_reports.append(source_report)
 
     mem.store.record_event(session, "discovery",
                            f"found {report.new_jobs} new jobs ({report.opportunities_fetched} fetched, "

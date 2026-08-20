@@ -1,0 +1,9 @@
+# Offline-only connector configuration.  It is never used by scheduled runs.
+# Run it explicitly with: python -m app.cli discover --demo
+connectors:
+  - kind: static_files
+    name: demo_jobs
+    mode: demo
+    enabled: true
+    path: "tests/fixtures/demo"
+    live: true

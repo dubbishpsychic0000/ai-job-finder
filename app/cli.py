@@ -78,13 +78,23 @@ def _render_run(data: dict) -> None:
     console.print(t)
 
 
-def cmd_discover(_args) -> None:
-    from app.workflows.discovery import run_discovery
+def cmd_discover(args) -> None:
+    from app.workflows.discovery import DEFAULT_SOURCES_PATH, DEMO_SOURCES_PATH, run_discovery
 
     config, prefs = get_config(), get_preferences()
+    sources_path = DEMO_SOURCES_PATH if args.demo else DEFAULT_SOURCES_PATH
     with session_scope() as s:
-        report = asyncio.run(run_discovery(s, config, prefs))
+        report = asyncio.run(run_discovery(s, config, prefs, sources_path=sources_path,
+                                           profile=get_profile()))
     console.print(f"found {report.new_jobs} new jobs, {report.duplicates} dupes, errors={report.source_errors}")
+    table = Table(title=f"Discovery source diagnostics ({'demo' if args.demo else 'real'})")
+    for col in ("Source", "Kind", "Queries", "Fetched", "Normalized", "Dupes", "New", "Status"):
+        table.add_column(col)
+    for item in report.source_reports:
+        table.add_row(item["name"], item["kind"], str(item["queries"]), str(item["fetched"]),
+                      str(item["normalized"]), str(item["duplicates"]), str(item["new"]),
+                      item["error"] or item["rate_status"])
+    console.print(table)
 
 
 def cmd_analyze(_args) -> None:
@@ -239,7 +249,11 @@ def main(argv: list[str] | None = None) -> None:
     sub.add_parser("init")
     run_once = sub.add_parser("run-once")
     run_once.add_argument("--json", action="store_true", help="machine-readable output")
-    for name in ("discover", "analyze", "act", "followups", "search-plan",
+    discover = sub.add_parser("discover", help="run real public-source discovery (no outbound email)")
+    discover_mode = discover.add_mutually_exclusive_group()
+    discover_mode.add_argument("--real", action="store_true", help="explicitly select production public sources")
+    discover_mode.add_argument("--demo", action="store_true", help="use offline demo fixtures only")
+    for name in ("analyze", "act", "followups", "search-plan",
                  "stats", "pause", "resume", "scheduler"):
         sub.add_parser(name)
     job = sub.add_parser("job", help="show complete details for an opportunity ID")

@@ -26,7 +26,10 @@ PREFERRED_DOMAINS = [
     "usajobs.gov", "emploipublic.fr", "prairieregion", "jobberwocky.com",
 ]
 
-BLOCKED_DOMAINS = []  # extend with scrapers/aggregators that forbid access
+# Social-network listings are not a permitted discovery route.  We also never
+# fetch a destination page from this connector: it only records the public
+# search-result link and provenance for later review.
+BLOCKED_DOMAINS = ["linkedin.com", "facebook.com", "instagram.com"]
 
 
 def _clean(text: str) -> str:
@@ -58,10 +61,13 @@ class SearchEngineSource:
     async def search(self, query: str, location: str = "") -> list[Opportunity]:
         q = f"{query} {location} job".strip()
         params = {"q": q, "kl": "us-en", "ia": "web"}
-        url = "https://duckduckgo.com/html/?" + urllib.parse.urlencode(params)
+        # The HTML endpoint is deliberately used rather than the JavaScript
+        # search UI.  POST avoids the intermittent empty/challenge response the
+        # redirected GET endpoint returns in unattended CI runs.
+        url = "https://html.duckduckgo.com/html/"
         out: list[Opportunity] = []
         try:
-            resp = requests.get(url, headers={"User-Agent": "Mozilla/5.0"}, timeout=20)
+            resp = requests.post(url, data=params, headers={"User-Agent": "Mozilla/5.0"}, timeout=20)
             resp.raise_for_status()
         except Exception as exc:
             logger.warning("Search engine query failed: %s", exc)
@@ -75,7 +81,7 @@ class SearchEngineSource:
             snippet = result.select_one(".result__snippet")
             if not a:
                 continue
-            href = a.get("href", "")
+            href = resolve_search_url(a.get("href", ""))
             title = _clean(a.get_text(" ")).strip()
             if not title:
                 continue

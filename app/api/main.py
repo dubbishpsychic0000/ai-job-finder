@@ -136,7 +136,7 @@ def api_events(db: Session = Depends(get_db), limit: int = Query(20, le=200)):
 
 @app.get("/api/analytics", summary="Discovery analytics (§30): ranking, learning, health")
 def api_analytics(db: Session = Depends(get_db)):
-    from app.config import get_preferences, get_profile
+    from app.config import ROOT_DIR, get_preferences, get_profile, load_yaml
     from app.discovery.query_learning import query_value
 
     jobs_by_country: dict[str, int] = {}
@@ -162,6 +162,10 @@ def api_analytics(db: Session = Depends(get_db)):
                 "interviews": q.interviews,  # §24 — interview callbacks per query
                 "value": round(query_value(q), 3)} for q in top]
 
+    try:
+        configured = {c.get("name"): c for c in load_yaml(ROOT_DIR / "config" / "sources.yaml").get("connectors", [])}
+    except (OSError, ValueError):
+        configured = {}
     src_rows = db.execute(select(models.Source).order_by(models.Source.id)).scalars().all()
     source_health = []
     for s in src_rows:
@@ -171,9 +175,16 @@ def api_analytics(db: Session = Depends(get_db)):
             health = "healthy"
         else:
             health = "unknown"
+        query_rows = db.execute(
+            select(models.QueryStat).where(models.QueryStat.source == s.name)
+        ).scalars().all()
         source_health.append({
             "name": s.name, "kind": s.kind, "enabled": s.enabled,
+            "mode": configured.get(s.name, {}).get("mode", "unknown"),
             "items_found": s.items_found,
+            "queries": sum(q.runs for q in query_rows),
+            "normalized": sum(q.jobs_found for q in query_rows),
+            "new": sum(q.relevant_jobs for q in query_rows),
             "last_fetch_at": s.last_fetch_at.isoformat() if s.last_fetch_at else None,
             "last_success_at": s.last_success_at.isoformat() if s.last_success_at else None,
             "last_failure_at": s.last_failure_at.isoformat() if s.last_failure_at else None,

@@ -1,73 +1,42 @@
-# Connector configuration for the discovery layer.
-# Each entry: kind (registry key), name, enabled, options.
-# Enable real web sources by setting enabled: true — they will still respect
-# ToS / robots and degrade gracefully offline.
+# Production connector configuration — public sources only.
+#
+# This file deliberately contains no fixture data or example companies.  Sources
+# must be public and must respect site terms, robots and rate limits.  Add a
+# company/ATS only after its public identifier or careers URL has been verified.
 
 connectors:
-  - kind: static_files
-    name: demo_jobs
-    enabled: true
-    path: "tests/fixtures/demo"
-    live: true            # deterministic, all items, offline demo/tests
-
-  - kind: rss
-    name: eures_rss
-    enabled: false        # feed URL currently 404s; re-enable with a current EURES feed URL
-    feeds:
-      - "https://eures.europa.eu/search-jobs/result?query={query}&location={location}&format=rss"
-
   - kind: search_engine
-    name: duckduckgo_jobs
-    enabled: true         # real web discovery via DuckDuckGo (no API key); degrades offline
-    results_per_query: 4
+    name: public_web_search
+    mode: real
+    enabled: true
+    results_per_query: 8
 
-  - kind: company_careers
-    name: example_careers
-    enabled: false
-    pages:
-      - url: "https://example.com/careers"
-        company: "Example Construction"
-        ops:
-          location: "France"
-          card_selectors: ["a.job-listing", "a.job-card"]
-
-  # Discovery V2 sources —— all disabled until an operator provides real tokens/
-  # IDs. Each connector uses public APIs only (spec §2, §8, §14).
+  # Public ATS/company sources. They are intentionally disabled until a real
+  # public company identifier is supplied; no placeholder source can emit jobs.
   - kind: greenhouse
     name: greenhouse_boards
+    mode: real
     enabled: false
-    boards: ["examplecompany"]        # public board tokens, e.g. "mycompany"
+    boards: []                         # public board tokens, e.g. "mycompany"
 
   - kind: smartrecruiters
     name: smartrecruiters_companies
+    mode: real
     enabled: false
-    companies: ["examplecompany"]     # public company IDs
+    companies: []                      # public company IDs
 
   - kind: eures
     name: eures_government
+    mode: real
     enabled: false
     feeds:
       - "https://eures.europa.eu/search-jobs/result?query={query}&location={location}&format=rss"
-
-  - kind: generic_api
-    name: example_job_api
-    enabled: false
-    config:
-      name: "example_job_api"
-      base_url: "https://api.example.com/v1/jobs?q={query}&loc={location}"
-      list_path: "results.items"
-      mapping:
-        title: "title"
-        company: "employer.name"
-        location: "city"
-        url: "permalink"
-        external_id: "uuid"
-        posted_at: "createdAt"
 
   # Government employment portals (spec §14) — public access only (§34); disabled
   # until an operator verifies the current official endpoints.
   - kind: government
     name: uk_dwp_findajob
+    mode: real
     enabled: false
     type: rss
     country: "United Kingdom"
@@ -76,6 +45,7 @@ connectors:
 
   - kind: government
     name: austria_ams_jobapi
+    mode: real
     enabled: false
     type: api
     country: "Austria"
@@ -93,19 +63,18 @@ connectors:
   # until an operator configures real company identifiers.
   - kind: lever
     name: lever_companies
+    mode: real
     enabled: false
-    sites: ["examplecompany"]          # Lever site slugs (jobs.lever.co/…)
+    sites: []                            # Lever site slugs (jobs.lever.co/…)
 
   - kind: workday
     name: workday_companies
+    mode: real
     enabled: false
-    companies:
-      - host: "example-wd2.myworkdayjobs.com"
-        tenant: "example"
-        company: "example"
-        display_name: "Example Group"
+    companies: []
 
   - kind: icims
     name: icims_companies
+    mode: real
     enabled: false
-    hosts: ["careers-example.icims.com"]
+    hosts: []

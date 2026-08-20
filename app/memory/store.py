@@ -412,16 +412,18 @@ def get_query_stat(session: Session, query: str, country: str = "", source: str 
     ).scalar_one_or_none()
 
 
-def aggregate_query_stat(session: Session, query: str, country: str = "") -> QueryStat | None:
+def aggregate_query_stat(session: Session, query: str, country: str = "",
+                         sources: set[str] | None = None) -> QueryStat | None:
     """Source-agnostic learning view of a (query, country): sums the ledger rows.
 
     Discovery records one row per (query, country, connector source); the
     adaptive scheduler (§24/§31) should learn from the *aggregate* outcome, not
     a single source's view.
     """
-    rows = list(session.execute(
-        select(QueryStat).where(QueryStat.query == query, QueryStat.country == country)
-    ).scalars().all())
+    stmt = select(QueryStat).where(QueryStat.query == query, QueryStat.country == country)
+    if sources is not None:
+        stmt = stmt.where(QueryStat.source.in_(sources))
+    rows = list(session.execute(stmt).scalars().all())
     if not rows:
         return None
     merged = QueryStat(query=query, country=country)
