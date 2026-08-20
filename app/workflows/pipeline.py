@@ -87,9 +87,16 @@ def run_pipeline(session: Session | None = None, *, sources_path: Path | None = 
             notifications = NotificationService(s)
             whatsapp = MetaWhatsAppProvider()
             if whatsapp.configured:
+                # A concise operational heartbeat is sent on *every* pipeline
+                # run, including zero-result runs.  Event notifications remain
+                # separate so a useful alert is never suppressed by the digest
+                # interval.
+                run_summary = render_run_summary(result)
                 result.notifications = {
                     "immediate": notifications.immediate(sender=whatsapp.send),
                     "digest": notifications.digest(sender=whatsapp.send),
+                    "run_summary": run_summary,
+                    "run_summary_sent": whatsapp.send(run_summary),
                     "whatsapp_configured": True,
                 }
             else:
@@ -100,6 +107,23 @@ def run_pipeline(session: Session | None = None, *, sources_path: Path | None = 
         return result
 
     return _run()
+
+
+def render_run_summary(result: RunResult) -> str:
+    """Compact, non-sensitive WhatsApp heartbeat for one completed run."""
+    discovery = result.discovery
+    action = result.action
+    drafts = sum(1 for item in (action.get("applied", []) + action.get("asked", []))
+                 if item.get("status") == "drafted")
+    errors = (len(discovery.get("errors", [])) + len(action.get("errors", [])) +
+              len(result.analysis.get("errors", [])) + len(result.followup.get("errors", [])))
+    return (
+        "Career Agent run complete\n"
+        f"Jobs: {discovery.get('new_jobs', 0)} new / {discovery.get('fetched', 0)} fetched\n"
+        f"Actions: {len(action.get('applied', []))} apply, {len(action.get('asked', []))} ask, "
+        f"{len(action.get('investigated', []))} investigated\n"
+        f"Gmail drafts: {drafts} | Errors: {errors}"
+    )
 
 
 def _is_paused() -> bool:
