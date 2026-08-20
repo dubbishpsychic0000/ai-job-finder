@@ -7,6 +7,10 @@ class _Response:
     ok = True
     status_code = 200
 
+    @staticmethod
+    def json():
+        return {"messages": [{"id": "wamid.test"}]}
+
 
 def test_meta_whatsapp_uses_template_body_parameter():
     captured = {}
