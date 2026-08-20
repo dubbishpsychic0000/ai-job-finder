@@ -27,3 +27,18 @@ def test_meta_whatsapp_uses_template_body_parameter():
 
 def test_unconfigured_provider_does_not_send():
     assert not MetaWhatsAppProvider(WhatsAppSettings()).send("No delivery")
+
+
+def test_meta_whatsapp_normalizes_template_parameter_whitespace():
+    captured = {}
+
+    def post(_url, **kwargs):
+        captured.update(kwargs)
+        return _Response()
+
+    provider = MetaWhatsAppProvider(WhatsAppSettings(
+        access_token="secret-token", phone_number_id="id", recipient="212600000000",
+        template_name="job_digest"), post=post)
+    assert provider.send("Run complete\nJobs: 1\tErrors: 0")
+    text = captured["json"]["template"]["components"][0]["parameters"][0]["text"]
+    assert text == "Run complete Jobs: 1 Errors: 0"

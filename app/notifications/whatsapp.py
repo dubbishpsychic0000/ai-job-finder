@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 from dataclasses import dataclass
 
 import requests
@@ -57,13 +58,16 @@ class MetaWhatsAppProvider:
             return False
         endpoint = (f"https://graph.facebook.com/{self.settings.graph_api_version}/"
                     f"{self.settings.phone_number_id}/messages")
+        # Meta template text parameters reject newlines/tabs.  Keep summaries
+        # readable while making every approved one-variable template valid.
+        text = re.sub(r"\s+", " ", message).strip()[:1024]
         payload = {
             "messaging_product": "whatsapp", "to": self.settings.recipient, "type": "template",
             "template": {
                 "name": self.settings.template_name,
                 "language": {"code": self.settings.template_language},
                 "components": [{"type": "body", "parameters": [
-                    {"type": "text", "text": message[:1024]}
+                    {"type": "text", "text": text}
                 ]}],
             },
         }
