@@ -7,9 +7,11 @@ the profile yet (that is a Phase 5 item); listing + control today.
 from __future__ import annotations
 
 from pathlib import Path
+import hashlib
+import hmac
 
-from fastapi import Depends, FastAPI, Query
-from fastapi.responses import FileResponse
+from fastapi import Depends, FastAPI, HTTPException, Query, Request
+from fastapi.responses import FileResponse, PlainTextResponse
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -28,6 +30,50 @@ _static = Path(__file__).parent / "static"
 @app.get("/")
 def index():
     return FileResponse(_static / "dashboard.html")
+
+
+@app.get("/webhooks/whatsapp", include_in_schema=False)
+def verify_whatsapp_webhook(mode: str = Query("", alias="hub.mode"),
+                            verify_token: str = Query("", alias="hub.verify_token"),
+                            challenge: str = Query("", alias="hub.challenge")):
+    """Meta callback handshake; deploy this endpoint over public HTTPS."""
+    from app.config import get_settings
+
+    expected = get_settings().whatsapp_webhook_verify_token
+    if mode == "subscribe" and expected and hmac.compare_digest(verify_token, expected):
+        return PlainTextResponse(challenge)
+    raise HTTPException(status_code=403, detail="WhatsApp webhook verification failed")
+
+
+@app.post("/webhooks/whatsapp", include_in_schema=False)
+async def receive_whatsapp_status(request: Request, db: Session = Depends(get_db)):
+    """Record Meta sent/delivered/read/failed receipts for troubleshooting."""
+    from app.config import get_settings
+
+    settings = get_settings()
+    body = await request.body()
+    signature = request.headers.get("X-Hub-Signature-256", "")
+    if not settings.whatsapp_app_secret:
+        raise HTTPException(status_code=503, detail="WhatsApp webhook app secret is not configured")
+    expected = "sha256=" + hmac.new(settings.whatsapp_app_secret.encode(), body, hashlib.sha256).hexdigest()
+    if not hmac.compare_digest(signature, expected):
+        raise HTTPException(status_code=403, detail="invalid WhatsApp webhook signature")
+    try:
+        payload = await request.json()
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail="invalid JSON") from exc
+    statuses = []
+    for entry in payload.get("entry", []):
+        for change in entry.get("changes", []):
+            statuses.extend((change.get("value") or {}).get("statuses") or [])
+    for status in statuses:
+        message_id = str(status.get("id", ""))
+        state = str(status.get("status", "unknown"))
+        error = ((status.get("errors") or [{}])[0].get("title", ""))
+        mem.store.record_event(db, "whatsapp_delivery", f"{state}: {message_id[:80]}",
+                               "error" if state == "failed" else "info",
+                               {"message_id": message_id, "status": state, "error": error})
+    return {"received": len(statuses)}
 
 
 @app.get("/api/stats")

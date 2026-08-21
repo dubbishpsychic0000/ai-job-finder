@@ -191,6 +191,7 @@ def test_detect_ats_known_systems():
     assert detect_ats("https://boards.greenhouse.io/acme") == "greenhouse"
     assert detect_ats("https://wd5.myworkdaysite.com/acme/careers") == "workday"
     assert detect_ats(html="<html>Powered by SAP SuccessFactors</html>") == "successfactors"
+    assert detect_ats("https://jobs.ashbyhq.com/acme/abc") == "ashby"
     assert detect_ats("https://example.com/careers") == ""
 
 

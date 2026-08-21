@@ -43,6 +43,10 @@ class RunnerSettings(BaseSettings):
     gmail_client_secret_path: str = ""  # defaults to secrets/client_secret.json
     gmail_token_path: str = ""          # defaults to secrets/gmail_token.json
 
+    # Meta WhatsApp webhook verification. Both stay in repository secrets.
+    whatsapp_webhook_verify_token: str = ""
+    whatsapp_app_secret: str = ""
+
     # Outbound communication policy (configurable via .env, no code changes).
     daily_max_applications: int = 5      # APPLY emails per day
     daily_max_inquiries: int = 5         # ASK_EMPLOYER / information requests per day

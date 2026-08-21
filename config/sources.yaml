@@ -11,6 +11,15 @@ connectors:
     enabled: true
     results_per_query: 12
 
+  # Direct public ATS listings only. They are independently deduplicated and
+  # provide the most reliable route for publicly displayed contact verification.
+  - kind: search_engine
+    name: official_ats_search
+    mode: real
+    enabled: true
+    official_only: true
+    results_per_query: 8
+
   # Public ATS/company sources. They are intentionally disabled until a real
   # public company identifier is supplied; no placeholder source can emit jobs.
   - kind: greenhouse

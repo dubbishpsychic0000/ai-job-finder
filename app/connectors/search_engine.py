@@ -56,11 +56,17 @@ class SearchEngineSource:
     policy_notice = ("Uses a public search-engine result page. Does not log in, bypass "
                      "captchas, or target protected sites.")
 
-    def __init__(self, results_per_query: int = 8):
+    def __init__(self, results_per_query: int = 8, official_only: bool = False):
         self.results_per_query = results_per_query
+        self.official_only = official_only
 
     async def search(self, query: str, location: str = "") -> list[Opportunity]:
         q = f"{query} {location} job".strip()
+        if self.official_only:
+            # Search-result discovery only; each returned link must resolve to
+            # a recognised public ATS. This deliberately excludes social media
+            # and aggregators and gives contact verification an official page.
+            q += " (site:boards.greenhouse.io OR site:jobs.lever.co OR site:myworkdayjobs.com OR site:jobs.smartrecruiters.com OR site:icims.com OR site:jobs.ashbyhq.com OR site:recruitee.com)"
         params = {"q": q, "kl": "us-en", "ia": "web"}
         # The HTML endpoint is deliberately used rather than the JavaScript
         # search UI.  POST avoids the intermittent empty/challenge response the
@@ -86,7 +92,8 @@ class SearchEngineSource:
             title = _clean(a.get_text(" ")).strip()
             if not title:
                 continue
-            if not self._allowed(href):
+            ats = detect_ats(href)
+            if not self._allowed(href, official_only=self.official_only, ats=ats):
                 continue
             out.append(Opportunity(
                 source="search_engine",
@@ -94,10 +101,10 @@ class SearchEngineSource:
                 # distinction allows a contact visibly supplied by that ATS
                 # result to pass the existing evidence-based verification
                 # gate; no address is guessed or fetched from protected pages.
-                source_type="ats" if detect_ats(href) else "search_engine",
+                source_type="ats" if ats else "search_engine",
                 external_id=href,
                 title=title[:200],
-                company="",
+                company=_company_from_ats_url(href) if ats else "",
                 location=location,
                 country=infer_country(location),
                 description=_clean(snippet.get_text(" ")) if snippet else "",
@@ -109,8 +116,18 @@ class SearchEngineSource:
         return out
 
     @staticmethod
-    def _allowed(href: str) -> bool:
+    def _allowed(href: str, *, official_only: bool = False, ats: str = "") -> bool:
         if not href.startswith("http"):
             return False
         host = urllib.parse.urlparse(href).netloc.lower()
-        return not any(b in host for b in BLOCKED_DOMAINS)
+        return not any(b in host for b in BLOCKED_DOMAINS) and (not official_only or bool(ats))
+
+
+def _company_from_ats_url(url: str) -> str:
+    """Best-effort public ATS tenant name; never guesses a contact."""
+    parsed = urllib.parse.urlparse(url)
+    parts = [part for part in parsed.path.split("/") if part]
+    if parts:
+        return parts[0].replace("-", " ").replace("_", " ").title()
+    host = parsed.netloc.lower().split(":")[0]
+    return host.split(".")[0].replace("-", " ").title()

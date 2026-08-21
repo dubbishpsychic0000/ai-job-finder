@@ -18,6 +18,7 @@ ATS_MARKERS: dict[str, tuple[tuple[str, ...], tuple[str, ...]]] = {
     "teamtailor": (("teamtailor.com", "teamtailor"), ("teamtailor",)),
     "personio": (("personio.com",), ("personio",)),
     "recruitee": (("recruitee.com",), ("recruitee",)),
+    "ashby": (("ashbyhq.com",), ("ashby", "ashbyhq")),
 }
 
 
