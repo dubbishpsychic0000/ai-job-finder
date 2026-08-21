@@ -56,9 +56,14 @@ class SearchEngineSource:
     policy_notice = ("Uses a public search-engine result page. Does not log in, bypass "
                      "captchas, or target protected sites.")
 
-    def __init__(self, results_per_query: int = 8, official_only: bool = False):
+    def __init__(self, results_per_query: int = 8, official_only: bool = False,
+                 domains: list[str] | None = None, source_name: str = "search_engine",
+                 result_source_type: str = "search_engine"):
         self.results_per_query = results_per_query
         self.official_only = official_only
+        self.domains = [domain.lower().lstrip(".") for domain in (domains or [])]
+        self.source_name = source_name
+        self.result_source_type = result_source_type
 
     async def search(self, query: str, location: str = "") -> list[Opportunity]:
         q = f"{query} {location} job".strip()
@@ -67,6 +72,8 @@ class SearchEngineSource:
             # a recognised public ATS. This deliberately excludes social media
             # and aggregators and gives contact verification an official page.
             q += " (site:boards.greenhouse.io OR site:jobs.lever.co OR site:myworkdayjobs.com OR site:jobs.smartrecruiters.com OR site:icims.com OR site:jobs.ashbyhq.com OR site:recruitee.com)"
+        elif self.domains:
+            q += " (" + " OR ".join(f"site:{domain}" for domain in self.domains) + ")"
         params = {"q": q, "kl": "us-en", "ia": "web"}
         # The HTML endpoint is deliberately used rather than the JavaScript
         # search UI.  POST avoids the intermittent empty/challenge response the
@@ -93,15 +100,15 @@ class SearchEngineSource:
             if not title:
                 continue
             ats = detect_ats(href)
-            if not self._allowed(href, official_only=self.official_only, ats=ats):
+            if not self._allowed(href, official_only=self.official_only, ats=ats, domains=self.domains):
                 continue
             out.append(Opportunity(
-                source="search_engine",
+                source=self.source_name,
                 # A public ATS URL is an official application route.  This
                 # distinction allows a contact visibly supplied by that ATS
                 # result to pass the existing evidence-based verification
                 # gate; no address is guessed or fetched from protected pages.
-                source_type="ats" if ats else "search_engine",
+                source_type="ats" if ats else self.result_source_type,
                 external_id=href,
                 title=title[:200],
                 company=_company_from_ats_url(href) if ats else "",
@@ -116,11 +123,14 @@ class SearchEngineSource:
         return out
 
     @staticmethod
-    def _allowed(href: str, *, official_only: bool = False, ats: str = "") -> bool:
+    def _allowed(href: str, *, official_only: bool = False, ats: str = "",
+                 domains: list[str] | None = None) -> bool:
         if not href.startswith("http"):
             return False
         host = urllib.parse.urlparse(href).netloc.lower()
-        return not any(b in host for b in BLOCKED_DOMAINS) and (not official_only or bool(ats))
+        in_domain_scope = not domains or any(host == d or host.endswith("." + d) for d in domains)
+        return (not any(b in host for b in BLOCKED_DOMAINS) and in_domain_scope and
+                (not official_only or bool(ats)))
 
 
 def _company_from_ats_url(url: str) -> str:

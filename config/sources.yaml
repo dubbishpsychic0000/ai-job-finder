@@ -20,6 +20,21 @@ connectors:
     official_only: true
     results_per_query: 8
 
+  # Moroccan platforms are discovered through their publicly indexed pages;
+  # the agent does not scrape or log into these sites. Disable any source
+  # independently if its terms, robots policy, or availability changes.
+  - {kind: search_engine, name: rekrute, mode: real, enabled: true, domains: [rekrute.com], result_source_type: job_board, results_per_query: 8}
+  - {kind: search_engine, name: emploi_ma, mode: real, enabled: true, domains: [emploi.ma], result_source_type: job_board, results_per_query: 8}
+  - {kind: search_engine, name: amaljob, mode: real, enabled: true, domains: [amaljob.com], result_source_type: job_board, results_per_query: 8}
+  - {kind: search_engine, name: anapec, mode: real, enabled: true, domains: [anapec.org], result_source_type: government, results_per_query: 8}
+  - {kind: search_engine, name: emploi_public_ma, mode: real, enabled: true, domains: [emploi-public.ma], result_source_type: government, results_per_query: 8}
+  - {kind: search_engine, name: marocannonces, mode: real, enabled: true, domains: [marocannonces.com], result_source_type: job_board, results_per_query: 8}
+  - {kind: search_engine, name: dreamjob, mode: real, enabled: true, domains: [dreamjob.ma], result_source_type: job_board, results_per_query: 8}
+  - {kind: search_engine, name: indeed_morocco, mode: real, enabled: true, domains: [ma.indeed.com], result_source_type: job_board, results_per_query: 8}
+  - {kind: search_engine, name: bghit_nekhdem, mode: real, enabled: true, domains: [bghit-nekhdem.com], result_source_type: job_board, results_per_query: 8}
+  - {kind: search_engine, name: jobzyn, mode: real, enabled: true, domains: [jobzyn.com], result_source_type: job_board, results_per_query: 8}
+  - {kind: search_engine, name: moncallcenter, mode: real, enabled: true, domains: [moncallcenter.ma], result_source_type: job_board, results_per_query: 8}
+
   # Public ATS/company sources. They are intentionally disabled until a real
   # public company identifier is supplied; no placeholder source can emit jobs.
   - kind: greenhouse

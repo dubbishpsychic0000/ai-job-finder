@@ -18,3 +18,16 @@ def test_official_ats_search_filters_non_ats_results(monkeypatch):
     assert len(jobs) == 1
     assert jobs[0].source_type == "ats"
     assert jobs[0].company == "Acme"
+
+
+def test_domain_scoped_search_records_platform_source(monkeypatch):
+    html = '<div class="result"><a class="result__a" href="https://www.rekrute.com/offre/1">Technicien BTP</a></div>'
+
+    class Response:
+        text = html
+        def raise_for_status(self): pass
+
+    monkeypatch.setattr("app.connectors.search_engine.requests.post", lambda *a, **k: Response())
+    jobs = asyncio.run(SearchEngineSource(domains=["rekrute.com"], source_name="rekrute",
+                                          result_source_type="job_board").search("btp", "Morocco"))
+    assert jobs and jobs[0].source == "rekrute" and jobs[0].source_type == "job_board"

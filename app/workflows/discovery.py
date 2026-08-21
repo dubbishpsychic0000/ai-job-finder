@@ -58,6 +58,8 @@ def _load_source_connectors(path: Path | None = None) -> list[tuple[dict, object
         opts.pop("name", None)
         opts.pop("enabled", None)
         opts.pop("mode", None)  # metadata for diagnostics, not connector options
+        if kind == "search_engine":
+            opts["source_name"] = c.get("name", "search_engine")
         try:
             connectors.append((c, registry[kind](**opts)))
         except Exception as exc:

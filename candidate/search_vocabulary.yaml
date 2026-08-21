@@ -304,6 +304,7 @@ countries:
   Morocco:
     enabled: true
     priority: high
+    language: "ar"
     cities: []
     terms:
       - "Maroc"
@@ -325,6 +326,13 @@ countries:
       - "Oujda"
       - "Kenitra"
       - "Béni Mellal"
+    localized_roles:
+      - "الهندسة المدنية"
+      - "مهندس مدني"
+      - "تقني الهندسة المدنية"
+      - "تقني الأشغال العمومية"
+      - "رئيس الورش"
+      - "تدريب نهاية الدراسة"
 
   France:
     enabled: true

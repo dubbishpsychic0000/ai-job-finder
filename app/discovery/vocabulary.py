@@ -26,6 +26,7 @@ logger = logging.getLogger(__name__)
 
 # Language spoken in each target country (drives localized term selection).
 LANG_OF_COUNTRY = {
+    "Morocco": "ar",
     "France": "fr",
     "Belgium": "nl",   # bilingual; defaults handled by caller
     "Canada": "fr",    # Quebec flavour; fine for FR queries
@@ -93,6 +94,11 @@ ROLE_SYNONYMS: dict[str, list[str]] = {
 
 # Language -> extra localized role terms (complements preferences.localized_roles).
 LOCALIZED_SYNONYMS: dict[str, list[str]] = {
+    "ar": [
+        "الهندسة المدنية", "مهندس مدني", "تقني الهندسة المدنية", "تقني البناء",
+        "تقني الأشغال العمومية", "رئيس الورش", "مراقب الأشغال", "دراسة المشاريع",
+        "تدريب", "تدريب نهاية الدراسة",
+    ],
     "fr": [
         "technicien chantier",
         "technicien études",
