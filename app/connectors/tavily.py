@@ -1,122 +1,118 @@
-"""Search-engine connector (Priority 1+ for web-discovery).
+"""Tavily search connector (Priority 1+ for web-discovery).
 
-Uses DuckDuckGo's HTML endpoint (no API key) to find job listings across the
-web. Results are blessed by a domain allowlist/denylist so the agent prefers
-high-signal job sites and avoids scraping aggregators that forbid it.
+Uses Tavily API to find job listings across the web. Results are filtered
+by domain allowlist/denylist so the agent prefers high-signal job sites.
 
 Fallbacks/degradation:
   * network errors -> empty result + warning (never crashes discovery)
 """
 from __future__ import annotations
 
+import os
 import logging
-import re
 import urllib.parse
+from datetime import datetime, timezone
 
 import requests
-from bs4 import BeautifulSoup
+from dotenv import load_dotenv
 
 from app.connectors.ats_detect import detect_ats
 from app.connectors.base import Opportunity, infer_country
+
+# Load .env so os.getenv() works for API keys
+load_dotenv()
 
 logger = logging.getLogger(__name__)
 
 PREFERRED_DOMAINS = [
     "indeed.com", "linkedin.com", "glassdoor.com", "monster.com", "careerbuilder.com",
     "totaljobs.com", "stepstone.de", "welcometothejungle.com", "eures.europa.eu",
-    "usajobs.gov", "emploipublic.fr", "prairieregion", "jobberwocky.com",
+    "usajobs.gov", "emploipublic.fr", "jobberwocky.com",
 ]
 
-# Social-network listings are not a permitted discovery route.  We also never
-# fetch a destination page from this connector: it only records the public
-# search-result link and provenance for later review.
 BLOCKED_DOMAINS = ["linkedin.com", "facebook.com", "instagram.com"]
 
 
-def _clean(text: str) -> str:
-    return re.sub(r"\s+", " ", (text or "")).strip()
+class TavilySource:
+    """Web search connector built on Tavily API."""
 
-
-def resolve_search_url(href: str) -> str:
-    """Unwrap DuckDuckGo redirect links to the real destination URL."""
-    if not href or "duckduckgo" not in (href or "").lower():
-        return href
-    qs = urllib.parse.parse_qs(urllib.parse.urlparse(href).query)
-    uddg = qs.get("uddg")
-    return urllib.parse.unquote(uddg[0]) if uddg else href
-
-
-class SearchEngineSource:
-    """Web search connector built on DuckDuckGo's HTML result page."""
-
-    name = "search_engine"
-    kind = "html_search"
+    name = "tavily"
+    kind = "api_search"
     source_type = "search_engine"
     access_mode = "public"
-    policy_notice = ("Uses a public search-engine result page. Does not log in, bypass "
-                     "captchas, or target protected sites.")
+    policy_notice = ("Uses Tavily API for job search. Respects robots.txt and terms of service.")
 
-    def __init__(self, results_per_query: int = 8, official_only: bool = False,
-                 domains: list[str] | None = None, source_name: str = "search_engine",
-                 result_source_type: str = "search_engine", proxy: str | None = None):
+    def __init__(self, results_per_query: int = 10, official_only: bool = False,
+                 domains: list[str] | None = None, source_name: str = "tavily",
+                 result_source_type: str = "search_engine", api_key: str | None = None):
         self.results_per_query = results_per_query
         self.official_only = official_only
         self.domains = [domain.lower().lstrip(".") for domain in (domains or [])]
         self.source_name = source_name
         self.result_source_type = result_source_type
-        self.proxy = proxy
+        self._api_key = api_key  # Can be None, resolved at search time
+
+    def _get_api_key(self) -> str:
+        return self._api_key or os.getenv("TAVILY_API_KEY", "")
 
     async def search(self, query: str, location: str = "") -> list[Opportunity]:
         q = f"{query} {location} job".strip()
         if self.official_only:
-            # Search-result discovery only; each returned link must resolve to
-            # a recognised public ATS. This deliberately excludes social media
-            # and aggregators and gives contact verification an official page.
             q += " (site:boards.greenhouse.io OR site:jobs.lever.co OR site:myworkdayjobs.com OR site:jobs.smartrecruiters.com OR site:icims.com OR site:jobs.ashbyhq.com OR site:recruitee.com)"
         elif self.domains:
             q += " (" + " OR ".join(f"site:{domain}" for domain in self.domains) + ")"
-        params = {"q": q, "kl": "us-en", "ia": "web"}
-        # The HTML endpoint is deliberately used rather than the JavaScript
-        # search UI.  POST avoids the intermittent empty/challenge response the
-        # redirected GET endpoint returns in unattended CI runs.
-        url = "https://html.duckduckgo.com/html/"
+
         out: list[Opportunity] = []
-        proxies = {"http": self.proxy, "https": self.proxy} if self.proxy else None
-        try:
-            resp = requests.post(url, data=params, headers={"User-Agent": "Mozilla/5.0"}, timeout=20, proxies=proxies)
-            resp.raise_for_status()
-        except Exception as exc:
-            logger.warning("Search engine query failed: %s", exc)
+        api_key = self._get_api_key()
+        if not api_key:
+            logger.warning("Tavily API key not configured")
             return out
 
-        soup = BeautifulSoup(resp.text, "lxml")
-        for i, result in enumerate(soup.select(".result")):
+        try:
+            resp = requests.post(
+                "https://api.tavily.com/search",
+                json={
+                    "api_key": api_key,
+                    "query": q,
+                    "search_depth": "advanced",
+                    "include_answer": False,
+                    "include_raw_content": False,
+                    "max_results": self.results_per_query,
+                },
+                timeout=30,
+            )
+            resp.raise_for_status()
+            data = resp.json()
+        except Exception as exc:
+            logger.warning("Tavily search query failed: %s", exc)
+            return out
+
+        results = data.get("results", [])
+        for i, result in enumerate(results):
             if i >= self.results_per_query:
                 break
-            a = result.select_one(".result__a")
-            snippet = result.select_one(".result__snippet")
-            if not a:
+
+            href = result.get("url", "")
+            if not href:
                 continue
-            href = resolve_search_url(a.get("href", ""))
-            title = _clean(a.get_text(" ")).strip()
+
+            title = result.get("title", "").strip()
             if not title:
                 continue
+
             ats = detect_ats(href)
             if not self._allowed(href, official_only=self.official_only, ats=ats, domains=self.domains):
                 continue
+
             out.append(Opportunity(
                 source=self.source_name,
-                # A public ATS URL is an official application route.  This
-                # distinction allows a contact visibly supplied by that ATS
-                # result to pass the existing evidence-based verification
-                # gate; no address is guessed or fetched from protected pages.
                 source_type="ats" if ats else self.result_source_type,
                 external_id=href,
                 title=title[:200],
                 company=_company_from_ats_url(href) if ats else "",
                 location=location,
                 country=infer_country(location),
-                description=_clean(snippet.get_text(" ")) if snippet else "",
+                description=result.get("content", "")[:3000],
                 url=href,
                 posted_at=None,
                 employment_type="",

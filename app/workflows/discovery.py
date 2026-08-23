@@ -13,6 +13,7 @@ from sqlalchemy.orm import Session
 from app import memory as mem
 from app.config import ROOT_DIR, AgentConfig, CandidateProfile, Preferences, load_yaml
 from app.connectors import registry
+from app.connectors.tavily_resilience import DailyBudget, TavilyKey, key_fingerprint
 from app.deduplication import find_duplicates
 from app.discovery.email_verification import EmailVerificationService
 from app.discovery.opportunity_details import classify_opportunity, detect_application_method
@@ -45,6 +46,22 @@ class DiscoveryReport:
 def _load_source_connectors(path: Path | None = None) -> list[tuple[dict, object]]:
     path = path or DEFAULT_SOURCES_PATH
     cfg = load_yaml(path)
+    import os
+    proxy = os.getenv("HTTP_PROXY") or os.getenv("HTTPS_PROXY") or None
+
+    # Build Tavily resilient keys from TAVILY_API_KEYS (comma-separated)
+    tavily_keys_str = os.getenv("TAVILY_API_KEYS", "")
+    tavily_keys = [k.strip() for k in tavily_keys_str.split(",") if k.strip()]
+    tavily_resilient_keys = []
+    for i, k in enumerate(tavily_keys):
+        budget_path = Path(f"data/tavily_budget_{key_fingerprint(k)}.json")
+        budget_path.parent.mkdir(parents=True, exist_ok=True)
+        tavily_resilient_keys.append(TavilyKey(
+            api_key=k,
+            budget=DailyBudget(budget_path, limit=20),
+            fp=key_fingerprint(k),
+        ))
+
     connectors = []
     for c in cfg.get("connectors", []):
         if not c.get("enabled", True):
@@ -58,8 +75,25 @@ def _load_source_connectors(path: Path | None = None) -> list[tuple[dict, object
         opts.pop("name", None)
         opts.pop("enabled", None)
         opts.pop("mode", None)  # metadata for diagnostics, not connector options
-        if kind == "search_engine":
-            opts["source_name"] = c.get("name", "search_engine")
+        if kind in ("search_engine", "tavily"):
+            opts["source_name"] = c.get("name", kind)
+            if proxy:
+                opts["proxy"] = proxy
+        if kind == "tavily" and tavily_resilient_keys:
+            # Use resilient wrapper with all keys
+            from app.connectors.tavily_resilience import ResilientTavily, TavilyCache
+            cache = TavilyCache(Path("data/tavily_cache.json"))
+            connector = ResilientTavily(
+                keys=tavily_resilient_keys,
+                cache=cache,
+                results_per_query=c.get("results_per_query", 10),
+                official_only=c.get("official_only", False),
+                domains=c.get("domains"),
+                source_name=c.get("name", "tavily"),
+                result_source_type=c.get("result_source_type", "search_engine"),
+            )
+            connectors.append((c, connector))
+            continue
         try:
             connectors.append((c, registry[kind](**opts)))
         except Exception as exc:
@@ -245,7 +279,6 @@ async def run_discovery(session: Session, config: AgentConfig, prefs: Preference
             mem.store.record_query(session, combo["query"], combo.get("country", ""),
                                    source_name, jobs_found=len(processed),
                                    relevant_jobs=combo_new)
-            session.flush()
             return len(processed)
 
         async def search(combo, _connector=connector):

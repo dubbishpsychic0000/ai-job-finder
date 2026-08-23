@@ -18,6 +18,7 @@ from app.connectors.rss import RSSJobSource
 from app.connectors.search_engine import SearchEngineSource
 from app.connectors.smartrecruiters import SmartRecruitersSource
 from app.connectors.static_files import StaticFilesSource
+from app.connectors.tavily import TavilySource
 from app.connectors.workday import WorkdaySource
 
 __all__ = [
@@ -36,6 +37,7 @@ __all__ = [
     "SearchEngineSource",
     "SmartRecruitersSource",
     "StaticFilesSource",
+    "TavilySource",
     "WorkdaySource",
     "get_connector",
     "registry",
@@ -59,6 +61,7 @@ def register_defaults() -> None:
         "icims": ICIMSSource,
         "linkedin_jobs": LinkedInJobsSource,
         "meta_fb_groups": MetaJobsSource,
+        "tavily": TavilySource,
     })
 
 

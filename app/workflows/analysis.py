@@ -41,7 +41,6 @@ async def analyze_job(session: Session, job, analyzer: JobAnalyzer, matcher: Can
     if not existing:
         analysis = await analyzer.analyze(job)
         mem.store.add_analysis(session, job.id, analysis, model_used=analyzer.llm.name)
-        session.flush()
     else:
         analysis = existing.raw_json or {}
 
@@ -71,7 +70,6 @@ async def analyze_job(session: Session, job, analyzer: JobAnalyzer, matcher: Can
                            result.dimensions, result.reason, result.rules_fired,
                            result.ai_reason)
     job.status = "analyzed"
-    session.flush()
 
     mem.store.record_event(session, "analysis",
                            f"#{job.id} {job.title[:40]} -> {result.decision} ({overall:.0f}%)",

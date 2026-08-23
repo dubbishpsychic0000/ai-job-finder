@@ -12,6 +12,7 @@ from pathlib import Path
 from sqlalchemy import create_engine, event
 from sqlalchemy.engine import Engine
 from sqlalchemy.orm import sessionmaker
+from sqlalchemy.pool import NullPool
 
 from app import models
 from app.config import get_settings
@@ -24,12 +25,13 @@ def _build_engine() -> Engine:
     if url.startswith("sqlite"):
         db_path = Path(url.split("///")[-1])
         db_path.parent.mkdir(parents=True, exist_ok=True)
-        kwargs["connect_args"] = {"check_same_thread": False}
+        kwargs["connect_args"] = {"check_same_thread": False, "timeout": 30}
+        kwargs["poolclass"] = NullPool
     return create_engine(url, **kwargs)
 
 
 engine = _build_engine()
-SessionLocal = sessionmaker(bind=engine, autoflush=True, expire_on_commit=False)
+SessionLocal = sessionmaker(bind=engine, autoflush=False, expire_on_commit=False)
 
 
 @event.listens_for(engine, "connect")
@@ -38,6 +40,7 @@ def _set_sqlite_pragma(dbapi_connection, connection_record):  # pragma: no cover
         cursor = dbapi_connection.cursor()
         cursor.execute("PRAGMA foreign_keys=ON")
         cursor.execute("PRAGMA journal_mode=WAL")
+        cursor.execute("PRAGMA busy_timeout=30000")
         cursor.close()
 
 

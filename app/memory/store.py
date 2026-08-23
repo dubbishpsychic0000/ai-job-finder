@@ -69,7 +69,6 @@ def get_or_create_company(session: Session, name: str, url: str = "", country: s
                 international_recruitment_signal=international_recruitment_signal or "unknown",
                 last_checked_at=utcnow())
     session.add(c)
-    session.flush()
     return c
 
 
@@ -104,7 +103,7 @@ def upsert_job(session: Session, data: dict[str, Any]) -> tuple[Job, bool]:
         return job, False
     job = Job(**{k: v for k, v in data.items() if hasattr(Job, k)})
     session.add(job)
-    session.flush()
+    session.flush()  # needed to get job.id for opportunity_id
     return job, True
 
 
@@ -134,7 +133,6 @@ def add_analysis(session: Session, job_id: int, analysis: dict[str, Any], model_
         k: v for k, v in analysis.items() if hasattr(JobAnalysis, k)
     })
     session.add(a)
-    session.flush()
     return a
 
 
@@ -147,7 +145,6 @@ def add_decision(session: Session, job_id: int, decision: str, overall_score: fl
     d = Decision(job_id=job_id, decision=decision, overall_score=overall_score, scores=scores,
                  reason=reason, rules_fired=rules_fired, ai_reason=ai_reason)
     session.add(d)
-    session.flush()
     return d
 
 
@@ -283,7 +280,6 @@ def enqueue_notification(session: Session, event_type: str, *, job_id: int | Non
     row = Notification(event_type=event_type, job_id=job_id, priority=priority,
                        payload=payload or {})
     session.add(row)
-    session.flush()
     return row
 
 
@@ -457,9 +453,10 @@ def record_query(session: Session, query: str, country: str = "", source: str = 
                  jobs_found: int = 0, relevant_jobs: int = 0) -> QueryStat:
     stat = get_query_stat(session, query, country, source)
     if not stat:
-        stat = QueryStat(query=query, country=country, source=source)
+        stat = QueryStat(query=query, country=country, source=source,
+                         jobs_found=0, relevant_jobs=0, applications=0,
+                         responses=0, interviews=0, runs=0)
         session.add(stat)
-        session.flush()
     stat.jobs_found += jobs_found
     stat.relevant_jobs += relevant_jobs
     stat.runs += 1
@@ -484,7 +481,6 @@ def upsert_source(session: Session, name: str, kind: str, base_url: str = "") ->
     if not s:
         s = Source(name=name, kind=kind, base_url=base_url)
         session.add(s)
-        session.flush()
     return s
 
 

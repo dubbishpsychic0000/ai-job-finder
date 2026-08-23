@@ -22,7 +22,7 @@ class WhatsAppSettings:
     phone_number_id: str = ""
     recipient: str = ""
     template_name: str = ""
-    template_language: str = "en_US"
+    template_language: str = "en"
     graph_api_version: str = "v23.0"
 
     @classmethod
@@ -32,7 +32,7 @@ class WhatsAppSettings:
             phone_number_id=os.getenv("WHATSAPP_PHONE_NUMBER_ID", "").strip(),
             recipient=os.getenv("WHATSAPP_RECIPIENT", "").strip(),
             template_name=os.getenv("WHATSAPP_TEMPLATE_NAME", "").strip(),
-            template_language=os.getenv("WHATSAPP_TEMPLATE_LANGUAGE", "en_US").strip(),
+            template_language=os.getenv("WHATSAPP_TEMPLATE_LANGUAGE", "en").strip(),
             graph_api_version=os.getenv("WHATSAPP_GRAPH_API_VERSION", "v23.0").strip(),
         )
 
