@@ -125,6 +125,13 @@ jobs:
           rm -f data/tavily_budget_*.json data/gemini_budget_*.json
           echo "✓ Reset API budget tracking (Tavily + Gemini)"
 
+      - name: Reset ephemeral runtime state
+        run: |
+          # Remove local SQLite state, caches, and transient LLM outputs so each run starts fresh
+          rm -f data/test_agent.db data/tavily_cache.json data/*.sqlite data/*.db || true
+          rm -f data/gemini_result.json data/run_*.json || true
+          echo "✓ Cleared runtime DB/cache files before run"
+
       - name: Run one pipeline pass
         env:
           GEMINI_API_KEYS: ${{ secrets.GEMINI_API_KEYS }}
