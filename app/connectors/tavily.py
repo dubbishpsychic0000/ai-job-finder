@@ -82,8 +82,25 @@ class TavilySource:
                 },
                 timeout=30,
             )
-            resp.raise_for_status()
-            data = resp.json()
+            # Optional verbose debug: print raw response when TAVILY_DEBUG is set
+            try:
+                resp.raise_for_status()
+            except Exception:
+                logger.warning("Tavily HTTP error: status=%s text=%s", getattr(resp, 'status_code', None), getattr(resp, 'text', None))
+                raise
+
+            # Parse JSON safely
+            try:
+                data = resp.json()
+            except Exception as exc_json:
+                # If debug enabled, log raw body for investigation
+                if os.getenv('TAVILY_DEBUG', '').lower() in ('1', 'true', 'yes'):
+                    logger.warning("Tavily returned non-JSON response: %s", getattr(resp, 'text', '')[:2000])
+                raise exc_json
+
+            # If debug enabled, log summary of response
+            if os.getenv('TAVILY_DEBUG', '').lower() in ('1', 'true', 'yes'):
+                logger.info("Tavily response status=%s, keys=%s", resp.status_code, list(data.keys()) if isinstance(data, dict) else type(data))
         except Exception as exc:
             logger.warning("Tavily search query failed: %s", exc)
             return out
