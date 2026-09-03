@@ -18,6 +18,7 @@ from dotenv import load_dotenv
 
 from app.connectors.ats_detect import detect_ats
 from app.connectors.base import Opportunity, infer_country
+from app.tavily_rotation import get_tavily_key
 
 # Load .env so os.getenv() works for API keys
 load_dotenv()
@@ -53,7 +54,7 @@ class TavilySource:
         self._api_key = api_key  # Can be None, resolved at search time
 
     def _get_api_key(self) -> str:
-        return self._api_key or os.getenv("TAVILY_API_KEY", "")
+        return self._api_key or get_tavily_key() or os.getenv("TAVILY_API_KEY", "")
 
     async def search(self, query: str, location: str = "") -> list[Opportunity]:
         q = f"{query} {location} job".strip()
