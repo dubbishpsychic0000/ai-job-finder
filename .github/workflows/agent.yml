@@ -90,10 +90,17 @@ jobs:
           WHATSAPP_ACCESS_TOKEN: ${{ secrets.WHATSAPP_ACCESS_TOKEN }}
         run: |
           set +e
+          # If the vault included a tavily keys file, export it as TAVILY_API_KEYS for the process
+          if [ -f ./secrets/tavily_keys.txt ]; then
+            export TAVILY_API_KEYS=$(tr -d '\r' < ./secrets/tavily_keys.txt | paste -sd, -)
+            echo "Loaded TAVILY_API_KEYS from ./secrets/tavily_keys.txt"
+          fi
+          # Ensure debug enabled for verbose Tavily logs
+          export TAVILY_DEBUG=1
           python -m app.cli run-once --json > /tmp/run_report.json 2> /tmp/run.log
           echo $? > /tmp/pipeline_exit_code
-          cat /tmp/run.log
-          cat /tmp/run_report.json
+          cat /tmp/run.log || true
+          cat /tmp/run_report.json || true
           exit $(cat /tmp/pipeline_exit_code)
 
       - name: Send WhatsApp run status
