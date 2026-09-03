@@ -51,9 +51,9 @@ jobs:
       # A manual dispatch may still explicitly choose live after review.
       EMAIL_MODE: ${{ inputs.email_mode || 'draft' }}
       ENABLE_EMAIL: ${{ (inputs.email_mode || 'draft') != 'dry_run' && 'true' || 'false' }}
-      # Lower application thresholds for this debug run so drafts are created
-      MIN_APPLICATION_SCORE: 60
-      MIN_APPLICATION_CONFIDENCE: 0.5
+      # Drastically lower application thresholds to generate drafts for testing
+      MIN_APPLICATION_SCORE: 30
+      MIN_APPLICATION_CONFIDENCE: 0.2
     steps:
       - name: Checkout public repo
         uses: actions/checkout@v4
