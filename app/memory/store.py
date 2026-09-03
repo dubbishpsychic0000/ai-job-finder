@@ -36,6 +36,7 @@ from app.models import (
 
 def record_event(session: Session, type: str, message: str, level: str = "info", data: dict | None = None) -> None:
     session.add(Event(type=type, level=level, message=message, data=data or {}))
+    session.flush()
 
 
 # ------------------------- companies -------------------------
@@ -69,6 +70,7 @@ def get_or_create_company(session: Session, name: str, url: str = "", country: s
                 international_recruitment_signal=international_recruitment_signal or "unknown",
                 last_checked_at=utcnow())
     session.add(c)
+    session.flush()
     return c
 
 
@@ -133,6 +135,7 @@ def add_analysis(session: Session, job_id: int, analysis: dict[str, Any], model_
         k: v for k, v in analysis.items() if hasattr(JobAnalysis, k)
     })
     session.add(a)
+    session.flush()
     return a
 
 
@@ -145,6 +148,7 @@ def add_decision(session: Session, job_id: int, decision: str, overall_score: fl
     d = Decision(job_id=job_id, decision=decision, overall_score=overall_score, scores=scores,
                  reason=reason, rules_fired=rules_fired, ai_reason=ai_reason)
     session.add(d)
+    session.flush()
     return d
 
 
@@ -280,6 +284,7 @@ def enqueue_notification(session: Session, event_type: str, *, job_id: int | Non
     row = Notification(event_type=event_type, job_id=job_id, priority=priority,
                        payload=payload or {})
     session.add(row)
+    session.flush()
     return row
 
 
@@ -313,10 +318,10 @@ def upsert_contact(session: Session, email: str, person_name: str = "", role: st
     if not c:
         c = Contact(email=email, person_name=person_name, role=role, source=source, company_id=company_id)
         session.add(c)
-        session.flush()
     c.last_contacted_at = utcnow()
     if not c.first_contacted_at:
         c.first_contacted_at = c.last_contacted_at
+    session.flush()
     return c
 
 
@@ -461,6 +466,7 @@ def record_query(session: Session, query: str, country: str = "", source: str = 
     stat.relevant_jobs += relevant_jobs
     stat.runs += 1
     stat.last_run_at = utcnow()
+    session.flush()
     return stat
 
 
@@ -481,6 +487,7 @@ def upsert_source(session: Session, name: str, kind: str, base_url: str = "") ->
     if not s:
         s = Source(name=name, kind=kind, base_url=base_url)
         session.add(s)
+        session.flush()
     return s
 
 

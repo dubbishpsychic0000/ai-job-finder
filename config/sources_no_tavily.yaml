@@ -1,0 +1,72 @@
+# Alternative job sources without Tavily API key
+# Uses demo fixtures + public company ATS + government portals
+
+connectors:
+  # Demo fixtures (guaranteed to return results for testing)
+  - kind: static
+    name: demo_jobs
+    mode: demo
+    enabled: true
+    file: tests/fixtures/demo/jobs.json
+
+  # Public ATS platforms (no API key needed, just company identifiers)
+  - kind: greenhouse
+    name: greenhouse_boards
+    mode: real
+    enabled: true
+    boards:
+      - "lever"      # Example: Lever company boards
+      - "applicants" # Example company using Greenhouse
+    
+  - kind: smartrecruiters
+    name: smartrecruiters_companies
+    mode: real
+    enabled: true
+    companies:
+      - "smartrecruiters"  # Example: Smart Recruiters test
+
+  # European government job portals (free, no auth)
+  - kind: eures
+    name: eures_government
+    mode: real
+    enabled: true
+    feeds:
+      - "https://eures.europa.eu/search-jobs/result?query={query}&location={location}&format=rss"
+
+  - kind: government
+    name: france_pole_emploi
+    mode: real
+    enabled: true
+    type: rss
+    country: "France"
+    feeds:
+      - "https://www.pole-emploi.fr/accueil/nos-services/api/rss/tech.xml"
+      - "https://www.pole-emploi.fr/accueil/nos-services/api/rss/civil.xml"
+
+  # Company careers pages (direct discovery, no API)
+  - kind: company_careers
+    name: company_careers_direct
+    mode: real
+    enabled: true
+    companies:
+      - url: "https://www.siemens.com/jobs"
+        name: "Siemens"
+      - url: "https://careers.alibaba.com"
+        name: "Alibaba"
+
+  # RSS feeds from international job boards
+  - kind: rss
+    name: indeed_rss
+    mode: real
+    enabled: true
+    urls:
+      - "https://feeds.indeed.com/indeed-rss?q=civil+engineering&l=&co=FR"
+      - "https://feeds.indeed.com/indeed-rss?q=civil+engineering&l=&co=BE"
+      - "https://feeds.indeed.com/indeed-rss?q=civil+engineering&l=&co=DE"
+
+  - kind: rss
+    name: linkedin_rss
+    mode: real
+    enabled: true
+    urls:
+      - "https://www.linkedin.com/jobs-guest/jobs/api/jobPosting/rss?q=civil+engineering&location=France"
