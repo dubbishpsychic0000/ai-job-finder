@@ -87,19 +87,33 @@ jobs:
           cp -a /tmp/vault/secrets/. ./secrets/
           cp -a /tmp/vault/state/. ./data/ 2>/dev/null || true
 
+      - name: Build .env from vault and secrets
+        run: |
+          # Create .env from vault + repo secrets (needed because .env is .gitignore'd)
+          cat > .env << 'EOF'
+          LLM_PROVIDER=null
+          ENABLE_EMAIL=true
+          EMAIL_MODE=${{ inputs.email_mode || 'draft' }}
+          EMAIL_PROVIDER=gmail
+          EMAIL_FROM=omar.benhamid@gmail.com
+          MIN_APPLICATION_SCORE=30
+          MIN_APPLICATION_CONFIDENCE=0.2
+          TAVILY_DEBUG=1
+          EOF
+          
+          # Load Tavily keys from vault file and append to .env
+          if [ -f ./secrets/tavily_keys.txt ]; then
+            TAVILY_KEYS=$(tr -d '\r' < ./secrets/tavily_keys.txt | paste -sd, -)
+            echo "TAVILY_API_KEYS=${TAVILY_KEYS}" >> .env
+            echo "✓ Loaded Tavily keys from vault"
+          fi
+
       - name: Run one pipeline pass
         env:
           GEMINI_API_KEYS: ${{ secrets.GEMINI_API_KEYS }}
           WHATSAPP_ACCESS_TOKEN: ${{ secrets.WHATSAPP_ACCESS_TOKEN }}
         run: |
           set +e
-          # If the vault included a tavily keys file, export it as TAVILY_API_KEYS for the process
-          if [ -f ./secrets/tavily_keys.txt ]; then
-            export TAVILY_API_KEYS=$(tr -d '\r' < ./secrets/tavily_keys.txt | paste -sd, -)
-            echo "Loaded TAVILY_API_KEYS from ./secrets/tavily_keys.txt"
-          fi
-          # Ensure debug enabled for verbose Tavily logs
-          export TAVILY_DEBUG=1
           python -m app.cli run-once --json > /tmp/run_report.json 2> /tmp/run.log
           echo $? > /tmp/pipeline_exit_code
           cat /tmp/run.log || true
