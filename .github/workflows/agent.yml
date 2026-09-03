@@ -88,10 +88,12 @@ jobs:
           cp -a /tmp/vault/state/. ./data/ 2>/dev/null || true
 
       - name: Build .env from vault and secrets
+        env:
+          GEMINI_API_KEYS: ${{ secrets.GEMINI_API_KEYS }}
         run: |
           # Create .env from vault + repo secrets (needed because .env is .gitignore'd)
           cat > .env << 'EOF'
-          LLM_PROVIDER=null
+          LLM_PROVIDER=gemini
           ENABLE_EMAIL=true
           EMAIL_MODE=${{ inputs.email_mode || 'draft' }}
           EMAIL_PROVIDER=gmail
@@ -99,6 +101,7 @@ jobs:
           MIN_APPLICATION_SCORE=30
           MIN_APPLICATION_CONFIDENCE=0.2
           TAVILY_DEBUG=1
+          LLM_DAILY_BUDGET=50
           EOF
            
           # Load Tavily keys from vault file and append to .env
@@ -106,6 +109,16 @@ jobs:
             TAVILY_KEYS=$(tr -d '\r' < ./secrets/tavily_keys.txt | paste -sd, -)
             echo "TAVILY_API_KEYS=${TAVILY_KEYS}" >> .env
             echo "✓ Loaded Tavily keys from vault"
+          fi
+           
+          # Load Gemini keys from vault file or use env secret
+          if [ -f ./secrets/gemini_keys.txt ]; then
+            GEMINI_KEYS=$(tr -d '\r' < ./secrets/gemini_keys.txt | paste -sd, -)
+            echo "GEMINI_API_KEYS=${GEMINI_KEYS}" >> .env
+            echo "✓ Loaded Gemini keys from vault"
+          elif [ -n "$GEMINI_API_KEYS" ]; then
+            echo "GEMINI_API_KEYS=${GEMINI_API_KEYS}" >> .env
+            echo "✓ Loaded Gemini keys from secrets"
           fi
            
           # Reset Tavily budgets for this run (they may be exhausted from previous runs)
