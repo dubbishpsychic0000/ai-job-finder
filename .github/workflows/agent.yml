@@ -100,13 +100,17 @@ jobs:
           MIN_APPLICATION_CONFIDENCE=0.2
           TAVILY_DEBUG=1
           EOF
-          
+           
           # Load Tavily keys from vault file and append to .env
           if [ -f ./secrets/tavily_keys.txt ]; then
             TAVILY_KEYS=$(tr -d '\r' < ./secrets/tavily_keys.txt | paste -sd, -)
             echo "TAVILY_API_KEYS=${TAVILY_KEYS}" >> .env
             echo "✓ Loaded Tavily keys from vault"
           fi
+           
+          # Reset Tavily budgets for this run (they may be exhausted from previous runs)
+          rm -f data/tavily_budget_*.json
+          echo "✓ Reset Tavily budget tracking"
 
       - name: Run one pipeline pass
         env:
