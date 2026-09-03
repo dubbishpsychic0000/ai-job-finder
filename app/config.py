@@ -32,6 +32,10 @@ class RunnerSettings(BaseSettings):
     llm_daily_budget: int = 20
     llm_fallback: bool = True
 
+    # Tavily search API (comma-separated keys for rotation)
+    tavily_api_keys: str = ""
+    tavily_debug: bool = False
+
     enable_email: bool = False
     email_provider: str = "gmail"  # log | smtp | gmail
     email_mode: str = "draft"      # dry_run | draft | live
