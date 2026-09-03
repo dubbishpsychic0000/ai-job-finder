@@ -121,9 +121,9 @@ jobs:
             echo "✓ Loaded Gemini keys from secrets"
           fi
            
-          # Reset Tavily budgets for this run (they may be exhausted from previous runs)
-          rm -f data/tavily_budget_*.json
-          echo "✓ Reset Tavily budget tracking"
+          # Reset API budgets for this run (they may be exhausted from previous runs)
+          rm -f data/tavily_budget_*.json data/gemini_budget_*.json
+          echo "✓ Reset API budget tracking (Tavily + Gemini)"
 
       - name: Run one pipeline pass
         env:
