@@ -5,12 +5,32 @@ from pathlib import Path
 from typing import Optional
 
 
+def _load_env_var(var_name: str) -> str:
+    """Load env var from os.getenv or from .env file as fallback."""
+    value = os.getenv(var_name, '')
+    if value:
+        return value
+    
+    # Fallback: try to load from .env file
+    env_file = Path('.env')
+    if env_file.exists():
+        try:
+            for line in env_file.read_text().split('\n'):
+                line = line.strip()
+                if line.startswith(f'{var_name}='):
+                    return line.split('=', 1)[1]
+        except Exception:
+            pass
+    
+    return ''
+
+
 class TavilyKeyRotator:
     """Manages rotation of Tavily API keys to handle rate limits."""
 
     def __init__(self):
-        """Initialize with keys from environment."""
-        self.keys_str = os.getenv('TAVILY_API_KEYS', '')
+        """Initialize with keys from environment or .env file."""
+        self.keys_str = _load_env_var('TAVILY_API_KEYS')
         self.keys = [k.strip() for k in self.keys_str.split(',') if k.strip()]
         self.index_file = Path('.tavily_key_index')
         self.current_index = self._load_index()
