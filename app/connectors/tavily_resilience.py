@@ -258,6 +258,26 @@ class ResilientTavily:
 
                 resp.raise_for_status()
                 data = resp.json()
+
+                # Debug: persist a compact raw response for forensic analysis when enabled
+                if os.getenv('TAVILY_DEBUG', '').lower() in ('1', 'true', 'yes'):
+                    try:
+                        results_preview = data.get('results', [])[:3] if isinstance(data, dict) else []
+                        dbg = {
+                            'ts': datetime.now(timezone.utc).isoformat(),
+                            'query': q,
+                            'key_fp': key.fp,
+                            'status_code': getattr(resp, 'status_code', None),
+                            'results_len': len(data.get('results', [])) if isinstance(data, dict) and data.get('results') else 0,
+                            'sample': results_preview,
+                        }
+                        import json as _json
+                        with open('/tmp/tavily_debug.json', 'a', encoding='utf-8') as _fh:
+                            _json.dump(dbg, _fh, ensure_ascii=False)
+                            _fh.write('\n')
+                    except Exception as _dbg_exc:
+                        logger.warning('Failed to write tavily debug: %s', _dbg_exc)
+
                 results = data.get("results", [])
 
                 out: list[Opportunity] = []
