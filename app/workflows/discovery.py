@@ -47,6 +47,9 @@ def _load_source_connectors(path: Path | None = None) -> list[tuple[dict, object
     path = path or DEFAULT_SOURCES_PATH
     cfg = load_yaml(path)
     import os
+    from dotenv import load_dotenv
+    # Ensure .env is loaded into os.environ so downstream modules see TAVILY_API_KEYS
+    load_dotenv()
     proxy = os.getenv("HTTP_PROXY") or os.getenv("HTTPS_PROXY") or None
 
     # Build Tavily resilient keys from TAVILY_API_KEYS (comma-separated)
