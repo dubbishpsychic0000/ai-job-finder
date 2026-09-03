@@ -1,0 +1,49 @@
+﻿2026-09-03T02:47:51.0728042Z ##[group]Run python - <<'PY'
+2026-09-03T02:47:51.0728428Z [36;1mpython - <<'PY'[0m
+2026-09-03T02:47:51.0728687Z [36;1mimport json[0m
+2026-09-03T02:47:51.0728950Z [36;1mfrom pathlib import Path[0m
+2026-09-03T02:47:51.0729349Z [36;1mfrom app.notifications.whatsapp import MetaWhatsAppProvider[0m
+2026-09-03T02:47:51.0729743Z [36;1m[0m
+2026-09-03T02:47:51.0730237Z [36;1mexit_code = Path('/tmp/pipeline_exit_code').read_text().strip() if Path('/tmp/pipeline_exit_code').exists() else 'unknown'[0m
+2026-09-03T02:47:51.0730954Z [36;1mmessage = f'Career Agent run: FAILED (exit {exit_code}). Check GitHub Actions logs.'[0m
+2026-09-03T02:47:51.0731632Z [36;1mreport_path = Path('/tmp/run_report.json')[0m
+2026-09-03T02:47:51.0732009Z [36;1mif exit_code == '0' and report_path.exists():[0m
+2026-09-03T02:47:51.0732342Z [36;1m    try:[0m
+2026-09-03T02:47:51.0732963Z [36;1m        report = json.loads(report_path.read_text(encoding='utf-8'))[0m
+2026-09-03T02:47:51.0733433Z [36;1m        discovery = report.get('discovery', {})[0m
+2026-09-03T02:47:51.0733829Z [36;1m        analysis = report.get('analysis', {})[0m
+2026-09-03T02:47:51.0734171Z [36;1m        action = report.get('action', {})[0m
+2026-09-03T02:47:51.0734674Z [36;1m        decisions = ', '.join(f'{k} {v}' for k, v in analysis.get('decisions', {}).items()) or 'none'[0m
+2026-09-03T02:47:51.0735157Z [36;1m        message = ([0m
+2026-09-03T02:47:51.0735565Z [36;1m            f"Career Agent run complete. Jobs: {discovery.get('new_jobs', 0)} new / "[0m
+2026-09-03T02:47:51.0736106Z [36;1m            f"{discovery.get('fetched', 0)} fetched. Decisions: {decisions}. "[0m
+2026-09-03T02:47:51.0736569Z [36;1m            f"Gmail drafts: {action.get('drafts', 0)}. "[0m
+2026-09-03T02:47:51.0737055Z [36;1m            f"No action: {action.get('applied', 0) == 0 and action.get('asked', 0) == 0}."[0m
+2026-09-03T02:47:51.0737491Z [36;1m        )[0m
+2026-09-03T02:47:51.0737772Z [36;1m    except (OSError, ValueError, TypeError):[0m
+2026-09-03T02:47:51.0738316Z [36;1m        message = 'Career Agent run complete, but its report could not be read. Check GitHub Actions logs.'[0m
+2026-09-03T02:47:51.0738847Z [36;1mprovider = MetaWhatsAppProvider()[0m
+2026-09-03T02:47:51.0739182Z [36;1mif not provider.send(message):[0m
+2026-09-03T02:47:51.0739595Z [36;1m    raise SystemExit('WhatsApp status message was rejected by Meta')[0m
+2026-09-03T02:47:51.0740196Z [36;1mprint(f'WhatsApp accepted by Meta; message id: {provider.last_message_id or "not returned"}')[0m
+2026-09-03T02:47:51.0740661Z [36;1mPY[0m
+2026-09-03T02:47:51.0780232Z shell: /usr/bin/bash -e {0}
+2026-09-03T02:47:51.0780528Z env:
+2026-09-03T02:47:51.0780752Z   LLM_PROVIDER: gemini
+2026-09-03T02:47:51.0781045Z   WHATSAPP_PHONE_NUMBER_ID: 1189875497552844
+2026-09-03T02:47:51.0781670Z   WHATSAPP_RECIPIENT: ***
+2026-09-03T02:47:51.0781954Z   WHATSAPP_TEMPLATE_NAME: job_digest
+2026-09-03T02:47:51.0782257Z   WHATSAPP_TEMPLATE_LANGUAGE: en
+2026-09-03T02:47:51.0782769Z   WHATSAPP_GRAPH_API_VERSION: v25.0
+2026-09-03T02:47:51.0783082Z   WHATSAPP_RUN_SUMMARY_MANAGED: workflow
+2026-09-03T02:47:51.0783368Z   EMAIL_MODE: draft
+2026-09-03T02:47:51.0783610Z   ENABLE_EMAIL: true
+2026-09-03T02:47:51.0783919Z   pythonLocation: /opt/hostedtoolcache/Python/3.11.16/x64
+2026-09-03T02:47:51.0784365Z   PKG_CONFIG_PATH: /opt/hostedtoolcache/Python/3.11.16/x64/lib/pkgconfig
+2026-09-03T02:47:51.0784810Z   Python_ROOT_DIR: /opt/hostedtoolcache/Python/3.11.16/x64
+2026-09-03T02:47:51.0785216Z   Python2_ROOT_DIR: /opt/hostedtoolcache/Python/3.11.16/x64
+2026-09-03T02:47:51.0785601Z   Python3_ROOT_DIR: /opt/hostedtoolcache/Python/3.11.16/x64
+2026-09-03T02:47:51.0786008Z   LD_LIBRARY_PATH: /opt/hostedtoolcache/Python/3.11.16/x64/lib
+2026-09-03T02:47:51.0787330Z   WHATSAPP_ACCESS_TOKEN: ***
+2026-09-03T02:47:51.0787596Z ##[endgroup]
+2026-09-03T02:47:51.6593288Z WhatsApp accepted by Meta; message id: wamid.HBgM***FQIAERgSMDkxRDgxMDZBMzREMDJFNEI4AA==

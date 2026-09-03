@@ -1,0 +1,35 @@
+﻿2026-09-03T02:47:31.1880571Z Node 20 is being deprecated. This workflow is running with Node 24 by default. If you need to temporarily use Node 20, you can set the ACTIONS_ALLOW_USE_UNSECURE_NODE_VERSION=true environment variable. For more information see: https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners/
+2026-09-03T02:47:31.1886979Z ##[group]Run actions/setup-python@v5
+2026-09-03T02:47:31.1888245Z with:
+2026-09-03T02:47:31.1889202Z   python-version: 3.11
+2026-09-03T02:47:31.1890275Z   cache: pip
+2026-09-03T02:47:31.1891250Z   check-latest: false
+2026-09-03T02:47:31.1900318Z   token: ***
+2026-09-03T02:47:31.1901343Z   update-environment: true
+2026-09-03T02:47:31.1902628Z   allow-prereleases: false
+2026-09-03T02:47:31.1903778Z   freethreaded: false
+2026-09-03T02:47:31.1904810Z env:
+2026-09-03T02:47:31.1905752Z   LLM_PROVIDER: gemini
+2026-09-03T02:47:31.1906911Z   WHATSAPP_PHONE_NUMBER_ID: 1189875497552844
+2026-09-03T02:47:31.1908335Z   WHATSAPP_RECIPIENT: ***
+2026-09-03T02:47:31.1909521Z   WHATSAPP_TEMPLATE_NAME: job_digest
+2026-09-03T02:47:31.1910898Z   WHATSAPP_TEMPLATE_LANGUAGE: en
+2026-09-03T02:47:31.1912147Z   WHATSAPP_GRAPH_API_VERSION: v25.0
+2026-09-03T02:47:31.1913579Z   WHATSAPP_RUN_SUMMARY_MANAGED: workflow
+2026-09-03T02:47:31.1914891Z   EMAIL_MODE: draft
+2026-09-03T02:47:31.1915954Z   ENABLE_EMAIL: true
+2026-09-03T02:47:31.1917000Z ##[endgroup]
+2026-09-03T02:47:31.3300705Z ##[group]Installed versions
+2026-09-03T02:47:31.3427422Z (node:2274) [DEP0040] DeprecationWarning: The `punycode` module is deprecated. Please use a userland alternative instead.
+2026-09-03T02:47:31.3431358Z Successfully set up CPython (3.11.16)
+2026-09-03T02:47:31.3434330Z ##[endgroup]
+2026-09-03T02:47:31.3437853Z (Use `node --trace-deprecation ...` to show where the warning was created)
+2026-09-03T02:47:31.4323549Z [command]/opt/hostedtoolcache/Python/3.11.16/x64/bin/pip cache dir
+2026-09-03T02:47:34.4851291Z /home/runner/.cache/pip
+2026-09-03T02:47:34.5774217Z Cache hit for: setup-python-Linux-x64-24.04-Ubuntu-python-3.11.16-pip-fea5aac7ed2691b399bc6fb69e4b4badc192fbfacc67a07aa94ddac08324ad05
+2026-09-03T02:47:34.5879172Z (node:2274) [DEP0169] DeprecationWarning: `url.parse()` behavior is not standardized and prone to errors that have security implications. Use the WHATWG URL API instead. CVEs are not issued for `url.parse()` vulnerabilities.
+2026-09-03T02:47:35.0020895Z Received 57938875 of 57938875 (100.0%), 150.1 MBs/sec
+2026-09-03T02:47:35.0021635Z Cache Size: ~55 MB (57938875 B)
+2026-09-03T02:47:35.0134670Z [command]/usr/bin/tar -xf /home/runner/work/_temp/555eb2dc-2015-44bf-963e-f52eb920c1c2/cache.tzst -P -C /home/runner/work/ai-job-finder/ai-job-finder --use-compress-program unzstd
+2026-09-03T02:47:35.1330442Z Cache restored successfully
+2026-09-03T02:47:35.1368287Z Cache restored from key: setup-python-Linux-x64-24.04-Ubuntu-python-3.11.16-pip-fea5aac7ed2691b399bc6fb69e4b4badc192fbfacc67a07aa94ddac08324ad05

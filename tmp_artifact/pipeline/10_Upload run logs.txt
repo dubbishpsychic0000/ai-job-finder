@@ -1,0 +1,45 @@
+﻿2026-09-03T02:47:53.7287128Z Node 20 is being deprecated. This workflow is running with Node 24 by default. If you need to temporarily use Node 20, you can set the ACTIONS_ALLOW_USE_UNSECURE_NODE_VERSION=true environment variable. For more information see: https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners/
+2026-09-03T02:47:53.7289942Z ##[group]Run actions/upload-artifact@v4
+2026-09-03T02:47:53.7290251Z with:
+2026-09-03T02:47:53.7290473Z   name: agent-logs
+2026-09-03T02:47:53.7290773Z   path: data/*.log
+data/*.log.err
+/tmp/run_report.json
+
+2026-09-03T02:47:53.7291123Z   if-no-files-found: warn
+2026-09-03T02:47:53.7291395Z   compression-level: 6
+2026-09-03T02:47:53.7291643Z   overwrite: false
+2026-09-03T02:47:53.7291897Z   include-hidden-files: false
+2026-09-03T02:47:53.7292157Z env:
+2026-09-03T02:47:53.7292379Z   LLM_PROVIDER: gemini
+2026-09-03T02:47:53.7292890Z   WHATSAPP_PHONE_NUMBER_ID: 1189875497552844
+2026-09-03T02:47:53.7293326Z   WHATSAPP_RECIPIENT: ***
+2026-09-03T02:47:53.7293610Z   WHATSAPP_TEMPLATE_NAME: job_digest
+2026-09-03T02:47:53.7293957Z   WHATSAPP_TEMPLATE_LANGUAGE: en
+2026-09-03T02:47:53.7294253Z   WHATSAPP_GRAPH_API_VERSION: v25.0
+2026-09-03T02:47:53.7294553Z   WHATSAPP_RUN_SUMMARY_MANAGED: workflow
+2026-09-03T02:47:53.7294855Z   EMAIL_MODE: draft
+2026-09-03T02:47:53.7295093Z   ENABLE_EMAIL: true
+2026-09-03T02:47:53.7295406Z   pythonLocation: /opt/hostedtoolcache/Python/3.11.16/x64
+2026-09-03T02:47:53.7295859Z   PKG_CONFIG_PATH: /opt/hostedtoolcache/Python/3.11.16/x64/lib/pkgconfig
+2026-09-03T02:47:53.7296307Z   Python_ROOT_DIR: /opt/hostedtoolcache/Python/3.11.16/x64
+2026-09-03T02:47:53.7296714Z   Python2_ROOT_DIR: /opt/hostedtoolcache/Python/3.11.16/x64
+2026-09-03T02:47:53.7297127Z   Python3_ROOT_DIR: /opt/hostedtoolcache/Python/3.11.16/x64
+2026-09-03T02:47:53.7297542Z   LD_LIBRARY_PATH: /opt/hostedtoolcache/Python/3.11.16/x64/lib
+2026-09-03T02:47:53.7297892Z ##[endgroup]
+2026-09-03T02:47:53.8939701Z (node:2394) [DEP0040] DeprecationWarning: The `punycode` module is deprecated. Please use a userland alternative instead.
+2026-09-03T02:47:53.8940559Z (Use `node --trace-deprecation ...` to show where the warning was created)
+2026-09-03T02:47:53.9023244Z Multiple search paths detected. Calculating the least common ancestor of all paths
+2026-09-03T02:47:53.9024836Z The least common ancestor is /. This will be the root directory of the artifact
+2026-09-03T02:47:53.9025634Z With the provided path, there will be 1 file uploaded
+2026-09-03T02:47:53.9031749Z Artifact name is valid!
+2026-09-03T02:47:53.9032340Z Root directory input is valid!
+2026-09-03T02:47:54.1027171Z Beginning upload of artifact content to blob storage
+2026-09-03T02:47:54.1201000Z (node:2394) [DEP0169] DeprecationWarning: `url.parse()` behavior is not standardized and prone to errors that have security implications. Use the WHATWG URL API instead. CVEs are not issued for `url.parse()` vulnerabilities.
+2026-09-03T02:47:54.1647043Z Uploaded bytes 576
+2026-09-03T02:47:54.1834362Z Finished uploading artifact content to blob storage!
+2026-09-03T02:47:54.1835263Z SHA256 digest of uploaded artifact zip is ee502c110b67da186f41ab5af5c2605c93242ee1811b63f99c3d5ba6d81e678a
+2026-09-03T02:47:54.1837029Z Finalizing artifact upload
+2026-09-03T02:47:54.3600272Z Artifact agent-logs.zip successfully finalized. Artifact ID 9876243575
+2026-09-03T02:47:54.3601205Z Artifact agent-logs has been successfully uploaded! Final size is 576 bytes. Artifact ID is 9876243575
+2026-09-03T02:47:54.3607391Z Artifact download URL: https://github.com/dubbishpsychic0000/ai-job-finder/actions/runs/33708955017/artifacts/9876243575

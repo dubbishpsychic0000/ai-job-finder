@@ -1,0 +1,8 @@
+2026-09-03T02:47:27.7310000Z Evaluating pipeline.if
+2026-09-03T02:47:27.7310000Z Evaluating: success()
+2026-09-03T02:47:27.7310000Z Result: true
+2026-09-03T02:47:27.7460000Z Job is about to start running on the hosted runner: GitHub Actions 1000009151
+2026-09-03T02:47:27.7460000Z Job is waiting for a hosted runner to come online.
+2026-09-03T02:47:27.7320000Z Requested labels: ubuntu-latest
+2026-09-03T02:47:27.7320000Z Job defined at: dubbishpsychic0000/ai-job-finder/.github/workflows/agent.yml@refs/heads/main
+2026-09-03T02:47:27.7320000Z Waiting for a runner to pick up this job...

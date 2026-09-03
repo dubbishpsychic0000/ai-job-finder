@@ -1,0 +1,1069 @@
+﻿2026-09-03T02:47:29.6670870Z Current runner version: '2.337.0'
+2026-09-03T02:47:29.6696847Z ##[group]Runner Image Provisioner
+2026-09-03T02:47:29.6697812Z Hosted Compute Agent
+2026-09-03T02:47:29.6698563Z Version: 20260828.587
+2026-09-03T02:47:29.6699274Z Commit: abac92662cab4cc7352de4f9f9d2e2419aad9c29
+2026-09-03T02:47:29.6700151Z Build Date: 2026-08-28T16:44:25Z
+2026-09-03T02:47:29.6700957Z Worker ID: {024a2184-09dd-4afc-9610-83b41084f75f}
+2026-09-03T02:47:29.6701793Z Azure Region: eastus2
+2026-09-03T02:47:29.6703188Z ##[endgroup]
+2026-09-03T02:47:29.6705390Z ##[group]Operating System
+2026-09-03T02:47:29.6706259Z Ubuntu
+2026-09-03T02:47:29.6706887Z 24.04.4
+2026-09-03T02:47:29.6707454Z LTS
+2026-09-03T02:47:29.6708154Z ##[endgroup]
+2026-09-03T02:47:29.6708785Z ##[group]Runner Image
+2026-09-03T02:47:29.6709563Z Image: ubuntu-24.04
+2026-09-03T02:47:29.6710236Z Version: 20260831.293.1
+2026-09-03T02:47:29.6711644Z Included Software: https://github.com/actions/runner-images/blob/ubuntu24/20260831.293/images/ubuntu/Ubuntu2404-Readme.md
+2026-09-03T02:47:29.6713679Z Image Release: https://github.com/actions/runner-images/releases/tag/ubuntu24%2F20260831.293
+2026-09-03T02:47:29.6714902Z ##[endgroup]
+2026-09-03T02:47:29.6716278Z ##[group]GITHUB_TOKEN Permissions
+2026-09-03T02:47:29.6718685Z Contents: read
+2026-09-03T02:47:29.6719397Z Metadata: read
+2026-09-03T02:47:29.6720080Z Packages: read
+2026-09-03T02:47:29.6720716Z ##[endgroup]
+2026-09-03T02:47:29.6723232Z Secret source: Actions
+2026-09-03T02:47:29.6724649Z Prepare workflow directory
+2026-09-03T02:47:29.7256173Z Prepare all required actions
+2026-09-03T02:47:29.7306087Z Getting action download info
+2026-09-03T02:47:29.9515247Z Download action repository 'actions/checkout@v4' (SHA:11d5960a326750d5838078e36cf38b85af677262)
+2026-09-03T02:47:30.0751907Z Download action repository 'actions/setup-python@v5' (SHA:a26af69be951a213d495a4c3e4e4022e16d87065)
+2026-09-03T02:47:30.1561145Z Download action repository 'actions/upload-artifact@v4' (SHA:ea165f8d65b6e75b540449e92b4886f43607fa02)
+2026-09-03T02:47:30.4319467Z Complete job name: pipeline
+2026-09-03T02:47:30.5166201Z Node 20 is being deprecated. This workflow is running with Node 24 by default. If you need to temporarily use Node 20, you can set the ACTIONS_ALLOW_USE_UNSECURE_NODE_VERSION=true environment variable. For more information see: https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners/
+2026-09-03T02:47:30.5175447Z ##[group]Run actions/checkout@v4
+2026-09-03T02:47:30.5176842Z with:
+2026-09-03T02:47:30.5177678Z   repository: dubbishpsychic0000/ai-job-finder
+2026-09-03T02:47:30.5181739Z   token: ***
+2026-09-03T02:47:30.5182256Z   ssh-strict: true
+2026-09-03T02:47:30.5182940Z   ssh-user: git
+2026-09-03T02:47:30.5183461Z   persist-credentials: true
+2026-09-03T02:47:30.5184026Z   clean: true
+2026-09-03T02:47:30.5184557Z   sparse-checkout-cone-mode: true
+2026-09-03T02:47:30.5185152Z   fetch-depth: 1
+2026-09-03T02:47:30.5185665Z   fetch-tags: false
+2026-09-03T02:47:30.5186190Z   show-progress: true
+2026-09-03T02:47:30.5186749Z   lfs: false
+2026-09-03T02:47:30.5187304Z   submodules: false
+2026-09-03T02:47:30.5187860Z   set-safe-directory: true
+2026-09-03T02:47:30.5188451Z   allow-unsafe-pr-checkout: false
+2026-09-03T02:47:30.5189315Z env:
+2026-09-03T02:47:30.5189807Z   LLM_PROVIDER: gemini
+2026-09-03T02:47:30.5190376Z   WHATSAPP_PHONE_NUMBER_ID: 1189875497552844
+2026-09-03T02:47:30.5191097Z   WHATSAPP_RECIPIENT: ***
+2026-09-03T02:47:30.5191678Z   WHATSAPP_TEMPLATE_NAME: job_digest
+2026-09-03T02:47:30.5192318Z   WHATSAPP_TEMPLATE_LANGUAGE: en
+2026-09-03T02:47:30.5193093Z   WHATSAPP_GRAPH_API_VERSION: v25.0
+2026-09-03T02:47:30.5193732Z   WHATSAPP_RUN_SUMMARY_MANAGED: workflow
+2026-09-03T02:47:30.5194364Z   EMAIL_MODE: draft
+2026-09-03T02:47:30.5194884Z   ENABLE_EMAIL: true
+2026-09-03T02:47:30.5195394Z ##[endgroup]
+2026-09-03T02:47:30.6224758Z Syncing repository: dubbishpsychic0000/ai-job-finder
+2026-09-03T02:47:30.6227752Z ##[group]Getting Git version info
+2026-09-03T02:47:30.6229165Z Working directory is '/home/runner/work/ai-job-finder/ai-job-finder'
+2026-09-03T02:47:30.6231771Z [command]/usr/bin/git version
+2026-09-03T02:47:30.6266398Z git version 2.55.0
+2026-09-03T02:47:30.6293140Z ##[endgroup]
+2026-09-03T02:47:30.6319404Z Temporarily overriding HOME='/home/runner/work/_temp/d84a91b3-d589-4f0d-8869-608a7610cad9' before making global git config changes
+2026-09-03T02:47:30.6326990Z Adding repository directory to the temporary git global config as a safe directory
+2026-09-03T02:47:30.6346419Z [command]/usr/bin/git config --global --add safe.directory /home/runner/work/ai-job-finder/ai-job-finder
+2026-09-03T02:47:30.6411782Z Deleting the contents of '/home/runner/work/ai-job-finder/ai-job-finder'
+2026-09-03T02:47:30.6414888Z ##[group]Initializing the repository
+2026-09-03T02:47:30.6416806Z [command]/usr/bin/git init /home/runner/work/ai-job-finder/ai-job-finder
+2026-09-03T02:47:30.6468374Z hint: Using 'master' as the name for the initial branch. This default branch name
+2026-09-03T02:47:30.6470568Z hint: will change to "main" in Git 3.0. To configure the initial branch name
+2026-09-03T02:47:30.6472322Z hint: to use in all of your new repositories, which will suppress this warning,
+2026-09-03T02:47:30.6473946Z hint: call:
+2026-09-03T02:47:30.6474593Z hint:
+2026-09-03T02:47:30.6475228Z hint: 	git config --global init.defaultBranch <name>
+2026-09-03T02:47:30.6475973Z hint:
+2026-09-03T02:47:30.6476687Z hint: Names commonly chosen instead of 'master' are 'main', 'trunk' and
+2026-09-03T02:47:30.6477746Z hint: 'development'. The just-created branch can be renamed via this command:
+2026-09-03T02:47:30.6478585Z hint:
+2026-09-03T02:47:30.6479090Z hint: 	git branch -m <name>
+2026-09-03T02:47:30.6479646Z hint:
+2026-09-03T02:47:30.6480362Z hint: Disable this message with "git config set advice.defaultBranchName false"
+2026-09-03T02:47:30.6486861Z Initialized empty Git repository in /home/runner/work/ai-job-finder/ai-job-finder/.git/
+2026-09-03T02:47:30.6515033Z [command]/usr/bin/git remote add origin https://github.com/dubbishpsychic0000/ai-job-finder
+2026-09-03T02:47:30.6564818Z ##[endgroup]
+2026-09-03T02:47:30.6576176Z ##[group]Disabling automatic garbage collection
+2026-09-03T02:47:30.6588087Z [command]/usr/bin/git config --local gc.auto 0
+2026-09-03T02:47:30.6620566Z ##[endgroup]
+2026-09-03T02:47:30.6622004Z ##[group]Setting up auth
+2026-09-03T02:47:30.6623677Z [command]/usr/bin/git config --local --name-only --get-regexp core\.sshCommand
+2026-09-03T02:47:30.6657531Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'core\.sshCommand' && git config --local --unset-all 'core.sshCommand' || :"
+2026-09-03T02:47:30.7112017Z [command]/usr/bin/git config --local --name-only --get-regexp http\.https\:\/\/github\.com\/\.extraheader
+2026-09-03T02:47:30.7170083Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'http\.https\:\/\/github\.com\/\.extraheader' && git config --local --unset-all 'http.https://github.com/.extraheader' || :"
+2026-09-03T02:47:30.7458450Z [command]/usr/bin/git config --local --name-only --get-regexp ^includeIf\.gitdir:
+2026-09-03T02:47:30.7500814Z [command]/usr/bin/git submodule foreach --recursive git config --local --show-origin --name-only --get-regexp remote.origin.url
+2026-09-03T02:47:30.7759630Z [command]/usr/bin/git config --local http.https://github.com/.extraheader AUTHORIZATION: basic ***
+2026-09-03T02:47:30.7806547Z ##[endgroup]
+2026-09-03T02:47:30.7808130Z ##[group]Fetching the repository
+2026-09-03T02:47:30.7816948Z [command]/usr/bin/git -c protocol.version=2 fetch --no-tags --prune --no-recurse-submodules --depth=1 origin +11975b4705f53bc0b8a74a0dc79750144947fcfa:refs/remotes/origin/main
+2026-09-03T02:47:31.1157292Z From https://github.com/dubbishpsychic0000/ai-job-finder
+2026-09-03T02:47:31.1159975Z  * [new ref]         11975b4705f53bc0b8a74a0dc79750144947fcfa -> origin/main
+2026-09-03T02:47:31.1165369Z ##[endgroup]
+2026-09-03T02:47:31.1166844Z ##[group]Determining the checkout info
+2026-09-03T02:47:31.1168609Z ##[endgroup]
+2026-09-03T02:47:31.1169992Z [command]/usr/bin/git sparse-checkout disable
+2026-09-03T02:47:31.1220863Z [command]/usr/bin/git config --local --unset-all extensions.worktreeConfig
+2026-09-03T02:47:31.1255321Z ##[group]Checking out the ref
+2026-09-03T02:47:31.1266712Z [command]/usr/bin/git checkout --progress --force -B main refs/remotes/origin/main
+2026-09-03T02:47:31.1425916Z Switched to a new branch 'main'
+2026-09-03T02:47:31.1431079Z branch 'main' set up to track 'origin/main'.
+2026-09-03T02:47:31.1438786Z ##[endgroup]
+2026-09-03T02:47:31.1480766Z [command]/usr/bin/git log -1 --format=%H
+2026-09-03T02:47:31.1508644Z 11975b4705f53bc0b8a74a0dc79750144947fcfa
+2026-09-03T02:47:31.1880597Z Node 20 is being deprecated. This workflow is running with Node 24 by default. If you need to temporarily use Node 20, you can set the ACTIONS_ALLOW_USE_UNSECURE_NODE_VERSION=true environment variable. For more information see: https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners/
+2026-09-03T02:47:31.1886990Z ##[group]Run actions/setup-python@v5
+2026-09-03T02:47:31.1888250Z with:
+2026-09-03T02:47:31.1889216Z   python-version: 3.11
+2026-09-03T02:47:31.1890280Z   cache: pip
+2026-09-03T02:47:31.1891255Z   check-latest: false
+2026-09-03T02:47:31.1900323Z   token: ***
+2026-09-03T02:47:31.1901347Z   update-environment: true
+2026-09-03T02:47:31.1902632Z   allow-prereleases: false
+2026-09-03T02:47:31.1903783Z   freethreaded: false
+2026-09-03T02:47:31.1904815Z env:
+2026-09-03T02:47:31.1905757Z   LLM_PROVIDER: gemini
+2026-09-03T02:47:31.1906916Z   WHATSAPP_PHONE_NUMBER_ID: 1189875497552844
+2026-09-03T02:47:31.1908338Z   WHATSAPP_RECIPIENT: ***
+2026-09-03T02:47:31.1909580Z   WHATSAPP_TEMPLATE_NAME: job_digest
+2026-09-03T02:47:31.1910903Z   WHATSAPP_TEMPLATE_LANGUAGE: en
+2026-09-03T02:47:31.1912159Z   WHATSAPP_GRAPH_API_VERSION: v25.0
+2026-09-03T02:47:31.1913586Z   WHATSAPP_RUN_SUMMARY_MANAGED: workflow
+2026-09-03T02:47:31.1914896Z   EMAIL_MODE: draft
+2026-09-03T02:47:31.1915961Z   ENABLE_EMAIL: true
+2026-09-03T02:47:31.1917005Z ##[endgroup]
+2026-09-03T02:47:31.3300774Z ##[group]Installed versions
+2026-09-03T02:47:31.3427484Z (node:2274) [DEP0040] DeprecationWarning: The `punycode` module is deprecated. Please use a userland alternative instead.
+2026-09-03T02:47:31.3431388Z Successfully set up CPython (3.11.16)
+2026-09-03T02:47:31.3434345Z ##[endgroup]
+2026-09-03T02:47:31.3437888Z (Use `node --trace-deprecation ...` to show where the warning was created)
+2026-09-03T02:47:31.4323613Z [command]/opt/hostedtoolcache/Python/3.11.16/x64/bin/pip cache dir
+2026-09-03T02:47:34.4851395Z /home/runner/.cache/pip
+2026-09-03T02:47:34.5774297Z Cache hit for: setup-python-Linux-x64-24.04-Ubuntu-python-3.11.16-pip-fea5aac7ed2691b399bc6fb69e4b4badc192fbfacc67a07aa94ddac08324ad05
+2026-09-03T02:47:34.5879215Z (node:2274) [DEP0169] DeprecationWarning: `url.parse()` behavior is not standardized and prone to errors that have security implications. Use the WHATWG URL API instead. CVEs are not issued for `url.parse()` vulnerabilities.
+2026-09-03T02:47:35.0020976Z Received 57938875 of 57938875 (100.0%), 150.1 MBs/sec
+2026-09-03T02:47:35.0021642Z Cache Size: ~55 MB (57938875 B)
+2026-09-03T02:47:35.0134746Z [command]/usr/bin/tar -xf /home/runner/work/_temp/555eb2dc-2015-44bf-963e-f52eb920c1c2/cache.tzst -P -C /home/runner/work/ai-job-finder/ai-job-finder --use-compress-program unzstd
+2026-09-03T02:47:35.1330512Z Cache restored successfully
+2026-09-03T02:47:35.1368339Z Cache restored from key: setup-python-Linux-x64-24.04-Ubuntu-python-3.11.16-pip-fea5aac7ed2691b399bc6fb69e4b4badc192fbfacc67a07aa94ddac08324ad05
+2026-09-03T02:47:35.1551054Z ##[group]Run pip install -r requirements.txt
+2026-09-03T02:47:35.1551519Z [36;1mpip install -r requirements.txt[0m
+2026-09-03T02:47:35.1600418Z shell: /usr/bin/bash -e {0}
+2026-09-03T02:47:35.1600737Z env:
+2026-09-03T02:47:35.1600982Z   LLM_PROVIDER: gemini
+2026-09-03T02:47:35.1601273Z   WHATSAPP_PHONE_NUMBER_ID: 1189875497552844
+2026-09-03T02:47:35.1601749Z   WHATSAPP_RECIPIENT: ***
+2026-09-03T02:47:35.1602332Z   WHATSAPP_TEMPLATE_NAME: job_digest
+2026-09-03T02:47:35.1602932Z   WHATSAPP_TEMPLATE_LANGUAGE: en
+2026-09-03T02:47:35.1603235Z   WHATSAPP_GRAPH_API_VERSION: v25.0
+2026-09-03T02:47:35.1603537Z   WHATSAPP_RUN_SUMMARY_MANAGED: workflow
+2026-09-03T02:47:35.1603851Z   EMAIL_MODE: draft
+2026-09-03T02:47:35.1604092Z   ENABLE_EMAIL: true
+2026-09-03T02:47:35.1604423Z   pythonLocation: /opt/hostedtoolcache/Python/3.11.16/x64
+2026-09-03T02:47:35.1604880Z   PKG_CONFIG_PATH: /opt/hostedtoolcache/Python/3.11.16/x64/lib/pkgconfig
+2026-09-03T02:47:35.1605405Z   Python_ROOT_DIR: /opt/hostedtoolcache/Python/3.11.16/x64
+2026-09-03T02:47:35.1605815Z   Python2_ROOT_DIR: /opt/hostedtoolcache/Python/3.11.16/x64
+2026-09-03T02:47:35.1606242Z   Python3_ROOT_DIR: /opt/hostedtoolcache/Python/3.11.16/x64
+2026-09-03T02:47:35.1606676Z   LD_LIBRARY_PATH: /opt/hostedtoolcache/Python/3.11.16/x64/lib
+2026-09-03T02:47:35.1607034Z ##[endgroup]
+2026-09-03T02:47:37.1189880Z Collecting pydantic>=2.5 (from -r requirements.txt (line 1))
+2026-09-03T02:47:37.1783559Z   Downloading pydantic-2.13.5-py3-none-any.whl.metadata (110 kB)
+2026-09-03T02:47:37.2150421Z Collecting pydantic-settings>=2.1 (from -r requirements.txt (line 2))
+2026-09-03T02:47:37.2166137Z   Using cached pydantic_settings-2.15.0-py3-none-any.whl.metadata (3.9 kB)
+2026-09-03T02:47:37.2484496Z Collecting PyYAML>=6.0 (from -r requirements.txt (line 3))
+2026-09-03T02:47:37.2501481Z   Using cached pyyaml-6.0.3-cp311-cp311-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl.metadata (2.4 kB)
+2026-09-03T02:47:37.2637135Z Collecting feedparser>=6.0 (from -r requirements.txt (line 4))
+2026-09-03T02:47:37.2651985Z   Using cached feedparser-6.0.14-py3-none-any.whl.metadata (2.7 kB)
+2026-09-03T02:47:37.2813039Z Collecting beautifulsoup4>=4.12 (from -r requirements.txt (line 5))
+2026-09-03T02:47:37.2828477Z   Using cached beautifulsoup4-4.15.0-py3-none-any.whl.metadata (3.8 kB)
+2026-09-03T02:47:37.5065865Z Collecting lxml>=4.9 (from -r requirements.txt (line 6))
+2026-09-03T02:47:37.5143717Z   Downloading lxml-6.1.3-cp311-cp311-manylinux_2_26_x86_64.manylinux_2_28_x86_64.whl.metadata (3.3 kB)
+2026-09-03T02:47:37.5358209Z Collecting requests>=2.31 (from -r requirements.txt (line 7))
+2026-09-03T02:47:37.5373370Z   Using cached requests-2.34.2-py3-none-any.whl.metadata (4.8 kB)
+2026-09-03T02:47:37.7893364Z Collecting SQLAlchemy>=2.0 (from -r requirements.txt (line 8))
+2026-09-03T02:47:37.7911573Z   Using cached sqlalchemy-2.0.52-cp311-cp311-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl.metadata (9.6 kB)
+2026-09-03T02:47:37.8100910Z Collecting python-dotenv>=1.0 (from -r requirements.txt (line 9))
+2026-09-03T02:47:37.8115549Z   Using cached python_dotenv-1.2.3-py3-none-any.whl.metadata (29 kB)
+2026-09-03T02:47:37.8384495Z Collecting rich>=13.7 (from -r requirements.txt (line 10))
+2026-09-03T02:47:37.8399270Z   Using cached rich-15.0.0-py3-none-any.whl.metadata (18 kB)
+2026-09-03T02:47:37.8642842Z Collecting google-genai>=0.2 (from -r requirements.txt (line 13))
+2026-09-03T02:47:37.8721865Z   Downloading google_genai-2.22.0-py3-none-any.whl.metadata (56 kB)
+2026-09-03T02:47:37.9152077Z Collecting google-api-python-client>=2.100 (from -r requirements.txt (line 14))
+2026-09-03T02:47:37.9242239Z   Downloading google_api_python_client-2.200.0-py3-none-any.whl.metadata (6.8 kB)
+2026-09-03T02:47:37.9389638Z Collecting google-auth-httplib2>=0.1.1 (from -r requirements.txt (line 15))
+2026-09-03T02:47:37.9460322Z   Downloading google_auth_httplib2-0.4.2-py3-none-any.whl.metadata (3.0 kB)
+2026-09-03T02:47:37.9622928Z Collecting google-auth-oauthlib>=1.1 (from -r requirements.txt (line 16))
+2026-09-03T02:47:37.9694581Z   Downloading google_auth_oauthlib-1.4.1-py3-none-any.whl.metadata (2.6 kB)
+2026-09-03T02:47:38.0069297Z Collecting fastapi>=0.110 (from -r requirements.txt (line 17))
+2026-09-03T02:47:38.0085101Z   Using cached fastapi-0.141.1-py3-none-any.whl.metadata (27 kB)
+2026-09-03T02:47:38.0333673Z Collecting uvicorn>=0.27 (from -r requirements.txt (line 18))
+2026-09-03T02:47:38.0347758Z   Using cached uvicorn-0.52.4-py3-none-any.whl.metadata (6.6 kB)
+2026-09-03T02:47:38.0500255Z Collecting jinja2>=3.1 (from -r requirements.txt (line 19))
+2026-09-03T02:47:38.0514227Z   Using cached jinja2-3.1.6-py3-none-any.whl.metadata (2.9 kB)
+2026-09-03T02:47:38.0751596Z Collecting pytest>=8.0 (from -r requirements.txt (line 22))
+2026-09-03T02:47:38.0767559Z   Using cached pytest-9.1.1-py3-none-any.whl.metadata (7.6 kB)
+2026-09-03T02:47:38.0953342Z Collecting httpx>=0.27 (from -r requirements.txt (line 23))
+2026-09-03T02:47:38.0967725Z   Using cached httpx-0.28.1-py3-none-any.whl.metadata (7.1 kB)
+2026-09-03T02:47:38.4037669Z Collecting ruff>=0.4 (from -r requirements.txt (line 24))
+2026-09-03T02:47:38.4117480Z   Downloading ruff-0.16.5-py3-none-manylinux_2_17_x86_64.manylinux2014_x86_64.whl.metadata (26 kB)
+2026-09-03T02:47:38.4285625Z Collecting annotated-types>=0.6.0 (from pydantic>=2.5->-r requirements.txt (line 1))
+2026-09-03T02:47:38.4299623Z   Using cached annotated_types-0.8.0-py3-none-any.whl.metadata (15 kB)
+2026-09-03T02:47:39.0384034Z Collecting pydantic-core==2.46.5 (from pydantic>=2.5->-r requirements.txt (line 1))
+2026-09-03T02:47:39.0464005Z   Downloading pydantic_core-2.46.5-cp311-cp311-manylinux_2_17_x86_64.manylinux2014_x86_64.whl.metadata (6.6 kB)
+2026-09-03T02:47:39.0636974Z Collecting typing-extensions>=4.14.1 (from pydantic>=2.5->-r requirements.txt (line 1))
+2026-09-03T02:47:39.0652245Z   Using cached typing_extensions-4.16.0-py3-none-any.whl.metadata (3.3 kB)
+2026-09-03T02:47:39.0768599Z Collecting typing-inspection>=0.4.2 (from pydantic>=2.5->-r requirements.txt (line 1))
+2026-09-03T02:47:39.0782331Z   Using cached typing_inspection-0.4.4-py3-none-any.whl.metadata (2.6 kB)
+2026-09-03T02:47:39.0949204Z Collecting feedparser-sgmllib<3,>=2 (from feedparser>=6.0->-r requirements.txt (line 4))
+2026-09-03T02:47:39.0969150Z   Using cached feedparser_sgmllib-2.1.0-py3-none-any.whl.metadata (926 bytes)
+2026-09-03T02:47:39.1136021Z Collecting soupsieve>=1.6.1 (from beautifulsoup4>=4.12->-r requirements.txt (line 5))
+2026-09-03T02:47:39.1149761Z   Using cached soupsieve-2.9.2-py3-none-any.whl.metadata (4.6 kB)
+2026-09-03T02:47:39.2096848Z Collecting charset_normalizer<4,>=2 (from requests>=2.31->-r requirements.txt (line 7))
+2026-09-03T02:47:39.2113760Z   Using cached charset_normalizer-3.5.1-cp311-cp311-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl.metadata (45 kB)
+2026-09-03T02:47:39.2277154Z Collecting idna<4,>=2.5 (from requests>=2.31->-r requirements.txt (line 7))
+2026-09-03T02:47:39.2290991Z   Using cached idna-3.19-py3-none-any.whl.metadata (9.2 kB)
+2026-09-03T02:47:39.2495754Z Collecting urllib3<3,>=1.26 (from requests>=2.31->-r requirements.txt (line 7))
+2026-09-03T02:47:39.2510446Z   Using cached urllib3-2.7.0-py3-none-any.whl.metadata (6.9 kB)
+2026-09-03T02:47:39.2683146Z Collecting certifi>=2023.5.7 (from requests>=2.31->-r requirements.txt (line 7))
+2026-09-03T02:47:39.2697492Z   Using cached certifi-2026.7.22-py3-none-any.whl.metadata (2.5 kB)
+2026-09-03T02:47:39.3856708Z Collecting greenlet>=1 (from SQLAlchemy>=2.0->-r requirements.txt (line 8))
+2026-09-03T02:47:39.3873425Z   Using cached greenlet-3.5.5-cp311-cp311-manylinux_2_24_x86_64.manylinux_2_28_x86_64.whl.metadata (3.8 kB)
+2026-09-03T02:47:39.4042375Z Collecting markdown-it-py>=2.2.0 (from rich>=13.7->-r requirements.txt (line 10))
+2026-09-03T02:47:39.4057658Z   Using cached markdown_it_py-4.2.0-py3-none-any.whl.metadata (7.4 kB)
+2026-09-03T02:47:39.4248260Z Collecting pygments<3.0.0,>=2.13.0 (from rich>=13.7->-r requirements.txt (line 10))
+2026-09-03T02:47:39.4263478Z   Using cached pygments-2.21.0-py3-none-any.whl.metadata (2.5 kB)
+2026-09-03T02:47:39.4447727Z Collecting anyio<5.0.0,>=4.8.0 (from google-genai>=0.2->-r requirements.txt (line 13))
+2026-09-03T02:47:39.4534521Z   Downloading anyio-4.15.0-py3-none-any.whl.metadata (4.7 kB)
+2026-09-03T02:47:39.5119867Z Collecting google-auth<3.0.0,>=2.56.0 (from google-auth[requests]<3.0.0,>=2.56.0->google-genai>=0.2->-r requirements.txt (line 13))
+2026-09-03T02:47:39.5204192Z   Downloading google_auth-2.57.0-py3-none-any.whl.metadata (6.0 kB)
+2026-09-03T02:47:39.5504752Z Collecting tenacity<9.2.0,>=8.2.3 (from google-genai>=0.2->-r requirements.txt (line 13))
+2026-09-03T02:47:39.5519286Z   Using cached tenacity-9.1.4-py3-none-any.whl.metadata (1.2 kB)
+2026-09-03T02:47:39.6429499Z Collecting websockets<17.0,>=13.0.0 (from google-genai>=0.2->-r requirements.txt (line 13))
+2026-09-03T02:47:39.6446109Z   Using cached websockets-16.1.1-cp311-cp311-manylinux1_x86_64.manylinux_2_28_x86_64.manylinux_2_5_x86_64.whl.metadata (6.8 kB)
+2026-09-03T02:47:39.6589009Z Collecting distro<2,>=1.7.0 (from google-genai>=0.2->-r requirements.txt (line 13))
+2026-09-03T02:47:39.6602932Z   Using cached distro-1.9.0-py3-none-any.whl.metadata (6.8 kB)
+2026-09-03T02:47:39.6721241Z Collecting sniffio (from google-genai>=0.2->-r requirements.txt (line 13))
+2026-09-03T02:47:39.6735995Z   Using cached sniffio-1.3.1-py3-none-any.whl.metadata (3.9 kB)
+2026-09-03T02:47:39.6896251Z Collecting httpcore==1.* (from httpx>=0.27->-r requirements.txt (line 23))
+2026-09-03T02:47:39.6910645Z   Using cached httpcore-1.0.9-py3-none-any.whl.metadata (21 kB)
+2026-09-03T02:47:39.7157077Z Collecting pyasn1-modules>=0.2.1 (from google-auth<3.0.0,>=2.56.0->google-auth[requests]<3.0.0,>=2.56.0->google-genai>=0.2->-r requirements.txt (line 13))
+2026-09-03T02:47:39.7170970Z   Using cached pyasn1_modules-0.4.2-py3-none-any.whl.metadata (3.5 kB)
+2026-09-03T02:47:39.8669081Z Collecting cryptography>=38.0.3 (from google-auth<3.0.0,>=2.56.0->google-auth[requests]<3.0.0,>=2.56.0->google-genai>=0.2->-r requirements.txt (line 13))
+2026-09-03T02:47:39.8752707Z   Downloading cryptography-50.0.1-cp311-abi3-manylinux_2_34_x86_64.whl.metadata (4.3 kB)
+2026-09-03T02:47:39.8929292Z Collecting h11>=0.16 (from httpcore==1.*->httpx>=0.27->-r requirements.txt (line 23))
+2026-09-03T02:47:39.8944327Z   Using cached h11-0.16.0-py3-none-any.whl.metadata (8.3 kB)
+2026-09-03T02:47:39.9113420Z Collecting httplib2<1.0.0,>=0.19.0 (from google-api-python-client>=2.100->-r requirements.txt (line 14))
+2026-09-03T02:47:39.9127680Z   Using cached httplib2-0.32.0-py3-none-any.whl.metadata (2.2 kB)
+2026-09-03T02:47:39.9472173Z Collecting google-api-core!=2.0.*,!=2.1.*,!=2.2.*,!=2.3.0,<3.0.0,>=1.31.5 (from google-api-python-client>=2.100->-r requirements.txt (line 14))
+2026-09-03T02:47:39.9488111Z   Using cached google_api_core-2.34.0-py3-none-any.whl.metadata (2.9 kB)
+2026-09-03T02:47:39.9618737Z Collecting uritemplate<5,>=3.0.1 (from google-api-python-client>=2.100->-r requirements.txt (line 14))
+2026-09-03T02:47:39.9633150Z   Using cached uritemplate-4.2.0-py3-none-any.whl.metadata (2.6 kB)
+2026-09-03T02:47:39.9821205Z Collecting googleapis-common-protos<2.0.0,>=1.69.2 (from google-api-core!=2.0.*,!=2.1.*,!=2.2.*,!=2.3.0,<3.0.0,>=1.31.5->google-api-python-client>=2.100->-r requirements.txt (line 14))
+2026-09-03T02:47:39.9896369Z   Downloading googleapis_common_protos-1.75.2-py3-none-any.whl.metadata (8.5 kB)
+2026-09-03T02:47:40.1483042Z Collecting protobuf<8.0.0,>=6.33.5 (from google-api-core!=2.0.*,!=2.1.*,!=2.2.*,!=2.3.0,<3.0.0,>=1.31.5->google-api-python-client>=2.100->-r requirements.txt (line 14))
+2026-09-03T02:47:40.1562319Z   Downloading protobuf-7.36.1-cp310-abi3-manylinux2014_x86_64.whl.metadata (595 bytes)
+2026-09-03T02:47:40.1757727Z Collecting proto-plus<2.0.0,>=1.26.1 (from google-api-core!=2.0.*,!=2.1.*,!=2.2.*,!=2.3.0,<3.0.0,>=1.31.5->google-api-python-client>=2.100->-r requirements.txt (line 14))
+2026-09-03T02:47:40.1834934Z   Downloading proto_plus-1.28.4-py3-none-any.whl.metadata (2.2 kB)
+2026-09-03T02:47:40.2087095Z Collecting pyparsing<4,>=3.1 (from httplib2<1.0.0,>=0.19.0->google-api-python-client>=2.100->-r requirements.txt (line 14))
+2026-09-03T02:47:40.2101302Z   Using cached pyparsing-3.3.2-py3-none-any.whl.metadata (5.8 kB)
+2026-09-03T02:47:40.2263093Z Collecting requests-oauthlib>=0.7.0 (from google-auth-oauthlib>=1.1->-r requirements.txt (line 16))
+2026-09-03T02:47:40.2277270Z   Using cached requests_oauthlib-2.0.0-py2.py3-none-any.whl.metadata (11 kB)
+2026-09-03T02:47:40.2517180Z Collecting starlette>=0.46.0 (from fastapi>=0.110->-r requirements.txt (line 17))
+2026-09-03T02:47:40.2532092Z   Using cached starlette-1.6.0-py3-none-any.whl.metadata (6.4 kB)
+2026-09-03T02:47:40.2697360Z Collecting annotated-doc>=0.0.2 (from fastapi>=0.110->-r requirements.txt (line 17))
+2026-09-03T02:47:40.2711546Z   Using cached annotated_doc-0.0.5-py3-none-any.whl.metadata (6.5 kB)
+2026-09-03T02:47:40.2905396Z Collecting click>=7.0 (from uvicorn>=0.27->-r requirements.txt (line 18))
+2026-09-03T02:47:40.2978087Z   Downloading click-8.5.0-py3-none-any.whl.metadata (2.6 kB)
+2026-09-03T02:47:40.3426203Z Collecting MarkupSafe>=2.0 (from jinja2>=3.1->-r requirements.txt (line 19))
+2026-09-03T02:47:40.3442156Z   Using cached markupsafe-3.0.3-cp311-cp311-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl.metadata (2.7 kB)
+2026-09-03T02:47:40.3569483Z Collecting iniconfig>=1.0.1 (from pytest>=8.0->-r requirements.txt (line 22))
+2026-09-03T02:47:40.3583944Z   Using cached iniconfig-2.3.0-py3-none-any.whl.metadata (2.5 kB)
+2026-09-03T02:47:40.3729533Z Collecting packaging>=22 (from pytest>=8.0->-r requirements.txt (line 22))
+2026-09-03T02:47:40.3744255Z   Using cached packaging-26.3-py3-none-any.whl.metadata (3.5 kB)
+2026-09-03T02:47:40.3877433Z Collecting pluggy<2,>=1.5 (from pytest>=8.0->-r requirements.txt (line 22))
+2026-09-03T02:47:40.3891712Z   Using cached pluggy-1.6.0-py3-none-any.whl.metadata (4.8 kB)
+2026-09-03T02:47:40.4812109Z Collecting cffi>=2.0.0 (from cryptography>=38.0.3->google-auth<3.0.0,>=2.56.0->google-auth[requests]<3.0.0,>=2.56.0->google-genai>=0.2->-r requirements.txt (line 13))
+2026-09-03T02:47:40.4829156Z   Using cached cffi-2.1.1-cp311-cp311-manylinux2014_x86_64.manylinux_2_17_x86_64.whl.metadata (2.5 kB)
+2026-09-03T02:47:40.4975121Z Collecting pycparser (from cffi>=2.0.0->cryptography>=38.0.3->google-auth<3.0.0,>=2.56.0->google-auth[requests]<3.0.0,>=2.56.0->google-genai>=0.2->-r requirements.txt (line 13))
+2026-09-03T02:47:40.4989282Z   Using cached pycparser-3.0-py3-none-any.whl.metadata (8.2 kB)
+2026-09-03T02:47:40.5127988Z Collecting mdurl~=0.1 (from markdown-it-py>=2.2.0->rich>=13.7->-r requirements.txt (line 10))
+2026-09-03T02:47:40.5142272Z   Using cached mdurl-0.1.2-py3-none-any.whl.metadata (1.6 kB)
+2026-09-03T02:47:40.5381836Z Collecting pyasn1<0.7.0,>=0.6.1 (from pyasn1-modules>=0.2.1->google-auth<3.0.0,>=2.56.0->google-auth[requests]<3.0.0,>=2.56.0->google-genai>=0.2->-r requirements.txt (line 13))
+2026-09-03T02:47:40.5396253Z   Using cached pyasn1-0.6.4-py3-none-any.whl.metadata (8.4 kB)
+2026-09-03T02:47:40.5561382Z Collecting oauthlib>=3.0.0 (from requests-oauthlib>=0.7.0->google-auth-oauthlib>=1.1->-r requirements.txt (line 16))
+2026-09-03T02:47:40.5575449Z   Using cached oauthlib-3.3.1-py3-none-any.whl.metadata (7.9 kB)
+2026-09-03T02:47:40.5749619Z Downloading pydantic-2.13.5-py3-none-any.whl (472 kB)
+2026-09-03T02:47:40.6081862Z Downloading pydantic_core-2.46.5-cp311-cp311-manylinux_2_17_x86_64.manylinux2014_x86_64.whl (2.1 MB)
+2026-09-03T02:47:40.6822632Z    ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 2.1/2.1 MB 29.6 MB/s  0:00:00
+2026-09-03T02:47:40.6839306Z Using cached pydantic_settings-2.15.0-py3-none-any.whl (69 kB)
+2026-09-03T02:47:40.6854515Z Using cached pyyaml-6.0.3-cp311-cp311-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl (806 kB)
+2026-09-03T02:47:40.6871567Z Using cached feedparser-6.0.14-py3-none-any.whl (80 kB)
+2026-09-03T02:47:40.6886133Z Using cached feedparser_sgmllib-2.1.0-py3-none-any.whl (11 kB)
+2026-09-03T02:47:40.6900539Z Using cached beautifulsoup4-4.15.0-py3-none-any.whl (109 kB)
+2026-09-03T02:47:40.6974314Z Downloading lxml-6.1.3-cp311-cp311-manylinux_2_26_x86_64.manylinux_2_28_x86_64.whl (5.2 MB)
+2026-09-03T02:47:40.8052070Z    ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 5.2/5.2 MB 49.3 MB/s  0:00:00
+2026-09-03T02:47:40.8067237Z Using cached requests-2.34.2-py3-none-any.whl (73 kB)
+2026-09-03T02:47:40.8081993Z Using cached charset_normalizer-3.5.1-cp311-cp311-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl (262 kB)
+2026-09-03T02:47:40.8096487Z Using cached idna-3.19-py3-none-any.whl (68 kB)
+2026-09-03T02:47:40.8110249Z Using cached urllib3-2.7.0-py3-none-any.whl (131 kB)
+2026-09-03T02:47:40.8124893Z Using cached sqlalchemy-2.0.52-cp311-cp311-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl (3.4 MB)
+2026-09-03T02:47:40.8152070Z Using cached python_dotenv-1.2.3-py3-none-any.whl (22 kB)
+2026-09-03T02:47:40.8166182Z Using cached rich-15.0.0-py3-none-any.whl (310 kB)
+2026-09-03T02:47:40.8181312Z Using cached pygments-2.21.0-py3-none-any.whl (1.3 MB)
+2026-09-03T02:47:40.8263650Z Downloading google_genai-2.22.0-py3-none-any.whl (1.1 MB)
+2026-09-03T02:47:40.8419955Z    ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 1.1/1.1 MB 66.5 MB/s  0:00:00
+2026-09-03T02:47:40.8434533Z Using cached httpx-0.28.1-py3-none-any.whl (73 kB)
+2026-09-03T02:47:40.8518277Z Downloading anyio-4.15.0-py3-none-any.whl (131 kB)
+2026-09-03T02:47:40.8554419Z Using cached distro-1.9.0-py3-none-any.whl (20 kB)
+2026-09-03T02:47:40.8629178Z Downloading google_auth-2.57.0-py3-none-any.whl (259 kB)
+2026-09-03T02:47:40.8679571Z Using cached httpcore-1.0.9-py3-none-any.whl (78 kB)
+2026-09-03T02:47:40.8693451Z Using cached tenacity-9.1.4-py3-none-any.whl (28 kB)
+2026-09-03T02:47:40.8707133Z Using cached typing_extensions-4.16.0-py3-none-any.whl (45 kB)
+2026-09-03T02:47:40.8721554Z Using cached websockets-16.1.1-cp311-cp311-manylinux1_x86_64.manylinux_2_28_x86_64.manylinux_2_5_x86_64.whl (186 kB)
+2026-09-03T02:47:40.8817127Z Downloading google_api_python_client-2.200.0-py3-none-any.whl (16.1 MB)
+2026-09-03T02:47:41.0047360Z    ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 16.1/16.1 MB 132.3 MB/s  0:00:00
+2026-09-03T02:47:41.0136059Z Downloading google_auth_httplib2-0.4.2-py3-none-any.whl (9.5 kB)
+2026-09-03T02:47:41.0169184Z Using cached google_api_core-2.34.0-py3-none-any.whl (180 kB)
+2026-09-03T02:47:41.0249994Z Downloading googleapis_common_protos-1.75.2-py3-none-any.whl (307 kB)
+2026-09-03T02:47:41.0291710Z Using cached httplib2-0.32.0-py3-none-any.whl (93 kB)
+2026-09-03T02:47:41.0366889Z Downloading proto_plus-1.28.4-py3-none-any.whl (50 kB)
+2026-09-03T02:47:41.0459343Z Downloading protobuf-7.36.1-cp310-abi3-manylinux2014_x86_64.whl (343 kB)
+2026-09-03T02:47:41.0500925Z Using cached pyparsing-3.3.2-py3-none-any.whl (122 kB)
+2026-09-03T02:47:41.0515298Z Using cached uritemplate-4.2.0-py3-none-any.whl (11 kB)
+2026-09-03T02:47:41.0588865Z Downloading google_auth_oauthlib-1.4.1-py3-none-any.whl (19 kB)
+2026-09-03T02:47:41.0622639Z Using cached fastapi-0.141.1-py3-none-any.whl (131 kB)
+2026-09-03T02:47:41.0636644Z Using cached uvicorn-0.52.4-py3-none-any.whl (79 kB)
+2026-09-03T02:47:41.0650971Z Using cached jinja2-3.1.6-py3-none-any.whl (134 kB)
+2026-09-03T02:47:41.0665641Z Using cached pytest-9.1.1-py3-none-any.whl (386 kB)
+2026-09-03T02:47:41.0681209Z Using cached pluggy-1.6.0-py3-none-any.whl (20 kB)
+2026-09-03T02:47:41.0757270Z Downloading ruff-0.16.5-py3-none-manylinux_2_17_x86_64.manylinux2014_x86_64.whl (10.3 MB)
+2026-09-03T02:47:41.1245112Z    ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 10.3/10.3 MB 216.5 MB/s  0:00:00
+2026-09-03T02:47:41.1260351Z Using cached annotated_doc-0.0.5-py3-none-any.whl (5.3 kB)
+2026-09-03T02:47:41.1274505Z Using cached annotated_types-0.8.0-py3-none-any.whl (13 kB)
+2026-09-03T02:47:41.1288331Z Using cached certifi-2026.7.22-py3-none-any.whl (136 kB)
+2026-09-03T02:47:41.1369170Z Downloading click-8.5.0-py3-none-any.whl (125 kB)
+2026-09-03T02:47:41.1476478Z Downloading cryptography-50.0.1-cp311-abi3-manylinux_2_34_x86_64.whl (4.7 MB)
+2026-09-03T02:47:41.1674499Z    ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 4.7/4.7 MB 255.1 MB/s  0:00:00
+2026-09-03T02:47:41.1689489Z Using cached cffi-2.1.1-cp311-cp311-manylinux2014_x86_64.manylinux_2_17_x86_64.whl (217 kB)
+2026-09-03T02:47:41.1704747Z Using cached greenlet-3.5.5-cp311-cp311-manylinux_2_24_x86_64.manylinux_2_28_x86_64.whl (624 kB)
+2026-09-03T02:47:41.1720706Z Using cached h11-0.16.0-py3-none-any.whl (37 kB)
+2026-09-03T02:47:41.1735013Z Using cached iniconfig-2.3.0-py3-none-any.whl (7.5 kB)
+2026-09-03T02:47:41.1749656Z Using cached markdown_it_py-4.2.0-py3-none-any.whl (91 kB)
+2026-09-03T02:47:41.1773626Z Using cached mdurl-0.1.2-py3-none-any.whl (10.0 kB)
+2026-09-03T02:47:41.1793714Z Using cached markupsafe-3.0.3-cp311-cp311-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl (22 kB)
+2026-09-03T02:47:41.1814471Z Using cached packaging-26.3-py3-none-any.whl (129 kB)
+2026-09-03T02:47:41.1836411Z Using cached pyasn1_modules-0.4.2-py3-none-any.whl (181 kB)
+2026-09-03T02:47:41.1858724Z Using cached pyasn1-0.6.4-py3-none-any.whl (84 kB)
+2026-09-03T02:47:41.1880817Z Using cached requests_oauthlib-2.0.0-py2.py3-none-any.whl (24 kB)
+2026-09-03T02:47:41.1895264Z Using cached oauthlib-3.3.1-py3-none-any.whl (160 kB)
+2026-09-03T02:47:41.1909676Z Using cached soupsieve-2.9.2-py3-none-any.whl (37 kB)
+2026-09-03T02:47:41.1924198Z Using cached starlette-1.6.0-py3-none-any.whl (75 kB)
+2026-09-03T02:47:41.1938523Z Using cached typing_inspection-0.4.4-py3-none-any.whl (14 kB)
+2026-09-03T02:47:41.1952641Z Using cached pycparser-3.0-py3-none-any.whl (48 kB)
+2026-09-03T02:47:41.1966828Z Using cached sniffio-1.3.1-py3-none-any.whl (10 kB)
+2026-09-03T02:47:41.7670998Z Installing collected packages: websockets, urllib3, uritemplate, typing-extensions, tenacity, soupsieve, sniffio, ruff, PyYAML, python-dotenv, pyparsing, pygments, pycparser, pyasn1, protobuf, pluggy, packaging, oauthlib, mdurl, MarkupSafe, lxml, iniconfig, idna, h11, greenlet, feedparser-sgmllib, distro, click, charset_normalizer, certifi, annotated-types, annotated-doc, uvicorn, typing-inspection, SQLAlchemy, requests, pytest, pydantic-core, pyasn1-modules, proto-plus, markdown-it-py, jinja2, httplib2, httpcore, googleapis-common-protos, feedparser, cffi, beautifulsoup4, anyio, starlette, rich, requests-oauthlib, pydantic, httpx, cryptography, pydantic-settings, google-auth, fastapi, google-auth-oauthlib, google-auth-httplib2, google-api-core, google-genai, google-api-python-client
+2026-09-03T02:47:48.0996018Z 
+2026-09-03T02:47:48.1027669Z Successfully installed MarkupSafe-3.0.3 PyYAML-6.0.3 SQLAlchemy-2.0.52 annotated-doc-0.0.5 annotated-types-0.8.0 anyio-4.15.0 beautifulsoup4-4.15.0 certifi-2026.7.22 cffi-2.1.1 charset_normalizer-3.5.1 click-8.5.0 cryptography-50.0.1 distro-1.9.0 fastapi-0.141.1 feedparser-6.0.14 feedparser-sgmllib-2.1.0 google-api-core-2.34.0 google-api-python-client-2.200.0 google-auth-2.57.0 google-auth-httplib2-0.4.2 google-auth-oauthlib-1.4.1 google-genai-2.22.0 googleapis-common-protos-1.75.2 greenlet-3.5.5 h11-0.16.0 httpcore-1.0.9 httplib2-0.32.0 httpx-0.28.1 idna-3.19 iniconfig-2.3.0 jinja2-3.1.6 lxml-6.1.3 markdown-it-py-4.2.0 mdurl-0.1.2 oauthlib-3.3.1 packaging-26.3 pluggy-1.6.0 proto-plus-1.28.4 protobuf-7.36.1 pyasn1-0.6.4 pyasn1-modules-0.4.2 pycparser-3.0 pydantic-2.13.5 pydantic-core-2.46.5 pydantic-settings-2.15.0 pygments-2.21.0 pyparsing-3.3.2 pytest-9.1.1 python-dotenv-1.2.3 requests-2.34.2 requests-oauthlib-2.0.0 rich-15.0.0 ruff-0.16.5 sniffio-1.3.1 soupsieve-2.9.2 starlette-1.6.0 tenacity-9.1.4 typing-extensions-4.16.0 typing-inspection-0.4.4 uritemplate-4.2.0 urllib3-2.7.0 uvicorn-0.52.4 websockets-16.1.1
+2026-09-03T02:47:48.3171059Z ##[group]Run # The private vault intentionally contains personal candidate data.
+2026-09-03T02:47:48.3171714Z [36;1m# The private vault intentionally contains personal candidate data.[0m
+2026-09-03T02:47:48.3172274Z [36;1m# Preserve public, versioned V3 defaults when an older vault lacks them.[0m
+2026-09-03T02:47:48.3173095Z [36;1mmkdir -p /tmp/candidate-defaults[0m
+2026-09-03T02:47:48.3173640Z [36;1mcp candidate/search_vocabulary.yaml candidate/notification_config.yaml /tmp/candidate-defaults/[0m
+2026-09-03T02:47:48.3174171Z [36;1mrm -rf /tmp/vault[0m
+2026-09-03T02:47:48.3174712Z [36;1mgit clone --depth 1 "https://x-access-token:${VAULT_TOKEN}@${VAULT_URL#https://}" /tmp/vault[0m
+2026-09-03T02:47:48.3175217Z [36;1mrm -rf candidate secrets[0m
+2026-09-03T02:47:48.3175522Z [36;1mmkdir -p candidate secrets data[0m
+2026-09-03T02:47:48.3176065Z [36;1mcp -a /tmp/vault/candidate/. ./candidate/[0m
+2026-09-03T02:47:48.3176548Z [36;1mfor file in search_vocabulary.yaml notification_config.yaml; do[0m
+2026-09-03T02:47:48.3177106Z [36;1m  test -f "candidate/$file" || cp "/tmp/candidate-defaults/$file" "candidate/$file"[0m
+2026-09-03T02:47:48.3177552Z [36;1mdone[0m
+2026-09-03T02:47:48.3177810Z [36;1mcp -a /tmp/vault/secrets/. ./secrets/[0m
+2026-09-03T02:47:48.3178194Z [36;1mcp -a /tmp/vault/state/. ./data/ 2>/dev/null || true[0m
+2026-09-03T02:47:48.3220144Z shell: /usr/bin/bash -e {0}
+2026-09-03T02:47:48.3220426Z env:
+2026-09-03T02:47:48.3220659Z   LLM_PROVIDER: gemini
+2026-09-03T02:47:48.3220941Z   WHATSAPP_PHONE_NUMBER_ID: 1189875497552844
+2026-09-03T02:47:48.3221395Z   WHATSAPP_RECIPIENT: ***
+2026-09-03T02:47:48.3221671Z   WHATSAPP_TEMPLATE_NAME: job_digest
+2026-09-03T02:47:48.3221965Z   WHATSAPP_TEMPLATE_LANGUAGE: en
+2026-09-03T02:47:48.3222256Z   WHATSAPP_GRAPH_API_VERSION: v25.0
+2026-09-03T02:47:48.3222869Z   WHATSAPP_RUN_SUMMARY_MANAGED: workflow
+2026-09-03T02:47:48.3223180Z   EMAIL_MODE: draft
+2026-09-03T02:47:48.3223418Z   ENABLE_EMAIL: true
+2026-09-03T02:47:48.3223738Z   pythonLocation: /opt/hostedtoolcache/Python/3.11.16/x64
+2026-09-03T02:47:48.3224179Z   PKG_CONFIG_PATH: /opt/hostedtoolcache/Python/3.11.16/x64/lib/pkgconfig
+2026-09-03T02:47:48.3224639Z   Python_ROOT_DIR: /opt/hostedtoolcache/Python/3.11.16/x64
+2026-09-03T02:47:48.3225043Z   Python2_ROOT_DIR: /opt/hostedtoolcache/Python/3.11.16/x64
+2026-09-03T02:47:48.3225457Z   Python3_ROOT_DIR: /opt/hostedtoolcache/Python/3.11.16/x64
+2026-09-03T02:47:48.3225860Z   LD_LIBRARY_PATH: /opt/hostedtoolcache/Python/3.11.16/x64/lib
+2026-09-03T02:47:48.3226573Z   VAULT_TOKEN: ***
+2026-09-03T02:47:48.3226950Z   VAULT_URL: https://github.com/dubbishpsychic0000/ai-job-finder-vault.git
+2026-09-03T02:47:48.3227358Z ##[endgroup]
+2026-09-03T02:47:48.3367422Z Cloning into '/tmp/vault'...
+2026-09-03T02:47:48.8981963Z ##[group]Run set +e
+2026-09-03T02:47:48.8982281Z [36;1mset +e[0m
+2026-09-03T02:47:48.8982870Z [36;1mpython -m app.cli run-once --json > /tmp/run_report.json 2> /tmp/run.log[0m
+2026-09-03T02:47:48.8983337Z [36;1mecho $? > /tmp/pipeline_exit_code[0m
+2026-09-03T02:47:48.8983653Z [36;1mcat /tmp/run.log[0m
+2026-09-03T02:47:48.8983929Z [36;1mcat /tmp/run_report.json[0m
+2026-09-03T02:47:48.8984244Z [36;1mexit $(cat /tmp/pipeline_exit_code)[0m
+2026-09-03T02:47:48.9024606Z shell: /usr/bin/bash -e {0}
+2026-09-03T02:47:48.9024893Z env:
+2026-09-03T02:47:48.9025128Z   LLM_PROVIDER: gemini
+2026-09-03T02:47:48.9025406Z   WHATSAPP_PHONE_NUMBER_ID: 1189875497552844
+2026-09-03T02:47:48.9025899Z   WHATSAPP_RECIPIENT: ***
+2026-09-03T02:47:48.9026181Z   WHATSAPP_TEMPLATE_NAME: job_digest
+2026-09-03T02:47:48.9026489Z   WHATSAPP_TEMPLATE_LANGUAGE: en
+2026-09-03T02:47:48.9026769Z   WHATSAPP_GRAPH_API_VERSION: v25.0
+2026-09-03T02:47:48.9027071Z   WHATSAPP_RUN_SUMMARY_MANAGED: workflow
+2026-09-03T02:47:48.9027419Z   EMAIL_MODE: draft
+2026-09-03T02:47:48.9027658Z   ENABLE_EMAIL: true
+2026-09-03T02:47:48.9027970Z   pythonLocation: /opt/hostedtoolcache/Python/3.11.16/x64
+2026-09-03T02:47:48.9028417Z   PKG_CONFIG_PATH: /opt/hostedtoolcache/Python/3.11.16/x64/lib/pkgconfig
+2026-09-03T02:47:48.9028871Z   Python_ROOT_DIR: /opt/hostedtoolcache/Python/3.11.16/x64
+2026-09-03T02:47:48.9029278Z   Python2_ROOT_DIR: /opt/hostedtoolcache/Python/3.11.16/x64
+2026-09-03T02:47:48.9029678Z   Python3_ROOT_DIR: /opt/hostedtoolcache/Python/3.11.16/x64
+2026-09-03T02:47:48.9030080Z   LD_LIBRARY_PATH: /opt/hostedtoolcache/Python/3.11.16/x64/lib
+2026-09-03T02:47:48.9031358Z   GEMINI_API_KEYS: ***
+2026-09-03T02:47:48.9032801Z   WHATSAPP_ACCESS_TOKEN: ***
+2026-09-03T02:47:48.9033130Z ##[endgroup]
+2026-09-03T02:47:51.0490029Z 2026-09-03 02:47:50,712 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0491085Z 2026-09-03 02:47:50,714 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0492011Z 2026-09-03 02:47:50,714 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0493381Z 2026-09-03 02:47:50,715 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0494210Z 2026-09-03 02:47:50,716 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0495044Z 2026-09-03 02:47:50,716 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0495867Z 2026-09-03 02:47:50,717 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0496562Z 2026-09-03 02:47:50,717 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0497066Z 2026-09-03 02:47:50,718 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0497580Z 2026-09-03 02:47:50,718 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0498102Z 2026-09-03 02:47:50,719 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0498606Z 2026-09-03 02:47:50,719 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0499112Z 2026-09-03 02:47:50,720 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0499610Z 2026-09-03 02:47:50,720 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0500110Z 2026-09-03 02:47:50,721 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0500594Z 2026-09-03 02:47:50,721 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0501084Z 2026-09-03 02:47:50,722 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0501787Z 2026-09-03 02:47:50,722 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0502603Z 2026-09-03 02:47:50,723 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0503431Z 2026-09-03 02:47:50,723 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0504559Z 2026-09-03 02:47:50,723 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0505253Z 2026-09-03 02:47:50,724 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0505744Z 2026-09-03 02:47:50,725 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0506235Z 2026-09-03 02:47:50,726 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0506727Z 2026-09-03 02:47:50,726 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0507215Z 2026-09-03 02:47:50,727 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0507698Z 2026-09-03 02:47:50,727 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0508186Z 2026-09-03 02:47:50,727 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0508672Z 2026-09-03 02:47:50,728 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0509166Z 2026-09-03 02:47:50,728 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0509671Z 2026-09-03 02:47:50,729 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0510161Z 2026-09-03 02:47:50,729 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0510690Z 2026-09-03 02:47:50,730 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0511218Z 2026-09-03 02:47:50,730 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0511728Z 2026-09-03 02:47:50,731 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0512214Z 2026-09-03 02:47:50,731 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0513006Z 2026-09-03 02:47:50,731 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0513524Z 2026-09-03 02:47:50,732 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0514017Z 2026-09-03 02:47:50,732 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0514809Z 2026-09-03 02:47:50,733 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0515299Z 2026-09-03 02:47:50,733 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0515967Z 2026-09-03 02:47:50,734 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0516456Z 2026-09-03 02:47:50,734 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0517024Z 2026-09-03 02:47:50,735 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0517886Z 2026-09-03 02:47:50,735 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0518758Z 2026-09-03 02:47:50,736 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0519612Z 2026-09-03 02:47:50,736 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0520407Z 2026-09-03 02:47:50,737 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0521065Z 2026-09-03 02:47:50,737 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0521556Z 2026-09-03 02:47:50,738 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0522053Z 2026-09-03 02:47:50,738 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0522737Z 2026-09-03 02:47:50,738 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0523241Z 2026-09-03 02:47:50,739 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0523726Z 2026-09-03 02:47:50,739 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0524218Z 2026-09-03 02:47:50,740 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0525087Z 2026-09-03 02:47:50,740 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0525589Z 2026-09-03 02:47:50,741 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0526089Z 2026-09-03 02:47:50,741 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0526577Z 2026-09-03 02:47:50,742 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0527072Z 2026-09-03 02:47:50,742 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0527561Z 2026-09-03 02:47:50,743 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0528055Z 2026-09-03 02:47:50,743 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0528536Z 2026-09-03 02:47:50,743 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0529034Z 2026-09-03 02:47:50,744 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0529527Z 2026-09-03 02:47:50,745 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0530114Z 2026-09-03 02:47:50,745 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0530656Z 2026-09-03 02:47:50,746 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0531141Z 2026-09-03 02:47:50,746 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0531630Z 2026-09-03 02:47:50,746 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0532115Z 2026-09-03 02:47:50,747 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0532789Z 2026-09-03 02:47:50,747 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0533299Z 2026-09-03 02:47:50,748 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0533784Z 2026-09-03 02:47:50,748 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0534286Z 2026-09-03 02:47:50,749 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0534779Z 2026-09-03 02:47:50,749 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0535435Z 2026-09-03 02:47:50,750 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0535925Z 2026-09-03 02:47:50,750 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0536423Z 2026-09-03 02:47:50,750 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0536920Z 2026-09-03 02:47:50,751 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0537407Z 2026-09-03 02:47:50,751 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0537924Z 2026-09-03 02:47:50,752 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0538415Z 2026-09-03 02:47:50,752 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0538910Z 2026-09-03 02:47:50,753 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0539405Z 2026-09-03 02:47:50,753 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0539907Z 2026-09-03 02:47:50,754 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0540394Z 2026-09-03 02:47:50,754 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0540882Z 2026-09-03 02:47:50,755 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0541378Z 2026-09-03 02:47:50,755 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0541868Z 2026-09-03 02:47:50,756 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0542363Z 2026-09-03 02:47:50,756 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0543214Z 2026-09-03 02:47:50,757 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0543859Z 2026-09-03 02:47:50,757 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0544369Z 2026-09-03 02:47:50,757 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0544869Z 2026-09-03 02:47:50,758 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0545357Z 2026-09-03 02:47:50,758 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0545850Z 2026-09-03 02:47:50,759 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0546345Z 2026-09-03 02:47:50,759 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0546839Z 2026-09-03 02:47:50,760 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0547343Z 2026-09-03 02:47:50,760 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0547836Z 2026-09-03 02:47:50,761 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0548329Z 2026-09-03 02:47:50,761 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0548811Z 2026-09-03 02:47:50,761 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0549306Z 2026-09-03 02:47:50,762 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0549791Z 2026-09-03 02:47:50,762 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0550289Z 2026-09-03 02:47:50,763 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0550780Z 2026-09-03 02:47:50,763 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0551263Z 2026-09-03 02:47:50,764 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0551755Z 2026-09-03 02:47:50,764 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0552239Z 2026-09-03 02:47:50,765 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0552961Z 2026-09-03 02:47:50,765 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0553453Z 2026-09-03 02:47:50,766 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0554096Z 2026-09-03 02:47:50,766 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0554587Z 2026-09-03 02:47:50,767 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0555076Z 2026-09-03 02:47:50,767 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0555567Z 2026-09-03 02:47:50,768 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0556054Z 2026-09-03 02:47:50,768 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0556551Z 2026-09-03 02:47:50,769 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0557038Z 2026-09-03 02:47:50,769 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0557535Z 2026-09-03 02:47:50,769 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0558073Z 2026-09-03 02:47:50,770 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0558725Z 2026-09-03 02:47:50,770 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0559283Z 2026-09-03 02:47:50,771 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0559849Z 2026-09-03 02:47:50,771 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0560365Z 2026-09-03 02:47:50,772 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0560856Z 2026-09-03 02:47:50,772 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0561350Z 2026-09-03 02:47:50,773 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0561834Z 2026-09-03 02:47:50,773 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0562642Z 2026-09-03 02:47:50,774 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0563172Z 2026-09-03 02:47:50,774 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0563694Z 2026-09-03 02:47:50,775 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0564181Z 2026-09-03 02:47:50,775 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0564676Z 2026-09-03 02:47:50,776 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0565166Z 2026-09-03 02:47:50,776 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0565650Z 2026-09-03 02:47:50,776 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0566188Z 2026-09-03 02:47:50,777 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0566679Z 2026-09-03 02:47:50,777 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0567178Z 2026-09-03 02:47:50,778 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0567664Z 2026-09-03 02:47:50,778 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0568160Z 2026-09-03 02:47:50,779 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0568642Z 2026-09-03 02:47:50,779 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0569381Z 2026-09-03 02:47:50,780 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0569986Z 2026-09-03 02:47:50,780 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0570483Z 2026-09-03 02:47:50,780 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0570994Z 2026-09-03 02:47:50,781 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0571482Z 2026-09-03 02:47:50,781 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0572005Z 2026-09-03 02:47:50,782 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0572780Z 2026-09-03 02:47:50,782 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0573450Z 2026-09-03 02:47:50,783 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0573985Z 2026-09-03 02:47:50,783 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0574478Z 2026-09-03 02:47:50,784 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0574973Z 2026-09-03 02:47:50,784 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0575465Z 2026-09-03 02:47:50,785 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0575960Z 2026-09-03 02:47:50,785 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0576447Z 2026-09-03 02:47:50,786 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0576950Z 2026-09-03 02:47:50,786 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0577439Z 2026-09-03 02:47:50,786 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0577938Z 2026-09-03 02:47:50,787 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0578428Z 2026-09-03 02:47:50,787 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0578922Z 2026-09-03 02:47:50,788 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0579416Z 2026-09-03 02:47:50,788 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0579902Z 2026-09-03 02:47:50,789 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0580424Z 2026-09-03 02:47:50,789 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0580952Z 2026-09-03 02:47:50,790 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0581589Z 2026-09-03 02:47:50,790 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0582098Z 2026-09-03 02:47:50,790 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0582829Z 2026-09-03 02:47:50,791 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0583321Z 2026-09-03 02:47:50,791 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0583820Z 2026-09-03 02:47:50,792 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0584317Z 2026-09-03 02:47:50,792 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0584807Z 2026-09-03 02:47:50,793 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0585302Z 2026-09-03 02:47:50,793 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0585790Z 2026-09-03 02:47:50,794 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0586290Z 2026-09-03 02:47:50,794 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0586788Z 2026-09-03 02:47:50,795 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0587293Z 2026-09-03 02:47:50,795 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0587779Z 2026-09-03 02:47:50,796 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0588273Z 2026-09-03 02:47:50,796 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0588766Z 2026-09-03 02:47:50,796 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0589254Z 2026-09-03 02:47:50,797 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0589747Z 2026-09-03 02:47:50,797 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0590233Z 2026-09-03 02:47:50,798 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0590732Z 2026-09-03 02:47:50,798 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0591364Z 2026-09-03 02:47:50,799 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0591866Z 2026-09-03 02:47:50,799 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0592365Z 2026-09-03 02:47:50,800 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0593048Z 2026-09-03 02:47:50,800 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0593543Z 2026-09-03 02:47:50,800 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0594029Z 2026-09-03 02:47:50,801 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0594523Z 2026-09-03 02:47:50,801 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0595011Z 2026-09-03 02:47:50,802 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0595512Z 2026-09-03 02:47:50,802 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0596006Z 2026-09-03 02:47:50,803 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0596499Z 2026-09-03 02:47:50,803 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0597008Z 2026-09-03 02:47:50,804 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0597500Z 2026-09-03 02:47:50,804 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0597991Z 2026-09-03 02:47:50,805 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0598484Z 2026-09-03 02:47:50,805 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0598974Z 2026-09-03 02:47:50,806 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0599469Z 2026-09-03 02:47:50,806 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0600093Z 2026-09-03 02:47:50,807 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0600602Z 2026-09-03 02:47:50,807 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0601090Z 2026-09-03 02:47:50,807 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0601588Z 2026-09-03 02:47:50,808 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0602080Z 2026-09-03 02:47:50,808 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0602780Z 2026-09-03 02:47:50,809 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0603281Z 2026-09-03 02:47:50,809 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0603773Z 2026-09-03 02:47:50,810 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0604263Z 2026-09-03 02:47:50,810 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0604756Z 2026-09-03 02:47:50,811 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0605255Z 2026-09-03 02:47:50,811 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0605738Z 2026-09-03 02:47:50,812 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0606234Z 2026-09-03 02:47:50,812 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0606729Z 2026-09-03 02:47:50,813 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0607214Z 2026-09-03 02:47:50,813 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0607707Z 2026-09-03 02:47:50,813 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0608197Z 2026-09-03 02:47:50,814 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0608690Z 2026-09-03 02:47:50,814 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0609185Z 2026-09-03 02:47:50,815 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0609828Z 2026-09-03 02:47:50,815 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0610314Z 2026-09-03 02:47:50,816 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0610815Z 2026-09-03 02:47:50,816 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0611309Z 2026-09-03 02:47:50,817 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0611794Z 2026-09-03 02:47:50,817 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0612291Z 2026-09-03 02:47:50,818 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0613013Z 2026-09-03 02:47:50,818 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0613514Z 2026-09-03 02:47:50,818 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0614008Z 2026-09-03 02:47:50,819 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0614510Z 2026-09-03 02:47:50,819 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0614998Z 2026-09-03 02:47:50,820 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0615500Z 2026-09-03 02:47:50,820 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0615995Z 2026-09-03 02:47:50,821 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0616483Z 2026-09-03 02:47:50,821 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0616976Z 2026-09-03 02:47:50,822 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0617462Z 2026-09-03 02:47:50,822 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0617952Z 2026-09-03 02:47:50,823 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0618582Z 2026-09-03 02:47:50,823 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0619087Z 2026-09-03 02:47:50,824 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0619578Z 2026-09-03 02:47:50,824 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0620084Z 2026-09-03 02:47:50,825 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0620581Z 2026-09-03 02:47:50,825 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0621065Z 2026-09-03 02:47:50,825 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0621559Z 2026-09-03 02:47:50,826 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0622045Z 2026-09-03 02:47:50,826 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0622709Z 2026-09-03 02:47:50,827 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0623212Z 2026-09-03 02:47:50,827 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0623712Z 2026-09-03 02:47:50,828 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0624195Z 2026-09-03 02:47:50,828 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0624688Z 2026-09-03 02:47:50,829 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0625175Z 2026-09-03 02:47:50,829 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0625664Z 2026-09-03 02:47:50,830 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0626153Z 2026-09-03 02:47:50,830 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0626639Z 2026-09-03 02:47:50,830 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0627128Z 2026-09-03 02:47:50,831 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0627614Z 2026-09-03 02:47:50,832 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0628243Z 2026-09-03 02:47:50,832 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0628730Z 2026-09-03 02:47:50,832 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0629225Z 2026-09-03 02:47:50,833 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0629712Z 2026-09-03 02:47:50,833 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0630201Z 2026-09-03 02:47:50,834 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0630691Z 2026-09-03 02:47:50,834 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0631176Z 2026-09-03 02:47:50,835 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0631667Z 2026-09-03 02:47:50,835 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0632155Z 2026-09-03 02:47:50,836 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0632854Z 2026-09-03 02:47:50,836 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0633345Z 2026-09-03 02:47:50,837 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0633839Z 2026-09-03 02:47:50,837 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0634328Z 2026-09-03 02:47:50,838 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0634826Z 2026-09-03 02:47:50,838 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0635322Z 2026-09-03 02:47:50,839 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0635809Z 2026-09-03 02:47:50,839 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0636302Z 2026-09-03 02:47:50,839 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0636965Z 2026-09-03 02:47:50,840 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0637487Z 2026-09-03 02:47:50,840 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0637942Z {
+2026-09-03T02:47:51.0638155Z   "discovery": {
+2026-09-03T02:47:51.0638400Z     "new_jobs": 0,
+2026-09-03T02:47:51.0638651Z     "duplicates": 0,
+2026-09-03T02:47:51.0638906Z     "fetched": 0,
+2026-09-03T02:47:51.0639123Z     "errors": [],
+2026-09-03T02:47:51.0639369Z     "employers_discovered": 0,
+2026-09-03T02:47:51.0639639Z     "immigration_facts": 0,
+2026-09-03T02:47:51.0639911Z     "opportunity_sources": 0,
+2026-09-03T02:47:51.0640183Z     "social_signals": 0,
+2026-09-03T02:47:51.0640435Z     "source_reports": [
+2026-09-03T02:47:51.0640672Z       {
+2026-09-03T02:47:51.0640901Z         "name": "tavily_web_search",
+2026-09-03T02:47:51.0641206Z         "kind": "tavily",
+2026-09-03T02:47:51.0641453Z         "mode": "real",
+2026-09-03T02:47:51.0641694Z         "queries": 21,
+2026-09-03T02:47:51.0641942Z         "fetched": 0,
+2026-09-03T02:47:51.0642190Z         "normalized": 0,
+2026-09-03T02:47:51.0642598Z         "duplicates": 0,
+2026-09-03T02:47:51.0642862Z         "new": 0,
+2026-09-03T02:47:51.0643078Z         "error": "",
+2026-09-03T02:47:51.0643327Z         "rate_status": "ok"
+2026-09-03T02:47:51.0643572Z       },
+2026-09-03T02:47:51.0643778Z       {
+2026-09-03T02:47:51.0644009Z         "name": "tavily_official_ats_search",
+2026-09-03T02:47:51.0644318Z         "kind": "tavily",
+2026-09-03T02:47:51.0644561Z         "mode": "real",
+2026-09-03T02:47:51.0644807Z         "queries": 21,
+2026-09-03T02:47:51.0645041Z         "fetched": 0,
+2026-09-03T02:47:51.0645280Z         "normalized": 0,
+2026-09-03T02:47:51.0645517Z         "duplicates": 0,
+2026-09-03T02:47:51.0645754Z         "new": 0,
+2026-09-03T02:47:51.0645971Z         "error": "",
+2026-09-03T02:47:51.0646210Z         "rate_status": "ok"
+2026-09-03T02:47:51.0646450Z       },
+2026-09-03T02:47:51.0646656Z       {
+2026-09-03T02:47:51.0646877Z         "name": "tavily_rekrute",
+2026-09-03T02:47:51.0647160Z         "kind": "tavily",
+2026-09-03T02:47:51.0647541Z         "mode": "real",
+2026-09-03T02:47:51.0647779Z         "queries": 21,
+2026-09-03T02:47:51.0648007Z         "fetched": 0,
+2026-09-03T02:47:51.0648245Z         "normalized": 0,
+2026-09-03T02:47:51.0648480Z         "duplicates": 0,
+2026-09-03T02:47:51.0648714Z         "new": 0,
+2026-09-03T02:47:51.0648926Z         "error": "",
+2026-09-03T02:47:51.0649165Z         "rate_status": "ok"
+2026-09-03T02:47:51.0649400Z       },
+2026-09-03T02:47:51.0649600Z       {
+2026-09-03T02:47:51.0649816Z         "name": "tavily_emploi_ma",
+2026-09-03T02:47:51.0650094Z         "kind": "tavily",
+2026-09-03T02:47:51.0650330Z         "mode": "real",
+2026-09-03T02:47:51.0650570Z         "queries": 21,
+2026-09-03T02:47:51.0650794Z         "fetched": 0,
+2026-09-03T02:47:51.0651030Z         "normalized": 0,
+2026-09-03T02:47:51.0651266Z         "duplicates": 0,
+2026-09-03T02:47:51.0651502Z         "new": 0,
+2026-09-03T02:47:51.0651721Z         "error": "",
+2026-09-03T02:47:51.0651960Z         "rate_status": "ok"
+2026-09-03T02:47:51.0652201Z       },
+2026-09-03T02:47:51.0652401Z       {
+2026-09-03T02:47:51.0652871Z         "name": "tavily_amaljob",
+2026-09-03T02:47:51.0653144Z         "kind": "tavily",
+2026-09-03T02:47:51.0653383Z         "mode": "real",
+2026-09-03T02:47:51.0653610Z         "queries": 21,
+2026-09-03T02:47:51.0653844Z         "fetched": 0,
+2026-09-03T02:47:51.0654075Z         "normalized": 0,
+2026-09-03T02:47:51.0654314Z         "duplicates": 0,
+2026-09-03T02:47:51.0654542Z         "new": 0,
+2026-09-03T02:47:51.0654758Z         "error": "",
+2026-09-03T02:47:51.0654984Z         "rate_status": "ok"
+2026-09-03T02:47:51.0655221Z       },
+2026-09-03T02:47:51.0655418Z       {
+2026-09-03T02:47:51.0655639Z         "name": "tavily_anapec",
+2026-09-03T02:47:51.0655905Z         "kind": "tavily",
+2026-09-03T02:47:51.0656146Z         "mode": "real",
+2026-09-03T02:47:51.0656373Z         "queries": 21,
+2026-09-03T02:47:51.0656765Z         "fetched": 0,
+2026-09-03T02:47:51.0656993Z         "normalized": 0,
+2026-09-03T02:47:51.0657239Z         "duplicates": 0,
+2026-09-03T02:47:51.0657467Z         "new": 0,
+2026-09-03T02:47:51.0657683Z         "error": "",
+2026-09-03T02:47:51.0657910Z         "rate_status": "ok"
+2026-09-03T02:47:51.0658148Z       },
+2026-09-03T02:47:51.0658343Z       {
+2026-09-03T02:47:51.0658564Z         "name": "tavily_emploi_public_ma",
+2026-09-03T02:47:51.0658853Z         "kind": "tavily",
+2026-09-03T02:47:51.0659094Z         "mode": "real",
+2026-09-03T02:47:51.0659323Z         "queries": 21,
+2026-09-03T02:47:51.0659547Z         "fetched": 0,
+2026-09-03T02:47:51.0659776Z         "normalized": 0,
+2026-09-03T02:47:51.0660152Z         "duplicates": 0,
+2026-09-03T02:47:51.0660380Z         "new": 0,
+2026-09-03T02:47:51.0660600Z         "error": "",
+2026-09-03T02:47:51.0660825Z         "rate_status": "ok"
+2026-09-03T02:47:51.0661062Z       },
+2026-09-03T02:47:51.0661256Z       {
+2026-09-03T02:47:51.0661489Z         "name": "tavily_marocannonces",
+2026-09-03T02:47:51.0661778Z         "kind": "tavily",
+2026-09-03T02:47:51.0662020Z         "mode": "real",
+2026-09-03T02:47:51.0662247Z         "queries": 21,
+2026-09-03T02:47:51.0662647Z         "fetched": 0,
+2026-09-03T02:47:51.0662907Z         "normalized": 0,
+2026-09-03T02:47:51.0663153Z         "duplicates": 0,
+2026-09-03T02:47:51.0663383Z         "new": 0,
+2026-09-03T02:47:51.0663602Z         "error": "",
+2026-09-03T02:47:51.0663826Z         "rate_status": "ok"
+2026-09-03T02:47:51.0664064Z       },
+2026-09-03T02:47:51.0664260Z       {
+2026-09-03T02:47:51.0664490Z         "name": "tavily_dreamjob",
+2026-09-03T02:47:51.0664762Z         "kind": "tavily",
+2026-09-03T02:47:51.0665007Z         "mode": "real",
+2026-09-03T02:47:51.0665237Z         "queries": 21,
+2026-09-03T02:47:51.0665467Z         "fetched": 0,
+2026-09-03T02:47:51.0665697Z         "normalized": 0,
+2026-09-03T02:47:51.0665934Z         "duplicates": 0,
+2026-09-03T02:47:51.0666171Z         "new": 0,
+2026-09-03T02:47:51.0666393Z         "error": "",
+2026-09-03T02:47:51.0666626Z         "rate_status": "ok"
+2026-09-03T02:47:51.0667008Z       },
+2026-09-03T02:47:51.0667210Z       {
+2026-09-03T02:47:51.0667424Z         "name": "tavily_indeed_morocco",
+2026-09-03T02:47:51.0667712Z         "kind": "tavily",
+2026-09-03T02:47:51.0667942Z         "mode": "real",
+2026-09-03T02:47:51.0668174Z         "queries": 21,
+2026-09-03T02:47:51.0668394Z         "fetched": 0,
+2026-09-03T02:47:51.0668627Z         "normalized": 0,
+2026-09-03T02:47:51.0668861Z         "duplicates": 0,
+2026-09-03T02:47:51.0669094Z         "new": 0,
+2026-09-03T02:47:51.0669307Z         "error": "",
+2026-09-03T02:47:51.0669537Z         "rate_status": "ok"
+2026-09-03T02:47:51.0669772Z       },
+2026-09-03T02:47:51.0669973Z       {
+2026-09-03T02:47:51.0670187Z         "name": "tavily_bghit_nekhdem",
+2026-09-03T02:47:51.0670488Z         "kind": "tavily",
+2026-09-03T02:47:51.0670727Z         "mode": "real",
+2026-09-03T02:47:51.0670960Z         "queries": 21,
+2026-09-03T02:47:51.0671191Z         "fetched": 0,
+2026-09-03T02:47:51.0671431Z         "normalized": 0,
+2026-09-03T02:47:51.0671674Z         "duplicates": 0,
+2026-09-03T02:47:51.0671914Z         "new": 0,
+2026-09-03T02:47:51.0672133Z         "error": "",
+2026-09-03T02:47:51.0672370Z         "rate_status": "ok"
+2026-09-03T02:47:51.0672823Z       },
+2026-09-03T02:47:51.0673032Z       {
+2026-09-03T02:47:51.0673247Z         "name": "tavily_jobzyn",
+2026-09-03T02:47:51.0673521Z         "kind": "tavily",
+2026-09-03T02:47:51.0673792Z         "mode": "real",
+2026-09-03T02:47:51.0674036Z         "queries": 21,
+2026-09-03T02:47:51.0674262Z         "fetched": 0,
+2026-09-03T02:47:51.0674500Z         "normalized": 0,
+2026-09-03T02:47:51.0674740Z         "duplicates": 0,
+2026-09-03T02:47:51.0674976Z         "new": 0,
+2026-09-03T02:47:51.0675189Z         "error": "",
+2026-09-03T02:47:51.0675425Z         "rate_status": "ok"
+2026-09-03T02:47:51.0675656Z       },
+2026-09-03T02:47:51.0675854Z       {
+2026-09-03T02:47:51.0676202Z         "name": "tavily_moncallcenter",
+2026-09-03T02:47:51.0676495Z         "kind": "tavily",
+2026-09-03T02:47:51.0676734Z         "mode": "real",
+2026-09-03T02:47:51.0677143Z         "queries": 21,
+2026-09-03T02:47:51.0677498Z         "fetched": 0,
+2026-09-03T02:47:51.0678042Z         "normalized": 0,
+2026-09-03T02:47:51.0678452Z         "duplicates": 0,
+2026-09-03T02:47:51.0678904Z         "new": 0,
+2026-09-03T02:47:51.0679252Z         "error": "",
+2026-09-03T02:47:51.0689827Z         "rate_status": "ok"
+2026-09-03T02:47:51.0690114Z       }
+2026-09-03T02:47:51.0690320Z     ]
+2026-09-03T02:47:51.0690523Z   },
+2026-09-03T02:47:51.0690723Z   "analysis": {
+2026-09-03T02:47:51.0690957Z     "analyzed": 0,
+2026-09-03T02:47:51.0691192Z     "decisions": {},
+2026-09-03T02:47:51.0691433Z     "errors": []
+2026-09-03T02:47:51.0691644Z   },
+2026-09-03T02:47:51.0691844Z   "action": {
+2026-09-03T02:47:51.0692059Z     "applied": 0,
+2026-09-03T02:47:51.0692312Z     "asked": 0,
+2026-09-03T02:47:51.0692785Z     "investigated": 0,
+2026-09-03T02:47:51.0693045Z     "blocked": 0,
+2026-09-03T02:47:51.0693266Z     "drafts": 0
+2026-09-03T02:47:51.0693484Z   },
+2026-09-03T02:47:51.0693679Z   "followup": {
+2026-09-03T02:47:51.0693893Z     "sent": [],
+2026-09-03T02:47:51.0694099Z     "blocked": [
+2026-09-03T02:47:51.0694316Z       2
+2026-09-03T02:47:51.0694512Z     ],
+2026-09-03T02:47:51.0694722Z     "errors": []
+2026-09-03T02:47:51.0694927Z   }
+2026-09-03T02:47:51.0695125Z }
+2026-09-03T02:47:51.0728049Z ##[group]Run python - <<'PY'
+2026-09-03T02:47:51.0728431Z [36;1mpython - <<'PY'[0m
+2026-09-03T02:47:51.0728689Z [36;1mimport json[0m
+2026-09-03T02:47:51.0728953Z [36;1mfrom pathlib import Path[0m
+2026-09-03T02:47:51.0729352Z [36;1mfrom app.notifications.whatsapp import MetaWhatsAppProvider[0m
+2026-09-03T02:47:51.0729745Z [36;1m[0m
+2026-09-03T02:47:51.0730240Z [36;1mexit_code = Path('/tmp/pipeline_exit_code').read_text().strip() if Path('/tmp/pipeline_exit_code').exists() else 'unknown'[0m
+2026-09-03T02:47:51.0730957Z [36;1mmessage = f'Career Agent run: FAILED (exit {exit_code}). Check GitHub Actions logs.'[0m
+2026-09-03T02:47:51.0731635Z [36;1mreport_path = Path('/tmp/run_report.json')[0m
+2026-09-03T02:47:51.0732012Z [36;1mif exit_code == '0' and report_path.exists():[0m
+2026-09-03T02:47:51.0732344Z [36;1m    try:[0m
+2026-09-03T02:47:51.0732966Z [36;1m        report = json.loads(report_path.read_text(encoding='utf-8'))[0m
+2026-09-03T02:47:51.0733471Z [36;1m        discovery = report.get('discovery', {})[0m
+2026-09-03T02:47:51.0733831Z [36;1m        analysis = report.get('analysis', {})[0m
+2026-09-03T02:47:51.0734173Z [36;1m        action = report.get('action', {})[0m
+2026-09-03T02:47:51.0734676Z [36;1m        decisions = ', '.join(f'{k} {v}' for k, v in analysis.get('decisions', {}).items()) or 'none'[0m
+2026-09-03T02:47:51.0735160Z [36;1m        message = ([0m
+2026-09-03T02:47:51.0735567Z [36;1m            f"Career Agent run complete. Jobs: {discovery.get('new_jobs', 0)} new / "[0m
+2026-09-03T02:47:51.0736109Z [36;1m            f"{discovery.get('fetched', 0)} fetched. Decisions: {decisions}. "[0m
+2026-09-03T02:47:51.0736572Z [36;1m            f"Gmail drafts: {action.get('drafts', 0)}. "[0m
+2026-09-03T02:47:51.0737057Z [36;1m            f"No action: {action.get('applied', 0) == 0 and action.get('asked', 0) == 0}."[0m
+2026-09-03T02:47:51.0737494Z [36;1m        )[0m
+2026-09-03T02:47:51.0737779Z [36;1m    except (OSError, ValueError, TypeError):[0m
+2026-09-03T02:47:51.0738320Z [36;1m        message = 'Career Agent run complete, but its report could not be read. Check GitHub Actions logs.'[0m
+2026-09-03T02:47:51.0738850Z [36;1mprovider = MetaWhatsAppProvider()[0m
+2026-09-03T02:47:51.0739184Z [36;1mif not provider.send(message):[0m
+2026-09-03T02:47:51.0739597Z [36;1m    raise SystemExit('WhatsApp status message was rejected by Meta')[0m
+2026-09-03T02:47:51.0740198Z [36;1mprint(f'WhatsApp accepted by Meta; message id: {provider.last_message_id or "not returned"}')[0m
+2026-09-03T02:47:51.0740663Z [36;1mPY[0m
+2026-09-03T02:47:51.0780237Z shell: /usr/bin/bash -e {0}
+2026-09-03T02:47:51.0780531Z env:
+2026-09-03T02:47:51.0780754Z   LLM_PROVIDER: gemini
+2026-09-03T02:47:51.0781047Z   WHATSAPP_PHONE_NUMBER_ID: 1189875497552844
+2026-09-03T02:47:51.0781672Z   WHATSAPP_RECIPIENT: ***
+2026-09-03T02:47:51.0781956Z   WHATSAPP_TEMPLATE_NAME: job_digest
+2026-09-03T02:47:51.0782259Z   WHATSAPP_TEMPLATE_LANGUAGE: en
+2026-09-03T02:47:51.0782778Z   WHATSAPP_GRAPH_API_VERSION: v25.0
+2026-09-03T02:47:51.0783084Z   WHATSAPP_RUN_SUMMARY_MANAGED: workflow
+2026-09-03T02:47:51.0783370Z   EMAIL_MODE: draft
+2026-09-03T02:47:51.0783613Z   ENABLE_EMAIL: true
+2026-09-03T02:47:51.0783922Z   pythonLocation: /opt/hostedtoolcache/Python/3.11.16/x64
+2026-09-03T02:47:51.0784368Z   PKG_CONFIG_PATH: /opt/hostedtoolcache/Python/3.11.16/x64/lib/pkgconfig
+2026-09-03T02:47:51.0784812Z   Python_ROOT_DIR: /opt/hostedtoolcache/Python/3.11.16/x64
+2026-09-03T02:47:51.0785218Z   Python2_ROOT_DIR: /opt/hostedtoolcache/Python/3.11.16/x64
+2026-09-03T02:47:51.0785603Z   Python3_ROOT_DIR: /opt/hostedtoolcache/Python/3.11.16/x64
+2026-09-03T02:47:51.0786010Z   LD_LIBRARY_PATH: /opt/hostedtoolcache/Python/3.11.16/x64/lib
+2026-09-03T02:47:51.0787332Z   WHATSAPP_ACCESS_TOKEN: ***
+2026-09-03T02:47:51.0787599Z ##[endgroup]
+2026-09-03T02:47:51.6593328Z WhatsApp accepted by Meta; message id: wamid.HBgM***FQIAERgSMDkxRDgxMDZBMzREMDJFNEI4AA==
+2026-09-03T02:47:51.6816899Z ##[group]Run python -c "from app.notifications.whatsapp import MetaWhatsAppProvider; import sys; p=MetaWhatsAppProvider(); ok=p.send('WhatsApp connection test: your Worldwide Career Agent is configured and ready.'); print(f'WhatsApp accepted by Meta; message id: {p.last_message_id or \"not returned\"}'); sys.exit(0 if ok else 1)"
+2026-09-03T02:47:51.6819789Z [36;1mpython -c "from app.notifications.whatsapp import MetaWhatsAppProvider; import sys; p=MetaWhatsAppProvider(); ok=p.send('WhatsApp connection test: your Worldwide Career Agent is configured and ready.'); print(f'WhatsApp accepted by Meta; message id: {p.last_message_id or \"not returned\"}'); sys.exit(0 if ok else 1)"[0m
+2026-09-03T02:47:51.6860398Z shell: /usr/bin/bash -e {0}
+2026-09-03T02:47:51.6860674Z env:
+2026-09-03T02:47:51.6860910Z   LLM_PROVIDER: gemini
+2026-09-03T02:47:51.6861189Z   WHATSAPP_PHONE_NUMBER_ID: 1189875497552844
+2026-09-03T02:47:51.6861612Z   WHATSAPP_RECIPIENT: ***
+2026-09-03T02:47:51.6861933Z   WHATSAPP_TEMPLATE_NAME: job_digest
+2026-09-03T02:47:51.6862235Z   WHATSAPP_TEMPLATE_LANGUAGE: en
+2026-09-03T02:47:51.6862696Z   WHATSAPP_GRAPH_API_VERSION: v25.0
+2026-09-03T02:47:51.6862994Z   WHATSAPP_RUN_SUMMARY_MANAGED: workflow
+2026-09-03T02:47:51.6863290Z   EMAIL_MODE: draft
+2026-09-03T02:47:51.6863519Z   ENABLE_EMAIL: true
+2026-09-03T02:47:51.6863836Z   pythonLocation: /opt/hostedtoolcache/Python/3.11.16/x64
+2026-09-03T02:47:51.6864284Z   PKG_CONFIG_PATH: /opt/hostedtoolcache/Python/3.11.16/x64/lib/pkgconfig
+2026-09-03T02:47:51.6864740Z   Python_ROOT_DIR: /opt/hostedtoolcache/Python/3.11.16/x64
+2026-09-03T02:47:51.6865141Z   Python2_ROOT_DIR: /opt/hostedtoolcache/Python/3.11.16/x64
+2026-09-03T02:47:51.6865538Z   Python3_ROOT_DIR: /opt/hostedtoolcache/Python/3.11.16/x64
+2026-09-03T02:47:51.6865955Z   LD_LIBRARY_PATH: /opt/hostedtoolcache/Python/3.11.16/x64/lib
+2026-09-03T02:47:51.6867321Z   WHATSAPP_ACCESS_TOKEN: ***
+2026-09-03T02:47:51.6867590Z ##[endgroup]
+2026-09-03T02:47:52.1917622Z WhatsApp accepted by Meta; message id: wamid.HBgM***FQIAERgSNkQwNDY0NEY3OUE1Mjk0MTNBAA==
+2026-09-03T02:47:52.2144636Z ##[group]Run rm -f data/test_agent.db data/*.log* data/gemini_result.json data/run_*.json
+2026-09-03T02:47:52.2145697Z [36;1mrm -f data/test_agent.db data/*.log* data/gemini_result.json data/run_*.json[0m
+2026-09-03T02:47:52.2146429Z [36;1mrm -rf /tmp/vault[0m
+2026-09-03T02:47:52.2147214Z [36;1mgit clone --depth 1 "https://x-access-token:${VAULT_TOKEN}@${VAULT_URL#https://}" /tmp/vault[0m
+2026-09-03T02:47:52.2148086Z [36;1mcp -a data/. /tmp/vault/state/[0m
+2026-09-03T02:47:52.2148567Z [36;1mcd /tmp/vault[0m
+2026-09-03T02:47:52.2149040Z [36;1mgit config user.name "github-actions[bot]"[0m
+2026-09-03T02:47:52.2149838Z [36;1mgit config user.email "41898282+github-actions[bot]@users.noreply.github.com"[0m
+2026-09-03T02:47:52.2150588Z [36;1mgit add -A[0m
+2026-09-03T02:47:52.2151253Z [36;1mgit commit -m "state: snapshot $(date -u +%Y-%m-%dT%H:%M:%SZ)" || echo "no state change"[0m
+2026-09-03T02:47:52.2152017Z [36;1mgit push origin HEAD:main[0m
+2026-09-03T02:47:52.2208172Z shell: /usr/bin/bash -e {0}
+2026-09-03T02:47:52.2208595Z env:
+2026-09-03T02:47:52.2208940Z   LLM_PROVIDER: gemini
+2026-09-03T02:47:52.2209361Z   WHATSAPP_PHONE_NUMBER_ID: 1189875497552844
+2026-09-03T02:47:52.2209953Z   WHATSAPP_RECIPIENT: ***
+2026-09-03T02:47:52.2210401Z   WHATSAPP_TEMPLATE_NAME: job_digest
+2026-09-03T02:47:52.2210893Z   WHATSAPP_TEMPLATE_LANGUAGE: en
+2026-09-03T02:47:52.2211353Z   WHATSAPP_GRAPH_API_VERSION: v25.0
+2026-09-03T02:47:52.2211846Z   WHATSAPP_RUN_SUMMARY_MANAGED: workflow
+2026-09-03T02:47:52.2212317Z   EMAIL_MODE: draft
+2026-09-03T02:47:52.2212902Z   ENABLE_EMAIL: true
+2026-09-03T02:47:52.2213400Z   pythonLocation: /opt/hostedtoolcache/Python/3.11.16/x64
+2026-09-03T02:47:52.2214142Z   PKG_CONFIG_PATH: /opt/hostedtoolcache/Python/3.11.16/x64/lib/pkgconfig
+2026-09-03T02:47:52.2214877Z   Python_ROOT_DIR: /opt/hostedtoolcache/Python/3.11.16/x64
+2026-09-03T02:47:52.2215534Z   Python2_ROOT_DIR: /opt/hostedtoolcache/Python/3.11.16/x64
+2026-09-03T02:47:52.2216204Z   Python3_ROOT_DIR: /opt/hostedtoolcache/Python/3.11.16/x64
+2026-09-03T02:47:52.2216858Z   LD_LIBRARY_PATH: /opt/hostedtoolcache/Python/3.11.16/x64/lib
+2026-09-03T02:47:52.2218077Z   VAULT_TOKEN: ***
+2026-09-03T02:47:52.2218680Z   VAULT_URL: https://github.com/dubbishpsychic0000/ai-job-finder-vault.git
+2026-09-03T02:47:52.2219346Z ##[endgroup]
+2026-09-03T02:47:52.2337942Z Cloning into '/tmp/vault'...
+2026-09-03T02:47:52.7340183Z [main 00525a9] state: snapshot 2026-09-03T02:47:52Z
+2026-09-03T02:47:52.7340881Z  1 file changed, 0 insertions(+), 0 deletions(-)
+2026-09-03T02:47:53.7179684Z To https://github.com/dubbishpsychic0000/ai-job-finder-vault.git
+2026-09-03T02:47:53.7180501Z    a97da6c..00525a9  HEAD -> main
+2026-09-03T02:47:53.7287138Z Node 20 is being deprecated. This workflow is running with Node 24 by default. If you need to temporarily use Node 20, you can set the ACTIONS_ALLOW_USE_UNSECURE_NODE_VERSION=true environment variable. For more information see: https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners/
+2026-09-03T02:47:53.7289946Z ##[group]Run actions/upload-artifact@v4
+2026-09-03T02:47:53.7290254Z with:
+2026-09-03T02:47:53.7290476Z   name: agent-logs
+2026-09-03T02:47:53.7290778Z   path: data/*.log
+data/*.log.err
+/tmp/run_report.json
+
+2026-09-03T02:47:53.7291125Z   if-no-files-found: warn
+2026-09-03T02:47:53.7291397Z   compression-level: 6
+2026-09-03T02:47:53.7291645Z   overwrite: false
+2026-09-03T02:47:53.7291899Z   include-hidden-files: false
+2026-09-03T02:47:53.7292159Z env:
+2026-09-03T02:47:53.7292381Z   LLM_PROVIDER: gemini
+2026-09-03T02:47:53.7292894Z   WHATSAPP_PHONE_NUMBER_ID: 1189875497552844
+2026-09-03T02:47:53.7293328Z   WHATSAPP_RECIPIENT: ***
+2026-09-03T02:47:53.7293649Z   WHATSAPP_TEMPLATE_NAME: job_digest
+2026-09-03T02:47:53.7293959Z   WHATSAPP_TEMPLATE_LANGUAGE: en
+2026-09-03T02:47:53.7294256Z   WHATSAPP_GRAPH_API_VERSION: v25.0
+2026-09-03T02:47:53.7294556Z   WHATSAPP_RUN_SUMMARY_MANAGED: workflow
+2026-09-03T02:47:53.7294858Z   EMAIL_MODE: draft
+2026-09-03T02:47:53.7295095Z   ENABLE_EMAIL: true
+2026-09-03T02:47:53.7295408Z   pythonLocation: /opt/hostedtoolcache/Python/3.11.16/x64
+2026-09-03T02:47:53.7295862Z   PKG_CONFIG_PATH: /opt/hostedtoolcache/Python/3.11.16/x64/lib/pkgconfig
+2026-09-03T02:47:53.7296309Z   Python_ROOT_DIR: /opt/hostedtoolcache/Python/3.11.16/x64
+2026-09-03T02:47:53.7296716Z   Python2_ROOT_DIR: /opt/hostedtoolcache/Python/3.11.16/x64
+2026-09-03T02:47:53.7297130Z   Python3_ROOT_DIR: /opt/hostedtoolcache/Python/3.11.16/x64
+2026-09-03T02:47:53.7297545Z   LD_LIBRARY_PATH: /opt/hostedtoolcache/Python/3.11.16/x64/lib
+2026-09-03T02:47:53.7297894Z ##[endgroup]
+2026-09-03T02:47:53.8939776Z (node:2394) [DEP0040] DeprecationWarning: The `punycode` module is deprecated. Please use a userland alternative instead.
+2026-09-03T02:47:53.8940564Z (Use `node --trace-deprecation ...` to show where the warning was created)
+2026-09-03T02:47:53.9023281Z Multiple search paths detected. Calculating the least common ancestor of all paths
+2026-09-03T02:47:53.9024844Z The least common ancestor is /. This will be the root directory of the artifact
+2026-09-03T02:47:53.9025640Z With the provided path, there will be 1 file uploaded
+2026-09-03T02:47:53.9031776Z Artifact name is valid!
+2026-09-03T02:47:53.9032345Z Root directory input is valid!
+2026-09-03T02:47:54.1027219Z Beginning upload of artifact content to blob storage
+2026-09-03T02:47:54.1201021Z (node:2394) [DEP0169] DeprecationWarning: `url.parse()` behavior is not standardized and prone to errors that have security implications. Use the WHATWG URL API instead. CVEs are not issued for `url.parse()` vulnerabilities.
+2026-09-03T02:47:54.1647068Z Uploaded bytes 576
+2026-09-03T02:47:54.1834409Z Finished uploading artifact content to blob storage!
+2026-09-03T02:47:54.1835266Z SHA256 digest of uploaded artifact zip is ee502c110b67da186f41ab5af5c2605c93242ee1811b63f99c3d5ba6d81e678a
+2026-09-03T02:47:54.1837031Z Finalizing artifact upload
+2026-09-03T02:47:54.3600310Z Artifact agent-logs.zip successfully finalized. Artifact ID 9876243575
+2026-09-03T02:47:54.3601211Z Artifact agent-logs has been successfully uploaded! Final size is 576 bytes. Artifact ID is 9876243575
+2026-09-03T02:47:54.3607399Z Artifact download URL: https://github.com/dubbishpsychic0000/ai-job-finder/actions/runs/33708955017/artifacts/9876243575
+2026-09-03T02:47:54.3795087Z Node 20 is being deprecated. This workflow is running with Node 24 by default. If you need to temporarily use Node 20, you can set the ACTIONS_ALLOW_USE_UNSECURE_NODE_VERSION=true environment variable. For more information see: https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners/
+2026-09-03T02:47:54.3796471Z Post job cleanup.
+2026-09-03T02:47:54.4995031Z Cache hit occurred on the primary key setup-python-Linux-x64-24.04-Ubuntu-python-3.11.16-pip-fea5aac7ed2691b399bc6fb69e4b4badc192fbfacc67a07aa94ddac08324ad05, not saving cache.
+2026-09-03T02:47:54.4996822Z (node:2407) [DEP0040] DeprecationWarning: The `punycode` module is deprecated. Please use a userland alternative instead.
+2026-09-03T02:47:54.4997957Z (Use `node --trace-deprecation ...` to show where the warning was created)
+2026-09-03T02:47:54.5127472Z Node 20 is being deprecated. This workflow is running with Node 24 by default. If you need to temporarily use Node 20, you can set the ACTIONS_ALLOW_USE_UNSECURE_NODE_VERSION=true environment variable. For more information see: https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners/
+2026-09-03T02:47:54.5128697Z Post job cleanup.
+2026-09-03T02:47:54.5982390Z [command]/usr/bin/git version
+2026-09-03T02:47:54.6027793Z git version 2.55.0
+2026-09-03T02:47:54.6068867Z Temporarily overriding HOME='/home/runner/work/_temp/df788ec4-4f1b-4e19-bb0c-39f9c924f199' before making global git config changes
+2026-09-03T02:47:54.6070208Z Adding repository directory to the temporary git global config as a safe directory
+2026-09-03T02:47:54.6075554Z [command]/usr/bin/git config --global --add safe.directory /home/runner/work/ai-job-finder/ai-job-finder
+2026-09-03T02:47:54.6116474Z [command]/usr/bin/git config --local --name-only --get-regexp core\.sshCommand
+2026-09-03T02:47:54.6151859Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'core\.sshCommand' && git config --local --unset-all 'core.sshCommand' || :"
+2026-09-03T02:47:54.6435649Z [command]/usr/bin/git config --local --name-only --get-regexp http\.https\:\/\/github\.com\/\.extraheader
+2026-09-03T02:47:54.6464068Z http.https://github.com/.extraheader
+2026-09-03T02:47:54.6475687Z [command]/usr/bin/git config --local --unset-all http.https://github.com/.extraheader
+2026-09-03T02:47:54.6511146Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'http\.https\:\/\/github\.com\/\.extraheader' && git config --local --unset-all 'http.https://github.com/.extraheader' || :"
+2026-09-03T02:47:54.6811242Z [command]/usr/bin/git config --local --name-only --get-regexp ^includeIf\.gitdir:
+2026-09-03T02:47:54.6873757Z [command]/usr/bin/git submodule foreach --recursive git config --local --show-origin --name-only --get-regexp remote.origin.url
+2026-09-03T02:47:54.7349823Z Cleaning up orphan processes
+2026-09-03T02:47:54.7673827Z ##[warning]Node.js 20 is deprecated. The following actions target Node.js 20 but are being forced to run on Node.js 24: actions/checkout@v4, actions/setup-python@v5, actions/upload-artifact@v4. For more information see: https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners/

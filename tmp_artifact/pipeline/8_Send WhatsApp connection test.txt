@@ -1,0 +1,22 @@
+﻿2026-09-03T02:47:51.6816886Z ##[group]Run python -c "from app.notifications.whatsapp import MetaWhatsAppProvider; import sys; p=MetaWhatsAppProvider(); ok=p.send('WhatsApp connection test: your Worldwide Career Agent is configured and ready.'); print(f'WhatsApp accepted by Meta; message id: {p.last_message_id or \"not returned\"}'); sys.exit(0 if ok else 1)"
+2026-09-03T02:47:51.6819781Z [36;1mpython -c "from app.notifications.whatsapp import MetaWhatsAppProvider; import sys; p=MetaWhatsAppProvider(); ok=p.send('WhatsApp connection test: your Worldwide Career Agent is configured and ready.'); print(f'WhatsApp accepted by Meta; message id: {p.last_message_id or \"not returned\"}'); sys.exit(0 if ok else 1)"[0m
+2026-09-03T02:47:51.6860382Z shell: /usr/bin/bash -e {0}
+2026-09-03T02:47:51.6860671Z env:
+2026-09-03T02:47:51.6860902Z   LLM_PROVIDER: gemini
+2026-09-03T02:47:51.6861185Z   WHATSAPP_PHONE_NUMBER_ID: 1189875497552844
+2026-09-03T02:47:51.6861610Z   WHATSAPP_RECIPIENT: ***
+2026-09-03T02:47:51.6861893Z   WHATSAPP_TEMPLATE_NAME: job_digest
+2026-09-03T02:47:51.6862233Z   WHATSAPP_TEMPLATE_LANGUAGE: en
+2026-09-03T02:47:51.6862694Z   WHATSAPP_GRAPH_API_VERSION: v25.0
+2026-09-03T02:47:51.6862992Z   WHATSAPP_RUN_SUMMARY_MANAGED: workflow
+2026-09-03T02:47:51.6863288Z   EMAIL_MODE: draft
+2026-09-03T02:47:51.6863517Z   ENABLE_EMAIL: true
+2026-09-03T02:47:51.6863833Z   pythonLocation: /opt/hostedtoolcache/Python/3.11.16/x64
+2026-09-03T02:47:51.6864281Z   PKG_CONFIG_PATH: /opt/hostedtoolcache/Python/3.11.16/x64/lib/pkgconfig
+2026-09-03T02:47:51.6864738Z   Python_ROOT_DIR: /opt/hostedtoolcache/Python/3.11.16/x64
+2026-09-03T02:47:51.6865139Z   Python2_ROOT_DIR: /opt/hostedtoolcache/Python/3.11.16/x64
+2026-09-03T02:47:51.6865536Z   Python3_ROOT_DIR: /opt/hostedtoolcache/Python/3.11.16/x64
+2026-09-03T02:47:51.6865952Z   LD_LIBRARY_PATH: /opt/hostedtoolcache/Python/3.11.16/x64/lib
+2026-09-03T02:47:51.6867319Z   WHATSAPP_ACCESS_TOKEN: ***
+2026-09-03T02:47:51.6867588Z ##[endgroup]
+2026-09-03T02:47:52.1917535Z WhatsApp accepted by Meta; message id: wamid.HBgM***FQIAERgSNkQwNDY0NEY3OUE1Mjk0MTNBAA==

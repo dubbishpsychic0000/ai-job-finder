@@ -1,0 +1,132 @@
+﻿{
+    "id":  100499023267,
+    "run_id":  33707282134,
+    "workflow_name":  "Agent 24-7",
+    "head_branch":  "main",
+    "run_url":  "https://api.github.com/repos/dubbishpsychic0000/ai-job-finder/actions/runs/33707282134",
+    "run_attempt":  1,
+    "node_id":  "CR_kwDOT6nMMc8AAAAXZjVlow",
+    "head_sha":  "11975b4705f53bc0b8a74a0dc79750144947fcfa",
+    "url":  "https://api.github.com/repos/dubbishpsychic0000/ai-job-finder/actions/jobs/100499023267",
+    "html_url":  "https://github.com/dubbishpsychic0000/ai-job-finder/actions/runs/33707282134/job/100499023267",
+    "status":  "completed",
+    "conclusion":  "success",
+    "created_at":  "2026-09-03T02:20:38Z",
+    "started_at":  "2026-09-03T02:20:40Z",
+    "completed_at":  "2026-09-03T02:21:09Z",
+    "name":  "pipeline",
+    "steps":  [
+                  {
+                      "name":  "Set up job",
+                      "status":  "completed",
+                      "conclusion":  "success",
+                      "number":  1,
+                      "started_at":  "2026-09-03T02:20:41Z",
+                      "completed_at":  "2026-09-03T02:20:42Z"
+                  },
+                  {
+                      "name":  "Checkout public repo",
+                      "status":  "completed",
+                      "conclusion":  "success",
+                      "number":  2,
+                      "started_at":  "2026-09-03T02:20:42Z",
+                      "completed_at":  "2026-09-03T02:20:43Z"
+                  },
+                  {
+                      "name":  "Setup Python",
+                      "status":  "completed",
+                      "conclusion":  "success",
+                      "number":  3,
+                      "started_at":  "2026-09-03T02:20:43Z",
+                      "completed_at":  "2026-09-03T02:20:47Z"
+                  },
+                  {
+                      "name":  "Install dependencies",
+                      "status":  "completed",
+                      "conclusion":  "success",
+                      "number":  4,
+                      "started_at":  "2026-09-03T02:20:47Z",
+                      "completed_at":  "2026-09-03T02:20:59Z"
+                  },
+                  {
+                      "name":  "Restore candidate data, OAuth secrets, and state (private vault)",
+                      "status":  "completed",
+                      "conclusion":  "success",
+                      "number":  5,
+                      "started_at":  "2026-09-03T02:20:59Z",
+                      "completed_at":  "2026-09-03T02:21:00Z"
+                  },
+                  {
+                      "name":  "Run one pipeline pass",
+                      "status":  "completed",
+                      "conclusion":  "success",
+                      "number":  6,
+                      "started_at":  "2026-09-03T02:21:00Z",
+                      "completed_at":  "2026-09-03T02:21:02Z"
+                  },
+                  {
+                      "name":  "Send WhatsApp run status",
+                      "status":  "completed",
+                      "conclusion":  "success",
+                      "number":  7,
+                      "started_at":  "2026-09-03T02:21:02Z",
+                      "completed_at":  "2026-09-03T02:21:03Z"
+                  },
+                  {
+                      "name":  "Send WhatsApp connection test",
+                      "status":  "completed",
+                      "conclusion":  "skipped",
+                      "number":  8,
+                      "started_at":  "2026-09-03T02:21:03Z",
+                      "completed_at":  "2026-09-03T02:21:03Z"
+                  },
+                  {
+                      "name":  "Persist state back to vault",
+                      "status":  "completed",
+                      "conclusion":  "success",
+                      "number":  9,
+                      "started_at":  "2026-09-03T02:21:03Z",
+                      "completed_at":  "2026-09-03T02:21:05Z"
+                  },
+                  {
+                      "name":  "Upload run logs",
+                      "status":  "completed",
+                      "conclusion":  "success",
+                      "number":  10,
+                      "started_at":  "2026-09-03T02:21:05Z",
+                      "completed_at":  "2026-09-03T02:21:07Z"
+                  },
+                  {
+                      "name":  "Post Setup Python",
+                      "status":  "completed",
+                      "conclusion":  "success",
+                      "number":  19,
+                      "started_at":  "2026-09-03T02:21:07Z",
+                      "completed_at":  "2026-09-03T02:21:07Z"
+                  },
+                  {
+                      "name":  "Post Checkout public repo",
+                      "status":  "completed",
+                      "conclusion":  "success",
+                      "number":  20,
+                      "started_at":  "2026-09-03T02:21:07Z",
+                      "completed_at":  "2026-09-03T02:21:07Z"
+                  },
+                  {
+                      "name":  "Complete job",
+                      "status":  "completed",
+                      "conclusion":  "success",
+                      "number":  21,
+                      "started_at":  "2026-09-03T02:21:07Z",
+                      "completed_at":  "2026-09-03T02:21:07Z"
+                  }
+              ],
+    "check_run_url":  "https://api.github.com/repos/dubbishpsychic0000/ai-job-finder/check-runs/100499023267",
+    "labels":  [
+                   "ubuntu-latest"
+               ],
+    "runner_id":  1000009150,
+    "runner_name":  "GitHub Actions 1000009150",
+    "runner_group_id":  0,
+    "runner_group_name":  "GitHub Actions"
+}

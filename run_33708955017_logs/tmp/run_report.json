@@ -1,0 +1,189 @@
+{
+  "discovery": {
+    "new_jobs": 0,
+    "duplicates": 0,
+    "fetched": 0,
+    "errors": [],
+    "employers_discovered": 0,
+    "immigration_facts": 0,
+    "opportunity_sources": 0,
+    "social_signals": 0,
+    "source_reports": [
+      {
+        "name": "tavily_web_search",
+        "kind": "tavily",
+        "mode": "real",
+        "queries": 21,
+        "fetched": 0,
+        "normalized": 0,
+        "duplicates": 0,
+        "new": 0,
+        "error": "",
+        "rate_status": "ok"
+      },
+      {
+        "name": "tavily_official_ats_search",
+        "kind": "tavily",
+        "mode": "real",
+        "queries": 21,
+        "fetched": 0,
+        "normalized": 0,
+        "duplicates": 0,
+        "new": 0,
+        "error": "",
+        "rate_status": "ok"
+      },
+      {
+        "name": "tavily_rekrute",
+        "kind": "tavily",
+        "mode": "real",
+        "queries": 21,
+        "fetched": 0,
+        "normalized": 0,
+        "duplicates": 0,
+        "new": 0,
+        "error": "",
+        "rate_status": "ok"
+      },
+      {
+        "name": "tavily_emploi_ma",
+        "kind": "tavily",
+        "mode": "real",
+        "queries": 21,
+        "fetched": 0,
+        "normalized": 0,
+        "duplicates": 0,
+        "new": 0,
+        "error": "",
+        "rate_status": "ok"
+      },
+      {
+        "name": "tavily_amaljob",
+        "kind": "tavily",
+        "mode": "real",
+        "queries": 21,
+        "fetched": 0,
+        "normalized": 0,
+        "duplicates": 0,
+        "new": 0,
+        "error": "",
+        "rate_status": "ok"
+      },
+      {
+        "name": "tavily_anapec",
+        "kind": "tavily",
+        "mode": "real",
+        "queries": 21,
+        "fetched": 0,
+        "normalized": 0,
+        "duplicates": 0,
+        "new": 0,
+        "error": "",
+        "rate_status": "ok"
+      },
+      {
+        "name": "tavily_emploi_public_ma",
+        "kind": "tavily",
+        "mode": "real",
+        "queries": 21,
+        "fetched": 0,
+        "normalized": 0,
+        "duplicates": 0,
+        "new": 0,
+        "error": "",
+        "rate_status": "ok"
+      },
+      {
+        "name": "tavily_marocannonces",
+        "kind": "tavily",
+        "mode": "real",
+        "queries": 21,
+        "fetched": 0,
+        "normalized": 0,
+        "duplicates": 0,
+        "new": 0,
+        "error": "",
+        "rate_status": "ok"
+      },
+      {
+        "name": "tavily_dreamjob",
+        "kind": "tavily",
+        "mode": "real",
+        "queries": 21,
+        "fetched": 0,
+        "normalized": 0,
+        "duplicates": 0,
+        "new": 0,
+        "error": "",
+        "rate_status": "ok"
+      },
+      {
+        "name": "tavily_indeed_morocco",
+        "kind": "tavily",
+        "mode": "real",
+        "queries": 21,
+        "fetched": 0,
+        "normalized": 0,
+        "duplicates": 0,
+        "new": 0,
+        "error": "",
+        "rate_status": "ok"
+      },
+      {
+        "name": "tavily_bghit_nekhdem",
+        "kind": "tavily",
+        "mode": "real",
+        "queries": 21,
+        "fetched": 0,
+        "normalized": 0,
+        "duplicates": 0,
+        "new": 0,
+        "error": "",
+        "rate_status": "ok"
+      },
+      {
+        "name": "tavily_jobzyn",
+        "kind": "tavily",
+        "mode": "real",
+        "queries": 21,
+        "fetched": 0,
+        "normalized": 0,
+        "duplicates": 0,
+        "new": 0,
+        "error": "",
+        "rate_status": "ok"
+      },
+      {
+        "name": "tavily_moncallcenter",
+        "kind": "tavily",
+        "mode": "real",
+        "queries": 21,
+        "fetched": 0,
+        "normalized": 0,
+        "duplicates": 0,
+        "new": 0,
+        "error": "",
+        "rate_status": "ok"
+      }
+    ]
+  },
+  "analysis": {
+    "analyzed": 0,
+    "decisions": {},
+    "errors": []
+  },
+  "action": {
+    "applied": 0,
+    "asked": 0,
+    "investigated": 0,
+    "blocked": 0,
+    "drafts": 0
+  },
+  "followup": {
+    "sent": [],
+    "blocked": [
+      2
+    ],
+    "errors": []
+  }
+}

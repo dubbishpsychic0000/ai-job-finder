@@ -1,0 +1,489 @@
+﻿2026-09-03T02:47:48.8981951Z ##[group]Run set +e
+2026-09-03T02:47:48.8982278Z [36;1mset +e[0m
+2026-09-03T02:47:48.8982866Z [36;1mpython -m app.cli run-once --json > /tmp/run_report.json 2> /tmp/run.log[0m
+2026-09-03T02:47:48.8983335Z [36;1mecho $? > /tmp/pipeline_exit_code[0m
+2026-09-03T02:47:48.8983651Z [36;1mcat /tmp/run.log[0m
+2026-09-03T02:47:48.8983926Z [36;1mcat /tmp/run_report.json[0m
+2026-09-03T02:47:48.8984241Z [36;1mexit $(cat /tmp/pipeline_exit_code)[0m
+2026-09-03T02:47:48.9024600Z shell: /usr/bin/bash -e {0}
+2026-09-03T02:47:48.9024890Z env:
+2026-09-03T02:47:48.9025126Z   LLM_PROVIDER: gemini
+2026-09-03T02:47:48.9025404Z   WHATSAPP_PHONE_NUMBER_ID: 1189875497552844
+2026-09-03T02:47:48.9025897Z   WHATSAPP_RECIPIENT: ***
+2026-09-03T02:47:48.9026179Z   WHATSAPP_TEMPLATE_NAME: job_digest
+2026-09-03T02:47:48.9026486Z   WHATSAPP_TEMPLATE_LANGUAGE: en
+2026-09-03T02:47:48.9026767Z   WHATSAPP_GRAPH_API_VERSION: v25.0
+2026-09-03T02:47:48.9027069Z   WHATSAPP_RUN_SUMMARY_MANAGED: workflow
+2026-09-03T02:47:48.9027368Z   EMAIL_MODE: draft
+2026-09-03T02:47:48.9027656Z   ENABLE_EMAIL: true
+2026-09-03T02:47:48.9027968Z   pythonLocation: /opt/hostedtoolcache/Python/3.11.16/x64
+2026-09-03T02:47:48.9028415Z   PKG_CONFIG_PATH: /opt/hostedtoolcache/Python/3.11.16/x64/lib/pkgconfig
+2026-09-03T02:47:48.9028870Z   Python_ROOT_DIR: /opt/hostedtoolcache/Python/3.11.16/x64
+2026-09-03T02:47:48.9029276Z   Python2_ROOT_DIR: /opt/hostedtoolcache/Python/3.11.16/x64
+2026-09-03T02:47:48.9029676Z   Python3_ROOT_DIR: /opt/hostedtoolcache/Python/3.11.16/x64
+2026-09-03T02:47:48.9030078Z   LD_LIBRARY_PATH: /opt/hostedtoolcache/Python/3.11.16/x64/lib
+2026-09-03T02:47:48.9031356Z   GEMINI_API_KEYS: ***
+2026-09-03T02:47:48.9032798Z   WHATSAPP_ACCESS_TOKEN: ***
+2026-09-03T02:47:48.9033128Z ##[endgroup]
+2026-09-03T02:47:51.0489978Z 2026-09-03 02:47:50,712 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0491079Z 2026-09-03 02:47:50,714 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0491965Z 2026-09-03 02:47:50,714 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0493374Z 2026-09-03 02:47:50,715 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0494206Z 2026-09-03 02:47:50,716 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0495040Z 2026-09-03 02:47:50,716 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0495863Z 2026-09-03 02:47:50,717 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0496556Z 2026-09-03 02:47:50,717 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0497065Z 2026-09-03 02:47:50,718 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0497578Z 2026-09-03 02:47:50,718 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0498100Z 2026-09-03 02:47:50,719 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0498595Z 2026-09-03 02:47:50,719 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0499110Z 2026-09-03 02:47:50,720 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0499608Z 2026-09-03 02:47:50,720 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0500108Z 2026-09-03 02:47:50,721 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0500592Z 2026-09-03 02:47:50,721 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0501082Z 2026-09-03 02:47:50,722 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0501783Z 2026-09-03 02:47:50,722 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0502600Z 2026-09-03 02:47:50,723 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0503426Z 2026-09-03 02:47:50,723 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0504257Z 2026-09-03 02:47:50,723 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0505248Z 2026-09-03 02:47:50,724 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0505742Z 2026-09-03 02:47:50,725 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0506233Z 2026-09-03 02:47:50,726 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0506725Z 2026-09-03 02:47:50,726 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0507213Z 2026-09-03 02:47:50,727 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0507696Z 2026-09-03 02:47:50,727 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0508184Z 2026-09-03 02:47:50,727 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0508670Z 2026-09-03 02:47:50,728 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0509154Z 2026-09-03 02:47:50,728 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0509669Z 2026-09-03 02:47:50,729 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0510159Z 2026-09-03 02:47:50,729 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0510689Z 2026-09-03 02:47:50,730 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0511216Z 2026-09-03 02:47:50,730 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0511727Z 2026-09-03 02:47:50,731 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0512213Z 2026-09-03 02:47:50,731 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0513000Z 2026-09-03 02:47:50,731 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0513514Z 2026-09-03 02:47:50,732 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0514015Z 2026-09-03 02:47:50,732 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0514806Z 2026-09-03 02:47:50,733 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0515297Z 2026-09-03 02:47:50,733 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0515965Z 2026-09-03 02:47:50,734 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0516454Z 2026-09-03 02:47:50,734 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0517021Z 2026-09-03 02:47:50,735 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0517880Z 2026-09-03 02:47:50,735 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0518752Z 2026-09-03 02:47:50,736 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0519599Z 2026-09-03 02:47:50,736 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0520403Z 2026-09-03 02:47:50,737 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0521059Z 2026-09-03 02:47:50,737 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0521554Z 2026-09-03 02:47:50,738 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0522050Z 2026-09-03 02:47:50,738 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0522734Z 2026-09-03 02:47:50,738 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0523239Z 2026-09-03 02:47:50,739 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0523724Z 2026-09-03 02:47:50,739 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0524216Z 2026-09-03 02:47:50,740 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0524707Z 2026-09-03 02:47:50,740 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0525587Z 2026-09-03 02:47:50,741 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0526087Z 2026-09-03 02:47:50,741 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0526575Z 2026-09-03 02:47:50,742 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0527070Z 2026-09-03 02:47:50,742 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0527559Z 2026-09-03 02:47:50,743 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0528054Z 2026-09-03 02:47:50,743 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0528534Z 2026-09-03 02:47:50,743 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0529033Z 2026-09-03 02:47:50,744 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0529515Z 2026-09-03 02:47:50,745 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0530110Z 2026-09-03 02:47:50,745 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0530652Z 2026-09-03 02:47:50,746 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0531139Z 2026-09-03 02:47:50,746 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0531628Z 2026-09-03 02:47:50,746 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0532113Z 2026-09-03 02:47:50,747 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0532785Z 2026-09-03 02:47:50,747 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0533297Z 2026-09-03 02:47:50,748 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0533782Z 2026-09-03 02:47:50,748 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0534276Z 2026-09-03 02:47:50,749 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0534777Z 2026-09-03 02:47:50,749 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0535433Z 2026-09-03 02:47:50,750 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0535923Z 2026-09-03 02:47:50,750 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0536421Z 2026-09-03 02:47:50,750 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0536919Z 2026-09-03 02:47:50,751 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0537405Z 2026-09-03 02:47:50,751 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0537922Z 2026-09-03 02:47:50,752 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0538413Z 2026-09-03 02:47:50,752 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0538903Z 2026-09-03 02:47:50,753 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0539402Z 2026-09-03 02:47:50,753 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0539905Z 2026-09-03 02:47:50,754 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0540392Z 2026-09-03 02:47:50,754 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0540880Z 2026-09-03 02:47:50,755 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0541377Z 2026-09-03 02:47:50,755 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0541867Z 2026-09-03 02:47:50,756 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0542361Z 2026-09-03 02:47:50,756 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0543207Z 2026-09-03 02:47:50,757 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0543709Z 2026-09-03 02:47:50,757 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0544366Z 2026-09-03 02:47:50,757 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0544866Z 2026-09-03 02:47:50,758 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0545355Z 2026-09-03 02:47:50,758 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0545848Z 2026-09-03 02:47:50,759 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0546343Z 2026-09-03 02:47:50,759 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0546836Z 2026-09-03 02:47:50,760 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0547342Z 2026-09-03 02:47:50,760 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0547834Z 2026-09-03 02:47:50,761 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0548322Z 2026-09-03 02:47:50,761 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0548809Z 2026-09-03 02:47:50,761 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0549304Z 2026-09-03 02:47:50,762 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0549789Z 2026-09-03 02:47:50,762 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0550288Z 2026-09-03 02:47:50,763 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0550777Z 2026-09-03 02:47:50,763 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0551261Z 2026-09-03 02:47:50,764 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0551753Z 2026-09-03 02:47:50,764 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0552237Z 2026-09-03 02:47:50,765 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0552947Z 2026-09-03 02:47:50,765 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0553451Z 2026-09-03 02:47:50,766 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0554093Z 2026-09-03 02:47:50,766 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0554584Z 2026-09-03 02:47:50,767 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0555074Z 2026-09-03 02:47:50,767 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0555565Z 2026-09-03 02:47:50,768 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0556052Z 2026-09-03 02:47:50,768 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0556549Z 2026-09-03 02:47:50,769 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0557036Z 2026-09-03 02:47:50,769 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0557526Z 2026-09-03 02:47:50,769 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0558070Z 2026-09-03 02:47:50,770 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0558721Z 2026-09-03 02:47:50,770 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0559280Z 2026-09-03 02:47:50,771 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0559846Z 2026-09-03 02:47:50,771 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0560363Z 2026-09-03 02:47:50,772 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0560854Z 2026-09-03 02:47:50,772 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0561349Z 2026-09-03 02:47:50,773 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0561832Z 2026-09-03 02:47:50,773 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0562330Z 2026-09-03 02:47:50,774 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0563169Z 2026-09-03 02:47:50,774 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0563691Z 2026-09-03 02:47:50,775 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0564180Z 2026-09-03 02:47:50,775 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0564674Z 2026-09-03 02:47:50,776 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0565164Z 2026-09-03 02:47:50,776 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0565648Z 2026-09-03 02:47:50,776 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0566186Z 2026-09-03 02:47:50,777 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0566677Z 2026-09-03 02:47:50,777 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0567170Z 2026-09-03 02:47:50,778 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0567662Z 2026-09-03 02:47:50,778 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0568158Z 2026-09-03 02:47:50,779 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0568640Z 2026-09-03 02:47:50,779 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0569355Z 2026-09-03 02:47:50,780 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0569980Z 2026-09-03 02:47:50,780 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0570481Z 2026-09-03 02:47:50,780 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0570992Z 2026-09-03 02:47:50,781 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0571480Z 2026-09-03 02:47:50,781 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0571995Z 2026-09-03 02:47:50,782 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0572778Z 2026-09-03 02:47:50,782 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0573448Z 2026-09-03 02:47:50,783 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0573983Z 2026-09-03 02:47:50,783 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0574476Z 2026-09-03 02:47:50,784 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0574971Z 2026-09-03 02:47:50,784 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0575463Z 2026-09-03 02:47:50,785 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0575959Z 2026-09-03 02:47:50,785 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0576445Z 2026-09-03 02:47:50,786 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0576939Z 2026-09-03 02:47:50,786 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0577437Z 2026-09-03 02:47:50,786 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0577936Z 2026-09-03 02:47:50,787 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0578426Z 2026-09-03 02:47:50,787 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0578919Z 2026-09-03 02:47:50,788 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0579414Z 2026-09-03 02:47:50,788 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0579900Z 2026-09-03 02:47:50,789 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0580423Z 2026-09-03 02:47:50,789 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0580950Z 2026-09-03 02:47:50,790 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0581454Z 2026-09-03 02:47:50,790 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0582095Z 2026-09-03 02:47:50,790 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0582827Z 2026-09-03 02:47:50,791 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0583319Z 2026-09-03 02:47:50,791 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0583818Z 2026-09-03 02:47:50,792 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0584315Z 2026-09-03 02:47:50,792 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0584803Z 2026-09-03 02:47:50,793 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0585300Z 2026-09-03 02:47:50,793 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0585788Z 2026-09-03 02:47:50,794 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0586281Z 2026-09-03 02:47:50,794 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0586787Z 2026-09-03 02:47:50,795 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0587291Z 2026-09-03 02:47:50,795 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0587778Z 2026-09-03 02:47:50,796 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0588271Z 2026-09-03 02:47:50,796 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0588764Z 2026-09-03 02:47:50,796 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0589252Z 2026-09-03 02:47:50,797 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0589746Z 2026-09-03 02:47:50,797 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0590230Z 2026-09-03 02:47:50,798 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0590726Z 2026-09-03 02:47:50,798 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0591361Z 2026-09-03 02:47:50,799 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0591863Z 2026-09-03 02:47:50,799 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0592363Z 2026-09-03 02:47:50,800 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0593043Z 2026-09-03 02:47:50,800 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0593541Z 2026-09-03 02:47:50,800 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0594027Z 2026-09-03 02:47:50,801 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0594521Z 2026-09-03 02:47:50,801 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0595009Z 2026-09-03 02:47:50,802 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0595502Z 2026-09-03 02:47:50,802 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0596004Z 2026-09-03 02:47:50,803 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0596497Z 2026-09-03 02:47:50,803 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0597006Z 2026-09-03 02:47:50,804 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0597492Z 2026-09-03 02:47:50,804 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0597989Z 2026-09-03 02:47:50,805 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0598482Z 2026-09-03 02:47:50,805 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0598972Z 2026-09-03 02:47:50,806 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0599467Z 2026-09-03 02:47:50,806 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0599952Z 2026-09-03 02:47:50,807 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0600600Z 2026-09-03 02:47:50,807 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0601088Z 2026-09-03 02:47:50,807 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0601587Z 2026-09-03 02:47:50,808 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0602073Z 2026-09-03 02:47:50,808 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0602778Z 2026-09-03 02:47:50,809 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0603279Z 2026-09-03 02:47:50,809 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0603771Z 2026-09-03 02:47:50,810 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0604261Z 2026-09-03 02:47:50,810 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0604746Z 2026-09-03 02:47:50,811 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0605253Z 2026-09-03 02:47:50,811 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0605736Z 2026-09-03 02:47:50,812 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0606233Z 2026-09-03 02:47:50,812 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0606721Z 2026-09-03 02:47:50,813 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0607213Z 2026-09-03 02:47:50,813 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0607705Z 2026-09-03 02:47:50,813 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0608192Z 2026-09-03 02:47:50,814 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0608688Z 2026-09-03 02:47:50,814 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0609176Z 2026-09-03 02:47:50,815 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0609826Z 2026-09-03 02:47:50,815 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0610312Z 2026-09-03 02:47:50,816 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0610813Z 2026-09-03 02:47:50,816 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0611300Z 2026-09-03 02:47:50,817 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0611792Z 2026-09-03 02:47:50,817 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0612289Z 2026-09-03 02:47:50,818 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0613007Z 2026-09-03 02:47:50,818 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0613513Z 2026-09-03 02:47:50,818 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0613997Z 2026-09-03 02:47:50,819 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0614508Z 2026-09-03 02:47:50,819 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0614996Z 2026-09-03 02:47:50,820 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0615499Z 2026-09-03 02:47:50,820 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0615987Z 2026-09-03 02:47:50,821 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0616482Z 2026-09-03 02:47:50,821 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0616974Z 2026-09-03 02:47:50,822 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0617460Z 2026-09-03 02:47:50,822 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0617950Z 2026-09-03 02:47:50,823 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0618437Z 2026-09-03 02:47:50,823 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0619082Z 2026-09-03 02:47:50,824 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0619576Z 2026-09-03 02:47:50,824 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0620083Z 2026-09-03 02:47:50,825 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0620569Z 2026-09-03 02:47:50,825 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0621063Z 2026-09-03 02:47:50,825 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0621557Z 2026-09-03 02:47:50,826 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0622043Z 2026-09-03 02:47:50,826 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0622707Z 2026-09-03 02:47:50,827 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0623202Z 2026-09-03 02:47:50,827 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0623710Z 2026-09-03 02:47:50,828 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0624193Z 2026-09-03 02:47:50,828 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0624687Z 2026-09-03 02:47:50,829 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0625173Z 2026-09-03 02:47:50,829 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0625662Z 2026-09-03 02:47:50,830 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0626152Z 2026-09-03 02:47:50,830 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0626638Z 2026-09-03 02:47:50,830 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0627126Z 2026-09-03 02:47:50,831 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0627607Z 2026-09-03 02:47:50,832 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0628239Z 2026-09-03 02:47:50,832 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0628728Z 2026-09-03 02:47:50,832 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0629223Z 2026-09-03 02:47:50,833 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0629710Z 2026-09-03 02:47:50,833 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0630199Z 2026-09-03 02:47:50,834 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0630690Z 2026-09-03 02:47:50,834 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0631175Z 2026-09-03 02:47:50,835 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0631665Z 2026-09-03 02:47:50,835 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0632146Z 2026-09-03 02:47:50,836 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0632852Z 2026-09-03 02:47:50,836 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0633343Z 2026-09-03 02:47:50,837 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0633837Z 2026-09-03 02:47:50,837 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0634326Z 2026-09-03 02:47:50,838 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0634824Z 2026-09-03 02:47:50,838 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0635320Z 2026-09-03 02:47:50,839 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0635807Z 2026-09-03 02:47:50,839 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0636301Z 2026-09-03 02:47:50,839 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0636786Z 2026-09-03 02:47:50,840 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0637485Z 2026-09-03 02:47:50,840 WARNING app.connectors.tavily: Tavily API key not configured
+2026-09-03T02:47:51.0637939Z {
+2026-09-03T02:47:51.0638152Z   "discovery": {
+2026-09-03T02:47:51.0638398Z     "new_jobs": 0,
+2026-09-03T02:47:51.0638649Z     "duplicates": 0,
+2026-09-03T02:47:51.0638904Z     "fetched": 0,
+2026-09-03T02:47:51.0639122Z     "errors": [],
+2026-09-03T02:47:51.0639367Z     "employers_discovered": 0,
+2026-09-03T02:47:51.0639636Z     "immigration_facts": 0,
+2026-09-03T02:47:51.0639910Z     "opportunity_sources": 0,
+2026-09-03T02:47:51.0640182Z     "social_signals": 0,
+2026-09-03T02:47:51.0640433Z     "source_reports": [
+2026-09-03T02:47:51.0640664Z       {
+2026-09-03T02:47:51.0640898Z         "name": "tavily_web_search",
+2026-09-03T02:47:51.0641203Z         "kind": "tavily",
+2026-09-03T02:47:51.0641451Z         "mode": "real",
+2026-09-03T02:47:51.0641692Z         "queries": 21,
+2026-09-03T02:47:51.0641931Z         "fetched": 0,
+2026-09-03T02:47:51.0642188Z         "normalized": 0,
+2026-09-03T02:47:51.0642595Z         "duplicates": 0,
+2026-09-03T02:47:51.0642860Z         "new": 0,
+2026-09-03T02:47:51.0643077Z         "error": "",
+2026-09-03T02:47:51.0643325Z         "rate_status": "ok"
+2026-09-03T02:47:51.0643570Z       },
+2026-09-03T02:47:51.0643776Z       {
+2026-09-03T02:47:51.0644006Z         "name": "tavily_official_ats_search",
+2026-09-03T02:47:51.0644316Z         "kind": "tavily",
+2026-09-03T02:47:51.0644559Z         "mode": "real",
+2026-09-03T02:47:51.0644804Z         "queries": 21,
+2026-09-03T02:47:51.0645039Z         "fetched": 0,
+2026-09-03T02:47:51.0645279Z         "normalized": 0,
+2026-09-03T02:47:51.0645515Z         "duplicates": 0,
+2026-09-03T02:47:51.0645753Z         "new": 0,
+2026-09-03T02:47:51.0645969Z         "error": "",
+2026-09-03T02:47:51.0646209Z         "rate_status": "ok"
+2026-09-03T02:47:51.0646448Z       },
+2026-09-03T02:47:51.0646654Z       {
+2026-09-03T02:47:51.0646868Z         "name": "tavily_rekrute",
+2026-09-03T02:47:51.0647158Z         "kind": "tavily",
+2026-09-03T02:47:51.0647539Z         "mode": "real",
+2026-09-03T02:47:51.0647777Z         "queries": 21,
+2026-09-03T02:47:51.0648005Z         "fetched": 0,
+2026-09-03T02:47:51.0648243Z         "normalized": 0,
+2026-09-03T02:47:51.0648478Z         "duplicates": 0,
+2026-09-03T02:47:51.0648712Z         "new": 0,
+2026-09-03T02:47:51.0648925Z         "error": "",
+2026-09-03T02:47:51.0649163Z         "rate_status": "ok"
+2026-09-03T02:47:51.0649399Z       },
+2026-09-03T02:47:51.0649598Z       {
+2026-09-03T02:47:51.0649813Z         "name": "tavily_emploi_ma",
+2026-09-03T02:47:51.0650092Z         "kind": "tavily",
+2026-09-03T02:47:51.0650328Z         "mode": "real",
+2026-09-03T02:47:51.0650568Z         "queries": 21,
+2026-09-03T02:47:51.0650792Z         "fetched": 0,
+2026-09-03T02:47:51.0651028Z         "normalized": 0,
+2026-09-03T02:47:51.0651264Z         "duplicates": 0,
+2026-09-03T02:47:51.0651500Z         "new": 0,
+2026-09-03T02:47:51.0651713Z         "error": "",
+2026-09-03T02:47:51.0651959Z         "rate_status": "ok"
+2026-09-03T02:47:51.0652199Z       },
+2026-09-03T02:47:51.0652399Z       {
+2026-09-03T02:47:51.0652869Z         "name": "tavily_amaljob",
+2026-09-03T02:47:51.0653143Z         "kind": "tavily",
+2026-09-03T02:47:51.0653375Z         "mode": "real",
+2026-09-03T02:47:51.0653608Z         "queries": 21,
+2026-09-03T02:47:51.0653842Z         "fetched": 0,
+2026-09-03T02:47:51.0654073Z         "normalized": 0,
+2026-09-03T02:47:51.0654312Z         "duplicates": 0,
+2026-09-03T02:47:51.0654540Z         "new": 0,
+2026-09-03T02:47:51.0654757Z         "error": "",
+2026-09-03T02:47:51.0654982Z         "rate_status": "ok"
+2026-09-03T02:47:51.0655219Z       },
+2026-09-03T02:47:51.0655417Z       {
+2026-09-03T02:47:51.0655637Z         "name": "tavily_anapec",
+2026-09-03T02:47:51.0655904Z         "kind": "tavily",
+2026-09-03T02:47:51.0656144Z         "mode": "real",
+2026-09-03T02:47:51.0656371Z         "queries": 21,
+2026-09-03T02:47:51.0656598Z         "fetched": 0,
+2026-09-03T02:47:51.0656991Z         "normalized": 0,
+2026-09-03T02:47:51.0657238Z         "duplicates": 0,
+2026-09-03T02:47:51.0657466Z         "new": 0,
+2026-09-03T02:47:51.0657682Z         "error": "",
+2026-09-03T02:47:51.0657908Z         "rate_status": "ok"
+2026-09-03T02:47:51.0658147Z       },
+2026-09-03T02:47:51.0658341Z       {
+2026-09-03T02:47:51.0658562Z         "name": "tavily_emploi_public_ma",
+2026-09-03T02:47:51.0658851Z         "kind": "tavily",
+2026-09-03T02:47:51.0659093Z         "mode": "real",
+2026-09-03T02:47:51.0659321Z         "queries": 21,
+2026-09-03T02:47:51.0659545Z         "fetched": 0,
+2026-09-03T02:47:51.0659774Z         "normalized": 0,
+2026-09-03T02:47:51.0660150Z         "duplicates": 0,
+2026-09-03T02:47:51.0660378Z         "new": 0,
+2026-09-03T02:47:51.0660598Z         "error": "",
+2026-09-03T02:47:51.0660823Z         "rate_status": "ok"
+2026-09-03T02:47:51.0661060Z       },
+2026-09-03T02:47:51.0661255Z       {
+2026-09-03T02:47:51.0661480Z         "name": "tavily_marocannonces",
+2026-09-03T02:47:51.0661776Z         "kind": "tavily",
+2026-09-03T02:47:51.0662018Z         "mode": "real",
+2026-09-03T02:47:51.0662245Z         "queries": 21,
+2026-09-03T02:47:51.0662644Z         "fetched": 0,
+2026-09-03T02:47:51.0662905Z         "normalized": 0,
+2026-09-03T02:47:51.0663152Z         "duplicates": 0,
+2026-09-03T02:47:51.0663381Z         "new": 0,
+2026-09-03T02:47:51.0663600Z         "error": "",
+2026-09-03T02:47:51.0663824Z         "rate_status": "ok"
+2026-09-03T02:47:51.0664062Z       },
+2026-09-03T02:47:51.0664258Z       {
+2026-09-03T02:47:51.0664488Z         "name": "tavily_dreamjob",
+2026-09-03T02:47:51.0664761Z         "kind": "tavily",
+2026-09-03T02:47:51.0665006Z         "mode": "real",
+2026-09-03T02:47:51.0665229Z         "queries": 21,
+2026-09-03T02:47:51.0665465Z         "fetched": 0,
+2026-09-03T02:47:51.0665696Z         "normalized": 0,
+2026-09-03T02:47:51.0665932Z         "duplicates": 0,
+2026-09-03T02:47:51.0666169Z         "new": 0,
+2026-09-03T02:47:51.0666384Z         "error": "",
+2026-09-03T02:47:51.0666625Z         "rate_status": "ok"
+2026-09-03T02:47:51.0667006Z       },
+2026-09-03T02:47:51.0667208Z       {
+2026-09-03T02:47:51.0667422Z         "name": "tavily_indeed_morocco",
+2026-09-03T02:47:51.0667710Z         "kind": "tavily",
+2026-09-03T02:47:51.0667940Z         "mode": "real",
+2026-09-03T02:47:51.0668172Z         "queries": 21,
+2026-09-03T02:47:51.0668393Z         "fetched": 0,
+2026-09-03T02:47:51.0668625Z         "normalized": 0,
+2026-09-03T02:47:51.0668860Z         "duplicates": 0,
+2026-09-03T02:47:51.0669092Z         "new": 0,
+2026-09-03T02:47:51.0669305Z         "error": "",
+2026-09-03T02:47:51.0669535Z         "rate_status": "ok"
+2026-09-03T02:47:51.0669770Z       },
+2026-09-03T02:47:51.0669971Z       {
+2026-09-03T02:47:51.0670185Z         "name": "tavily_bghit_nekhdem",
+2026-09-03T02:47:51.0670486Z         "kind": "tavily",
+2026-09-03T02:47:51.0670725Z         "mode": "real",
+2026-09-03T02:47:51.0670958Z         "queries": 21,
+2026-09-03T02:47:51.0671184Z         "fetched": 0,
+2026-09-03T02:47:51.0671429Z         "normalized": 0,
+2026-09-03T02:47:51.0671673Z         "duplicates": 0,
+2026-09-03T02:47:51.0671912Z         "new": 0,
+2026-09-03T02:47:51.0672131Z         "error": "",
+2026-09-03T02:47:51.0672368Z         "rate_status": "ok"
+2026-09-03T02:47:51.0672821Z       },
+2026-09-03T02:47:51.0673030Z       {
+2026-09-03T02:47:51.0673245Z         "name": "tavily_jobzyn",
+2026-09-03T02:47:51.0673519Z         "kind": "tavily",
+2026-09-03T02:47:51.0673790Z         "mode": "real",
+2026-09-03T02:47:51.0674034Z         "queries": 21,
+2026-09-03T02:47:51.0674260Z         "fetched": 0,
+2026-09-03T02:47:51.0674498Z         "normalized": 0,
+2026-09-03T02:47:51.0674738Z         "duplicates": 0,
+2026-09-03T02:47:51.0674975Z         "new": 0,
+2026-09-03T02:47:51.0675187Z         "error": "",
+2026-09-03T02:47:51.0675423Z         "rate_status": "ok"
+2026-09-03T02:47:51.0675655Z       },
+2026-09-03T02:47:51.0675853Z       {
+2026-09-03T02:47:51.0676060Z         "name": "tavily_moncallcenter",
+2026-09-03T02:47:51.0676493Z         "kind": "tavily",
+2026-09-03T02:47:51.0676732Z         "mode": "real",
+2026-09-03T02:47:51.0677140Z         "queries": 21,
+2026-09-03T02:47:51.0677496Z         "fetched": 0,
+2026-09-03T02:47:51.0678038Z         "normalized": 0,
+2026-09-03T02:47:51.0678449Z         "duplicates": 0,
+2026-09-03T02:47:51.0678902Z         "new": 0,
+2026-09-03T02:47:51.0679250Z         "error": "",
+2026-09-03T02:47:51.0689816Z         "rate_status": "ok"
+2026-09-03T02:47:51.0690111Z       }
+2026-09-03T02:47:51.0690319Z     ]
+2026-09-03T02:47:51.0690521Z   },
+2026-09-03T02:47:51.0690721Z   "analysis": {
+2026-09-03T02:47:51.0690955Z     "analyzed": 0,
+2026-09-03T02:47:51.0691190Z     "decisions": {},
+2026-09-03T02:47:51.0691431Z     "errors": []
+2026-09-03T02:47:51.0691642Z   },
+2026-09-03T02:47:51.0691842Z   "action": {
+2026-09-03T02:47:51.0692057Z     "applied": 0,
+2026-09-03T02:47:51.0692310Z     "asked": 0,
+2026-09-03T02:47:51.0692783Z     "investigated": 0,
+2026-09-03T02:47:51.0693032Z     "blocked": 0,
+2026-09-03T02:47:51.0693264Z     "drafts": 0
+2026-09-03T02:47:51.0693482Z   },
+2026-09-03T02:47:51.0693677Z   "followup": {
+2026-09-03T02:47:51.0693891Z     "sent": [],
+2026-09-03T02:47:51.0694096Z     "blocked": [
+2026-09-03T02:47:51.0694314Z       2
+2026-09-03T02:47:51.0694510Z     ],
+2026-09-03T02:47:51.0694720Z     "errors": []
+2026-09-03T02:47:51.0694925Z   }
+2026-09-03T02:47:51.0695123Z }

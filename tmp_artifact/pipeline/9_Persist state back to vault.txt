@@ -1,0 +1,36 @@
+﻿2026-09-03T02:47:52.2144624Z ##[group]Run rm -f data/test_agent.db data/*.log* data/gemini_result.json data/run_*.json
+2026-09-03T02:47:52.2145693Z [36;1mrm -f data/test_agent.db data/*.log* data/gemini_result.json data/run_*.json[0m
+2026-09-03T02:47:52.2146424Z [36;1mrm -rf /tmp/vault[0m
+2026-09-03T02:47:52.2147210Z [36;1mgit clone --depth 1 "https://x-access-token:${VAULT_TOKEN}@${VAULT_URL#https://}" /tmp/vault[0m
+2026-09-03T02:47:52.2148082Z [36;1mcp -a data/. /tmp/vault/state/[0m
+2026-09-03T02:47:52.2148563Z [36;1mcd /tmp/vault[0m
+2026-09-03T02:47:52.2149037Z [36;1mgit config user.name "github-actions[bot]"[0m
+2026-09-03T02:47:52.2149832Z [36;1mgit config user.email "41898282+github-actions[bot]@users.noreply.github.com"[0m
+2026-09-03T02:47:52.2150583Z [36;1mgit add -A[0m
+2026-09-03T02:47:52.2151249Z [36;1mgit commit -m "state: snapshot $(date -u +%Y-%m-%dT%H:%M:%SZ)" || echo "no state change"[0m
+2026-09-03T02:47:52.2152011Z [36;1mgit push origin HEAD:main[0m
+2026-09-03T02:47:52.2208116Z shell: /usr/bin/bash -e {0}
+2026-09-03T02:47:52.2208591Z env:
+2026-09-03T02:47:52.2208936Z   LLM_PROVIDER: gemini
+2026-09-03T02:47:52.2209356Z   WHATSAPP_PHONE_NUMBER_ID: 1189875497552844
+2026-09-03T02:47:52.2209949Z   WHATSAPP_RECIPIENT: ***
+2026-09-03T02:47:52.2210396Z   WHATSAPP_TEMPLATE_NAME: job_digest
+2026-09-03T02:47:52.2210888Z   WHATSAPP_TEMPLATE_LANGUAGE: en
+2026-09-03T02:47:52.2211350Z   WHATSAPP_GRAPH_API_VERSION: v25.0
+2026-09-03T02:47:52.2211842Z   WHATSAPP_RUN_SUMMARY_MANAGED: workflow
+2026-09-03T02:47:52.2212310Z   EMAIL_MODE: draft
+2026-09-03T02:47:52.2212897Z   ENABLE_EMAIL: true
+2026-09-03T02:47:52.2213396Z   pythonLocation: /opt/hostedtoolcache/Python/3.11.16/x64
+2026-09-03T02:47:52.2214137Z   PKG_CONFIG_PATH: /opt/hostedtoolcache/Python/3.11.16/x64/lib/pkgconfig
+2026-09-03T02:47:52.2214873Z   Python_ROOT_DIR: /opt/hostedtoolcache/Python/3.11.16/x64
+2026-09-03T02:47:52.2215530Z   Python2_ROOT_DIR: /opt/hostedtoolcache/Python/3.11.16/x64
+2026-09-03T02:47:52.2216192Z   Python3_ROOT_DIR: /opt/hostedtoolcache/Python/3.11.16/x64
+2026-09-03T02:47:52.2216854Z   LD_LIBRARY_PATH: /opt/hostedtoolcache/Python/3.11.16/x64/lib
+2026-09-03T02:47:52.2218072Z   VAULT_TOKEN: ***
+2026-09-03T02:47:52.2218674Z   VAULT_URL: https://github.com/dubbishpsychic0000/ai-job-finder-vault.git
+2026-09-03T02:47:52.2219342Z ##[endgroup]
+2026-09-03T02:47:52.2337921Z Cloning into '/tmp/vault'...
+2026-09-03T02:47:52.7340132Z [main 00525a9] state: snapshot 2026-09-03T02:47:52Z
+2026-09-03T02:47:52.7340876Z  1 file changed, 0 insertions(+), 0 deletions(-)
+2026-09-03T02:47:53.7179635Z To https://github.com/dubbishpsychic0000/ai-job-finder-vault.git
+2026-09-03T02:47:53.7180497Z    a97da6c..00525a9  HEAD -> main
