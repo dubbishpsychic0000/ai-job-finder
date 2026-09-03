@@ -120,8 +120,17 @@ jobs:
           cat /tmp/run_report.json || true
           exit $(cat /tmp/pipeline_exit_code)
 
-      - name: Send WhatsApp run status
+      - name: Upload run artifacts
         if: ${{ always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: agent-logs
+          path: |
+            /tmp/run_report.json
+            /tmp/run.log
+
+      - name: Send WhatsApp run status
+        if: ${{ always() }}"
         env:
           WHATSAPP_ACCESS_TOKEN: ${{ secrets.WHATSAPP_ACCESS_TOKEN }}
         run: |
