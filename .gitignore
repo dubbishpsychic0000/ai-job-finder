@@ -15,6 +15,7 @@ data/*.log.err
 
 # personal candidate data — CVs, identity profile, job-search prefs (never push)
 candidate/cv/*.pdf
+candidate/cv/**/*.pdf
 candidate/profile.yaml
 candidate/preferences.yaml
 

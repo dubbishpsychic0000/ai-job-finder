@@ -19,8 +19,10 @@ from app.models import (
     Company,
     Contact,
     Decision,
+    Discovery,
     Email,
     EmailVerification,
+    Evidence,
     Event,
     ImmigrationFact,
     ImmigrationProgram,
@@ -43,7 +45,7 @@ def record_event(session: Session, type: str, message: str, level: str = "info",
 def get_or_create_company(session: Session, name: str, url: str = "", country: str = "",
                           *, careers_url: str = "", recruitment_url: str = "", industry: str = "",
                           source: str = "", sponsorship_signal: str = "",
-                          international_recruitment_signal: str = "") -> Company:
+                          international_recruitment_signal: str = "", official_domain: str = "") -> Company:
     norm = _normalize_name(name)
     if not norm:
         norm = "unknown"
@@ -51,6 +53,8 @@ def get_or_create_company(session: Session, name: str, url: str = "", country: s
     if existing:
         if careers_url and not existing.careers_url:
             existing.careers_url = careers_url
+        if official_domain and not existing.official_domain:
+            existing.official_domain = official_domain
         if recruitment_url and not existing.recruitment_url:
             existing.recruitment_url = recruitment_url
         if industry and not existing.industry:
@@ -63,7 +67,7 @@ def get_or_create_company(session: Session, name: str, url: str = "", country: s
             existing.international_recruitment_signal = international_recruitment_signal
         existing.last_checked_at = utcnow()
         return existing
-    c = Company(name=name, normalized_name=norm, website=url, country=country,
+    c = Company(name=name, normalized_name=norm, website=url, official_domain=official_domain, country=country,
                 careers_url=careers_url, recruitment_url=recruitment_url, industry=industry,
                 source=source,
                 sponsorship_signal=sponsorship_signal or "unknown",
@@ -72,6 +76,71 @@ def get_or_create_company(session: Session, name: str, url: str = "", country: s
     session.add(c)
     session.flush()
     return c
+
+
+def record_discovery(session: Session, *, kind: str, url: str = "", title: str = "",
+                     company_name: str = "", source: str = "", source_type: str = "",
+                     discovery_channel: str = "", evidence: dict | None = None,
+                     reason: str = "", relevance_score: float = 0,
+                     company_id: int | None = None, job_id: int | None = None,
+                     canonical_key: str = "") -> tuple[Discovery, bool]:
+    """Idempotently retain every discovery, including non-job opportunities."""
+    import hashlib
+
+    value = canonical_key or "|".join((kind, url, title, company_name)).lower()
+    key = hashlib.sha256(value.encode("utf-8")).hexdigest()
+    row = session.execute(select(Discovery).where(Discovery.canonical_key == key)).scalar_one_or_none()
+    if row:
+        row.last_seen_at = utcnow()
+        if company_id and not row.company_id:
+            row.company_id = company_id
+        if job_id and not row.job_id:
+            row.job_id = job_id
+        if evidence:
+            row.evidence = {**(row.evidence or {}), **evidence}
+        return row, False
+    row = Discovery(kind=kind, canonical_key=key, url=url, title=title[:512],
+                    company_name=company_name[:255], company_id=company_id, job_id=job_id,
+                    source=source, source_type=source_type, discovery_channel=discovery_channel,
+                    evidence=evidence or {}, reason=reason, relevance_score=relevance_score)
+    session.add(row)
+    session.flush()
+    return row, True
+
+
+def get_discoveries(session: Session, *, status: str | None = None,
+                    kind: str | None = None, limit: int = 100) -> list[Discovery]:
+    stmt = select(Discovery).order_by(Discovery.discovered_at.desc()).limit(limit)
+    if status:
+        stmt = stmt.where(Discovery.status == status)
+    if kind:
+        stmt = stmt.where(Discovery.kind == kind)
+    return list(session.execute(stmt).scalars().all())
+
+
+def add_evidence(session: Session, *, source_url: str, source_type: str = "website",
+                 page_title: str = "", field_name: str = "", extracted_value: str = "",
+                 snippet: str = "", domain_relationship: str = "", confidence: int = 0,
+                 reason_code: str = "", company_id: int | None = None,
+                 job_id: int | None = None) -> Evidence:
+    row = Evidence(company_id=company_id, job_id=job_id, source_url=source_url,
+                   source_type=source_type, page_title=page_title, field_name=field_name,
+                   extracted_value=extracted_value, snippet=snippet,
+                   domain_relationship=domain_relationship, confidence=confidence,
+                   reason_code=reason_code)
+    session.add(row)
+    session.flush()
+    return row
+
+
+def get_evidence(session: Session, *, company_id: int | None = None,
+                 job_id: int | None = None) -> list[Evidence]:
+    stmt = select(Evidence).order_by(Evidence.discovered_at, Evidence.id)
+    if company_id is not None:
+        stmt = stmt.where(Evidence.company_id == company_id)
+    if job_id is not None:
+        stmt = stmt.where(Evidence.job_id == job_id)
+    return list(session.execute(stmt).scalars().all())
 
 
 def _normalize_name(name: str) -> str:

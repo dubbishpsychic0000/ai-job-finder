@@ -78,6 +78,13 @@ async def run_social_signal_discovery(session: Session, config: AgentConfig,
             )
             if created:
                 report.stored += 1
+            kind = "RECRUITMENT_POST" if (o.raw or {}).get("content_kind") == "recruitment_post" else "JOB"
+            mem.store.record_discovery(
+                session, kind=kind, url=o.url, title=o.title, source=o.source,
+                source_type="linkedin_index", discovery_channel=channel,
+                evidence={"snippet": o.description, "verification_status": o.verification_status},
+                reason="publicly indexed LinkedIn recruitment signal",
+            )
         if results:
             detail = ", ".join(f"{k}:{v}" for k, v in by_channel.items()) or "total:0"
             mem.store.record_event(

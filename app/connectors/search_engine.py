@@ -58,13 +58,16 @@ class SearchEngineSource:
 
     def __init__(self, results_per_query: int = 8, official_only: bool = False,
                  domains: list[str] | None = None, source_name: str = "search_engine",
-                 result_source_type: str = "search_engine", proxy: str | None = None):
+                 result_source_type: str = "search_engine", proxy: str | None = None,
+                 allow_social_index: bool = False):
         self.results_per_query = results_per_query
         self.official_only = official_only
         self.domains = [domain.lower().lstrip(".") for domain in (domains or [])]
         self.source_name = source_name
         self.result_source_type = result_source_type
         self.proxy = proxy
+        self.allow_social_index = allow_social_index
+        self.last_status = "ready"
 
     async def search(self, query: str, location: str = "") -> list[Opportunity]:
         q = f"{query} {location} job".strip()
@@ -87,6 +90,7 @@ class SearchEngineSource:
             resp.raise_for_status()
         except Exception as exc:
             logger.warning("Search engine query failed: %s", exc)
+            self.last_status = "degraded"
             return out
 
         soup = BeautifulSoup(resp.text, "lxml")
@@ -102,7 +106,8 @@ class SearchEngineSource:
             if not title:
                 continue
             ats = detect_ats(href)
-            if not self._allowed(href, official_only=self.official_only, ats=ats, domains=self.domains):
+            if not self._allowed(href, official_only=self.official_only, ats=ats, domains=self.domains,
+                                 allow_social_index=self.allow_social_index):
                 continue
             out.append(Opportunity(
                 source=self.source_name,
@@ -122,16 +127,18 @@ class SearchEngineSource:
                 employment_type="",
                 raw={"query": q},
             ))
+        self.last_status = "ok" if out else "empty"
         return out
 
     @staticmethod
     def _allowed(href: str, *, official_only: bool = False, ats: str = "",
-                 domains: list[str] | None = None) -> bool:
+                 domains: list[str] | None = None, allow_social_index: bool = False) -> bool:
         if not href.startswith("http"):
             return False
         host = urllib.parse.urlparse(href).netloc.lower()
         in_domain_scope = not domains or any(host == d or host.endswith("." + d) for d in domains)
-        return (not any(b in host for b in BLOCKED_DOMAINS) and in_domain_scope and
+        blocked = any(b in host for b in BLOCKED_DOMAINS)
+        return ((allow_social_index or not blocked) and in_domain_scope and
                 (not official_only or bool(ats)))
 
 

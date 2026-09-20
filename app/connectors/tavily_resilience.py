@@ -201,6 +201,7 @@ class ResilientTavily:
         self.source_name = source_name
         self.result_source_type = result_source_type
         self.name = f"tavily_resilient:{self.keys[0].fp}"
+        self.last_status = "ready"
 
     def _allowed(self, href: str, *, ats: str = "") -> bool:
         from urllib.parse import urlparse
@@ -231,6 +232,7 @@ class ResilientTavily:
         cache_key = _cache_key(q, location)
         cached = self.cache.get(cache_key)
         if cached is not None:
+            self.last_status = "ok" if cached else "empty"
             # Convert cached dicts back to Opportunity objects
             return [Opportunity(**d) for d in cached]
 
@@ -245,7 +247,7 @@ class ResilientTavily:
                     json={
                         "api_key": key.api_key,
                         "query": q,
-                        "search_depth": "advanced",
+                        "search_depth": os.getenv("TAVILY_SEARCH_DEPTH", "basic"),
                         "include_answer": False,
                         "include_raw_content": False,
                         "max_results": self.results_per_query,
@@ -311,19 +313,23 @@ class ResilientTavily:
                         raw={"query": q},
                     ))
 
+                # An empty, successful response is a valid negative result.
+                # Cache it and charge the one request so key rotation cannot
+                # turn an empty query into one request per credential.
+                key.budget.record()
+                self.cache.put(cache_key, [o.to_dict() for o in out])
                 if out:
-                    key.budget.record()
-                    # Convert Opportunity objects to dicts for JSON serialization
-                    self.cache.put(cache_key, [o.to_dict() for o in out])
                     logger.info("Tavily key %s success, %d results", key.fp, len(out))
-                    return out
                 else:
-                    logger.warning("Tavily key %s returned empty results", key.fp)
+                    logger.info("Tavily key %s returned empty results", key.fp)
+                self.last_status = "ok" if out else "empty"
+                return out
 
             except Exception as exc:
                 logger.warning("Tavily key %s failed: %s -> trying next key", key.fp, str(exc)[:200])
                 if _is_quota_error(exc):
                     key.budget.exhaust()
 
+        self.last_status = "degraded"
         logger.info("all Tavily keys spent/failed -> returning empty")
         return []

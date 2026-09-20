@@ -4,7 +4,8 @@ LinkedIn restricts automated access. This connector therefore NEVER touches
 linkedin.com directly: no logins, no session cookies, no scraping. It uses the
 two authorized channels permitted for protected platforms:
 
-  1. the public search-engine index — `site:linkedin.com/jobs` results fetched
+  1. the public search-engine index — `site:linkedin.com/jobs` and
+     `site:linkedin.com/posts` results fetched
      through the (injectable) DuckDuckGo connector, which itself never logs in;
   2. job URLs the user explicitly provided in config (`urls`) — surfaced as
      unverified leads for the user to confirm.
@@ -50,7 +51,7 @@ class LinkedInJobsSource:
     access_mode = "public"
     policy_notice = (
         "Authorized paths only (spec §34): public search-engine index results for "
-        "site:linkedin.com/jobs plus URLs the user provides. No login, no session "
+        "site:linkedin.com/jobs or /posts plus URLs the user provides. No login, no session "
         "cookies, no direct scraping of linkedin.com."
     )
 
@@ -81,7 +82,8 @@ class LinkedInJobsSource:
         return out
 
     async def _index(self, query: str, location: str) -> list[Opportunity]:
-        results = await self.search_fn(f"site:{LINKEDIN_HOST_MARK}/jobs {query}",
+        results = await self.search_fn(
+            f"(site:{LINKEDIN_HOST_MARK}/jobs OR site:{LINKEDIN_HOST_MARK}/posts) {query}",
                                        location) or []
         out: list[Opportunity] = []
         for item in results:
@@ -93,9 +95,11 @@ class LinkedInJobsSource:
             title = str(item.get("title", "") or "")[:200]
             if not title:
                 continue
+            path = urllib.parse.urlparse(url).path.lower()
+            post = "/posts/" in path or "/feed/update/" in path
             out.append(Opportunity(
                 source=self.name,
-                source_type="social_signal",
+                source_type="recruitment_post" if post else "social_signal",
                 external_id=url,
                 title=title,
                 location=location,
@@ -103,7 +107,8 @@ class LinkedInJobsSource:
                 description=str(item.get("snippet", "") or "")[:20000],
                 url=url,
                 verification_status="unverified",
-                raw={"platform": "linkedin", "channel": "search_engine_index"},
+                raw={"platform": "linkedin", "channel": "search_engine_index",
+                     "content_kind": "recruitment_post" if post else "job"},
             ))
         return out
 
@@ -122,5 +127,7 @@ class LinkedInJobsSource:
 
 
 async def _index_search(query: str, location: str = "") -> list[dict]:
-    ops = await SearchEngineSource(results_per_query=8).search(query, location)
+    # The search result URL is recorded as evidence, but linkedin.com is never
+    # fetched. The normal search connector blocks social domains by design.
+    ops = await SearchEngineSource(results_per_query=8, allow_social_index=True).search(query, location)
     return [{"url": o.url, "title": o.title, "snippet": o.description} for o in ops if o.url]

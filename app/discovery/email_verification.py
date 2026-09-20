@@ -12,7 +12,9 @@ from app import memory as mem
 
 EMAIL_RE = re.compile(r"(?<![\w.+-])([A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,})(?![\w.+-])", re.I)
 PLACEHOLDER_DOMAINS = {"example.com", "example.org", "example.net", "test.com", "test.org", "placeholder.com", "fake.com", "noreply.com", "no-reply.com"}
-PLACEHOLDER_MARKERS = ("example", "test", "placeholder", "fake", "your-email", "email@")
+PLACEHOLDER_MARKERS = ("example", "placeholder", "fake", "your-email", "email@")
+FREE_EMAIL_DOMAINS = {"gmail.com", "outlook.com", "hotmail.com", "yahoo.com", "proton.me", "protonmail.com"}
+ATS_VENDOR_DOMAINS = {"greenhouse.io", "lever.co", "smartrecruiters.com", "workday.com", "icims.com"}
 
 
 @dataclass(frozen=True)
@@ -47,12 +49,29 @@ class EmailVerificationService:
                official: bool = False, job_id: int | None = None) -> Verification:
         email = (email or "").strip().lower()
         domain = urlparse(source_url).netloc.lower().split(":")[0]
+        email_domain = email.rsplit("@", 1)[-1] if "@" in email else ""
         if not is_safe_email(email):
             result = Verification(email=email, source_url=source_url, source_domain=domain,
                                   reason="placeholder, test, malformed, or no-reply email")
         elif official or source_type in {"ats", "company_career"}:
-            method = "official_employer_posting" if source_type in {"ats", "company_career"} else "official_company_page"
-            result = Verification(email, source_url, domain, True, method, 100)
+            same_domain = bool(domain) and (
+                email_domain == domain or email_domain.endswith("." + domain) or domain.endswith("." + email_domain)
+            )
+            ats_page = source_type == "ats" and (
+                domain in ATS_VENDOR_DOMAINS
+                or any(domain.endswith("." + vendor) for vendor in ATS_VENDOR_DOMAINS)
+            )
+            vendor_domain = email_domain in ATS_VENDOR_DOMAINS or any(
+                email_domain.endswith("." + vendor) for vendor in ATS_VENDOR_DOMAINS
+            )
+            if (not same_domain and not ats_page) or vendor_domain or email_domain in FREE_EMAIL_DOMAINS:
+                result = Verification(
+                    email, source_url, domain, False, "domain_mismatch", 20,
+                    "address is not on the employer's domain",
+                )
+            else:
+                method = "official_employer_posting" if source_type in {"ats", "company_career"} else "official_company_page"
+                result = Verification(email, source_url, domain, True, method, 100)
         elif source_type == "recruitment":
             result = Verification(email, source_url, domain, True, "trusted_recruitment_agency", 70)
         else:

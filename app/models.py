@@ -39,6 +39,7 @@ class Company(Base):
     name: Mapped[str] = mapped_column(String(255))
     normalized_name: Mapped[str] = mapped_column(String(255), index=True)
     website: Mapped[str] = mapped_column(String(512), default="")
+    official_domain: Mapped[str] = mapped_column(String(255), default="", index=True)
     country: Mapped[str] = mapped_column(String(64), default="")
     sponsorship_policy: Mapped[str] = mapped_column(Text, default="")
     notes: Mapped[str] = mapped_column(Text, default="")
@@ -49,6 +50,9 @@ class Company(Base):
     international_recruitment_signal: Mapped[str] = mapped_column(String(16), default="unknown")
     sponsorship_signal: Mapped[str] = mapped_column(String(16), default="unknown")
     last_checked_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    last_researched_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    discovery_reason: Mapped[str] = mapped_column(Text, default="")
+    relevance_score: Mapped[float] = mapped_column(Float, default=0)
     source: Mapped[str] = mapped_column(String(128), default="")
 
 
@@ -117,6 +121,30 @@ class OpportunitySource(Base):
     verification_status: Mapped[str] = mapped_column(String(16), default="unverified")
     discovered_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
     last_checked_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
+
+class Discovery(Base):
+    """Persistent, provenance-first intake ledger for all discovery channels."""
+
+    __tablename__ = "discoveries"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    kind: Mapped[str] = mapped_column(String(32), index=True)
+    canonical_key: Mapped[str] = mapped_column(String(512), index=True)
+    url: Mapped[str] = mapped_column(String(2048), default="")
+    title: Mapped[str] = mapped_column(String(512), default="")
+    company_name: Mapped[str] = mapped_column(String(255), default="")
+    company_id: Mapped[int | None] = mapped_column(ForeignKey("companies.id"), nullable=True, index=True)
+    job_id: Mapped[int | None] = mapped_column(ForeignKey("jobs.id"), nullable=True, index=True)
+    source: Mapped[str] = mapped_column(String(128), default="")
+    source_type: Mapped[str] = mapped_column(String(64), default="")
+    discovery_channel: Mapped[str] = mapped_column(String(64), default="")
+    evidence: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    reason: Mapped[str] = mapped_column(Text, default="")
+    relevance_score: Mapped[float] = mapped_column(Float, default=0)
+    status: Mapped[str] = mapped_column(String(32), default="new", index=True)
+    discovered_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, index=True)
+    last_seen_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+    researched_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
 
 class QueryStat(Base):
@@ -233,6 +261,25 @@ class EmailVerification(Base):
     verification_method: Mapped[str] = mapped_column(String(64), default="")
     verified_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     confidence: Mapped[int] = mapped_column(Integer, default=0)
+
+
+class Evidence(Base):
+    """Immutable-ish provenance for facts discovered on public web pages."""
+
+    __tablename__ = "evidence"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    company_id: Mapped[int | None] = mapped_column(ForeignKey("companies.id"), nullable=True, index=True)
+    job_id: Mapped[int | None] = mapped_column(ForeignKey("jobs.id"), nullable=True, index=True)
+    source_url: Mapped[str] = mapped_column(String(2048))
+    source_type: Mapped[str] = mapped_column(String(64), default="website")
+    page_title: Mapped[str] = mapped_column(String(512), default="")
+    field_name: Mapped[str] = mapped_column(String(64), default="")
+    extracted_value: Mapped[str] = mapped_column(Text, default="")
+    snippet: Mapped[str] = mapped_column(Text, default="")
+    domain_relationship: Mapped[str] = mapped_column(String(32), default="")
+    confidence: Mapped[int] = mapped_column(Integer, default=0)
+    reason_code: Mapped[str] = mapped_column(String(64), default="")
+    discovered_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, index=True)
 
 
 class Notification(Base):
