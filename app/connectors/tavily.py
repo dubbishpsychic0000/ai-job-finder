@@ -52,6 +52,7 @@ class TavilySource:
         self.source_name = source_name
         self.result_source_type = result_source_type
         self._api_key = api_key  # Can be None, resolved at search time
+        self.last_status = "ready"
 
     def _get_api_key(self) -> str:
         return self._api_key or get_tavily_key() or os.getenv("TAVILY_API_KEY", "")
@@ -67,6 +68,7 @@ class TavilySource:
         api_key = self._get_api_key()
         if not api_key:
             logger.warning("Tavily API key not configured")
+            self.last_status = "unconfigured"
             return out
 
         try:
@@ -75,7 +77,7 @@ class TavilySource:
                 json={
                     "api_key": api_key,
                     "query": q,
-                    "search_depth": "advanced",
+                    "search_depth": os.getenv("TAVILY_SEARCH_DEPTH", "basic"),
                     "include_answer": False,
                     "include_raw_content": False,
                     "max_results": self.results_per_query,
@@ -103,9 +105,11 @@ class TavilySource:
                 logger.info("Tavily response status=%s, keys=%s", resp.status_code, list(data.keys()) if isinstance(data, dict) else type(data))
         except Exception as exc:
             logger.warning("Tavily search query failed: %s", exc)
+            self.last_status = "degraded"
             return out
 
         results = data.get("results", [])
+        self.last_status = "ok" if results else "empty"
         for i, result in enumerate(results):
             if i >= self.results_per_query:
                 break

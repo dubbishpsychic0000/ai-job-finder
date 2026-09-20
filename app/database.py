@@ -88,12 +88,16 @@ def _upgrade_schema() -> None:
     })
 
     _add_missing_columns(insp, "companies", {
+        "official_domain": "VARCHAR(255) DEFAULT ''",
         "industry": "VARCHAR(128) DEFAULT ''",
         "careers_url": "VARCHAR(1024) DEFAULT ''",
         "recruitment_url": "VARCHAR(1024) DEFAULT ''",
         "international_recruitment_signal": "VARCHAR(16) DEFAULT 'unknown'",
         "sponsorship_signal": "VARCHAR(16) DEFAULT 'unknown'",
         "last_checked_at": "DATETIME",
+        "last_researched_at": "DATETIME",
+        "discovery_reason": "TEXT DEFAULT ''",
+        "relevance_score": "FLOAT DEFAULT 0",
         "source": "VARCHAR(128) DEFAULT ''",
     })
 

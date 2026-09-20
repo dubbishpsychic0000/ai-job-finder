@@ -19,6 +19,7 @@ from app.discovery.email_verification import EmailVerificationService
 from app.discovery.opportunity_details import classify_opportunity, detect_application_method
 from app.discovery.verification import freshness_label
 from app.discovery.vocabulary import CandidateVocabulary
+from app.discovery.website_researcher import host_domain
 from app.normalization import normalize
 
 logger = logging.getLogger(__name__)
@@ -41,6 +42,7 @@ class DiscoveryReport:
     # One entry per configured connector.  This makes a zero-result run
     # explainable without treating it as an error.
     source_reports: list[dict] = field(default_factory=list)
+    alerts: list[str] = field(default_factory=list)
 
 
 def _load_source_connectors(path: Path | None = None) -> list[tuple[dict, object]]:
@@ -129,6 +131,15 @@ async def run_discovery(session: Session, config: AgentConfig, prefs: Preference
     from app.workflows.adaptive_plan import build_adaptive_plan
 
     connectors = _load_source_connectors(sources_path)
+    researcher = None
+    if discovery_cfg.get("website_research", False):
+        from app.discovery.website_researcher import WebsiteResearcher
+        researcher = WebsiteResearcher(
+            max_pages=int(discovery_cfg.get("website_research_max_pages", 12)),
+            per_host_delay=float(discovery_cfg.get("website_research_delay_seconds", 0.25)),
+            state_path=ROOT_DIR / "data" / "website_research_state.json",
+            session=session,
+        )
     plan = build_adaptive_plan(session, prefs, config, vocab=vocab, profile=profile,
                                max_per_country=max_per_country,
                                max_queries_per_run=max_queries,
@@ -182,6 +193,7 @@ async def run_discovery(session: Session, config: AgentConfig, prefs: Preference
             "new": 0,
             "error": "",
             "rate_status": "ok",
+            "health": "ready",
         }
         source = mem.store.upsert_source(session, source_name,
                                          getattr(connector, "kind", "?"), str(source_cfg.get("path", "")))
@@ -231,6 +243,19 @@ async def run_discovery(session: Session, config: AgentConfig, prefs: Preference
                     sponsorship_signal=opp.sponsorship_signal,
                     international_recruitment_signal=opp.international_candidate_signal,
                 )
+                raw_channel = (opp.raw or {}).get("channel", "")
+                kind = "RECRUITMENT_POST" if src_type == "recruitment_post" else "JOB"
+                if src_type in {"company_career", "ats"}:
+                    kind = "CAREER_PAGE" if src_type == "company_career" else "JOB"
+                mem.store.record_discovery(
+                    session, kind=kind, url=opp.url, title=opp.title,
+                    company_name=opp.company or "", company_id=company.id,
+                    source=opp.source, source_type=src_type,
+                    discovery_channel=raw_channel or ("indexed" if "search" in source_name else "direct"),
+                    evidence={"description": opp.description[:4000], "query": combo["query"],
+                              "location": combo["location"]},
+                    reason="discovered opportunity", relevance_score=quality,
+                )
                 job_data = {
                     "source": opp.source,
                     "external_id": opp.external_id,
@@ -267,6 +292,11 @@ async def run_discovery(session: Session, config: AgentConfig, prefs: Preference
                 }
                 job, created = mem.store.upsert_job(session, job_data)
                 if created:
+                    if researcher is not None and src_type in {"company_career", "ats"} and opp.url:
+                        researcher.research_and_apply(
+                            opp.url, company_id=company.id, job_id=job.id,
+                            official_domain=host_domain(opp.url),
+                        )
                     verification = EmailVerificationService(session).verify_job(job, source_type=src_type)
                     # Never copy an unverified string into a job as a sendable recipient.
                     job.contact_email = verification.email if verification.verified else ""
@@ -315,9 +345,18 @@ async def run_discovery(session: Session, config: AgentConfig, prefs: Preference
             if "429" in str(exc) or "rate limit" in str(exc).lower():
                 source_report["rate_status"] = "limited"
         finally:
+            health = getattr(connector, "last_status", "")
+            if failure:
+                health = "degraded"
+            elif not source_report["fetched"]:
+                health = health if health in {"unconfigured", "degraded", "blocked"} else "empty"
+            source_report["health"] = health or "ok"
             mem.store.mark_source_fetched(session, source, items_found, error=failure)
             report.source_reports.append(source_report)
 
+    if connectors and report.opportunities_fetched == 0:
+        report.alerts.append("all configured discovery sources returned zero opportunities")
+        mem.store.record_event(session, "discovery", report.alerts[-1], "warning", {})
     mem.store.record_event(session, "discovery",
                            f"found {report.new_jobs} new jobs ({report.opportunities_fetched} fetched, "
                            f"{report.duplicates} dupes)", "info", {"new": report.new_jobs})

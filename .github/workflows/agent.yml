@@ -51,9 +51,8 @@ jobs:
       # A manual dispatch may still explicitly choose live after review.
       EMAIL_MODE: ${{ inputs.email_mode || 'draft' }}
       ENABLE_EMAIL: ${{ (inputs.email_mode || 'draft') != 'dry_run' && 'true' || 'false' }}
-      # Drastically lower application thresholds to generate drafts for testing
-      MIN_APPLICATION_SCORE: 30
-      MIN_APPLICATION_CONFIDENCE: 0.2
+      MIN_APPLICATION_SCORE: 80
+      MIN_APPLICATION_CONFIDENCE: 0.8
     steps:
       - name: Checkout public repo
         uses: actions/checkout@v4
@@ -98,8 +97,8 @@ jobs:
           EMAIL_MODE=${{ inputs.email_mode || 'draft' }}
           EMAIL_PROVIDER=gmail
           EMAIL_FROM=omar.benhamid@gmail.com
-          MIN_APPLICATION_SCORE=30
-          MIN_APPLICATION_CONFIDENCE=0.2
+          MIN_APPLICATION_SCORE=80
+          MIN_APPLICATION_CONFIDENCE=0.8
           TAVILY_DEBUG=1
           LLM_DAILY_BUDGET=50
           EOF
@@ -121,14 +120,12 @@ jobs:
             echo "✓ Loaded Gemini keys from secrets"
           fi
            
-          # Reset API budgets for this run (they may be exhausted from previous runs)
-          rm -f data/tavily_budget_*.json data/gemini_budget_*.json
-          echo "✓ Reset API budget tracking (Tavily + Gemini)"
+          echo "✓ Preserved API budget tracking from the private vault"
 
       - name: Reset ephemeral runtime state
         run: |
-          # Remove local SQLite state, caches, and transient LLM outputs so each run starts fresh
-          rm -f data/test_agent.db data/tavily_cache.json data/*.sqlite data/*.db || true
+          # Remove only transient outputs; persisted caches and budgets protect quotas.
+          rm -f data/test_agent.db data/*.sqlite data/*.db || true
           rm -f data/gemini_result.json data/run_*.json || true
           echo "✓ Cleared runtime DB/cache files before run"
 

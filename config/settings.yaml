@@ -56,6 +56,10 @@ discovery:
   max_requests_per_source: 60      # §25 per-source request budget per run (0 = unlimited)
   parallel_fetch: false            # §26 — dispatch all source searches concurrently (results identical)
   social_signal_discovery: false    # LinkedIn/Meta + user-provided social signals (§15-18) — authorized only
+  website_research: false           # robots-aware official-site research for discovered companies/jobs
+  website_research_max_pages: 12
+  website_research_delay_seconds: 0.25
+  company_universe_discovery: false
   social_sources_path: "config/social_sources.yaml"
   country_ranking_weights:          # §12 — relative importance of each scoring dimension
     language: 25
