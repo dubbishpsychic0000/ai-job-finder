@@ -10,6 +10,7 @@ import json
 import math
 import os
 import re
+import time
 import unicodedata
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
@@ -51,6 +52,8 @@ DEFAULT_MAX_COMPANIES = 20
 HARD_MAX_COMPANIES = 50
 MAX_WEBSITE_SEARCH_RESULTS = 8
 MAX_TAVILY_API_CALLS_PER_RUN = BTP_TAVILY_DAILY_RESERVE
+MAX_DUCKDUCKGO_API_CALLS_PER_RUN = 3
+DUCKDUCKGO_MIN_DELAY_SECONDS = 1.0
 MAX_CITY_SEARCHES_PER_RUN = 2
 CITY_SEARCH_STATE_PATH = ROOT_DIR / "data" / "btp_search_state.json"
 OVERPASS_CACHE_PATH = ROOT_DIR / "data" / "btp_overpass_cache.json"
@@ -95,6 +98,48 @@ TERMINAL_TARGET_STATUSES = {
 
 class PublicSearchBudgetError(RuntimeError):
     """Raised when the BTP workflow reaches its bounded public-search budget."""
+
+
+class _BoundedPublicSearchRouter:
+    """Use Tavily when available, then bounded DuckDuckGo fallback."""
+
+    def __init__(
+        self,
+        primary=None,
+        fallback=None,
+        *,
+        max_fallback_calls: int = MAX_DUCKDUCKGO_API_CALLS_PER_RUN,
+    ):
+        self.primary = primary
+        self.fallback = fallback or PublicCompanyWebsiteFinder._search
+        self.max_fallback_calls = max(0, max_fallback_calls)
+        self.fallback_calls = 0
+        self.primary_unavailable = primary is None
+        self._last_fallback_call = 0.0
+
+    def __call__(self, query: str) -> list[dict[str, str]]:
+        primary_error = None
+        if not self.primary_unavailable:
+            try:
+                return self.primary(query)
+            except Exception as exc:
+                primary_error = exc
+                self.primary_unavailable = True
+        if self.fallback_calls >= self.max_fallback_calls:
+            raise PublicSearchBudgetError(
+                "bounded public-search providers are unavailable or their run budgets are exhausted"
+            ) from primary_error
+        delay = DUCKDUCKGO_MIN_DELAY_SECONDS - (time.monotonic() - self._last_fallback_call)
+        if delay > 0:
+            time.sleep(delay)
+        self.fallback_calls += 1
+        self._last_fallback_call = time.monotonic()
+        try:
+            return self.fallback(query)
+        except Exception as exc:
+            raise PublicSearchBudgetError(
+                f"bounded public-search providers are unavailable: {exc}"
+            ) from (primary_error or exc)
 
 
 class BtpOutreachState:
@@ -234,6 +279,9 @@ class BtpOutreachReport:
     wikidata_candidates: int = 0
     seed_candidates: int = 0
     web_candidates: int = 0
+    known_website_candidates: int = 0
+    website_search_required: int = 0
+    search_budget_deferred: int = 0
     processed: int = 0
     researched: int = 0
     drafts: int = 0
@@ -265,6 +313,7 @@ class BtpOutreachReport:
             "analysis": {"analyzed": 0, "decisions": {}, "errors": []},
             "action": {
                 "applied": 0,
+                "sent": 0,
                 "asked": 0,
                 "investigated": 0,
                 "blocked": self.blocked,
@@ -272,17 +321,28 @@ class BtpOutreachReport:
                 "drafts": self.drafts,
                 "btp": {
                     "candidates": self.candidates,
+                    "known_website_candidates": self.known_website_candidates,
+                    "website_search_required": self.website_search_required,
+                    "search_budget_deferred": self.search_budget_deferred,
                     "osm_candidates": self.osm_candidates,
                     "wikidata_candidates": self.wikidata_candidates,
                     "seed_candidates": self.seed_candidates,
                     "web_candidates": self.web_candidates,
                     "processed": self.processed,
                     "researched": self.researched,
+                    "drafts": self.drafts,
+                    "sent": 0,
+                    "gmail_drafts_confirmed": sum(
+                        company.get("gmail_draft_confirmed", False)
+                        for company in self.companies
+                    ),
                     "existing": self.existing,
                     "no_website": self.no_website,
+                    "no_official_website": self.no_website,
                     "no_spontaneous_instructions": self.no_spontaneous_instructions,
                     "no_qualifying_email": self.no_qualifying_email,
                     "portal_or_form": self.portal_or_form,
+                    "blocked": self.blocked,
                     "search_budget_limited": self.search_budget_limited,
                     "daily_limit_reached": self.daily_limit_reached,
                 },
@@ -665,7 +725,7 @@ def _configured_public_search():
     configured_keys = os.getenv("TAVILY_API_KEYS") or os.getenv("TAVILY_API_KEY", "")
     api_keys = [key.strip() for key in configured_keys.split(",") if key.strip()]
     if not api_keys:
-        return PublicCompanyWebsiteFinder._search
+        return _BoundedPublicSearchRouter()
 
     data_dir = ROOT_DIR / "data"
     data_dir.mkdir(parents=True, exist_ok=True)
@@ -689,9 +749,11 @@ def _configured_public_search():
         query_suffix="",
         max_key_attempts=1,
     )
-    return _TavilyCompanySearch(
-        connector,
-        max_api_calls=BTP_TAVILY_DAILY_RESERVE,
+    return _BoundedPublicSearchRouter(
+        primary=_TavilyCompanySearch(
+            connector,
+            max_api_calls=BTP_TAVILY_DAILY_RESERVE,
+        ),
     )
 
 
@@ -1178,6 +1240,12 @@ def run_btp_outreach(
         MAX_CANDIDATES,
     )
     report.candidates = len(candidates)
+    report.known_website_candidates = sum(
+        bool(_eligible_website(candidate.website)) for candidate in candidates
+    )
+    report.website_search_required = (
+        report.candidates - report.known_website_candidates
+    )
     targets = []
     for candidate in candidates:
         if screening_state and screening_state.is_suppressed(candidate):
@@ -1242,6 +1310,11 @@ def run_btp_outreach(
             continue
         targets.append((candidate, company, target, existing_outreach))
 
+    targets.sort(key=lambda item: (
+        not bool(_eligible_website(item[0].website)),
+        item[0].distance_km,
+        item[0].name.casefold(),
+    ))
     targets = targets[:cap]
     report.processed = len(targets)
 
@@ -1271,7 +1344,11 @@ def run_btp_outreach(
                 target.status = "search_budget_deferred"
                 if screening_state:
                     screening_state.clear(candidate)
-                break
+                report.search_budget_deferred += 1
+                report.companies.append(
+                    _company_result(candidate, "search_budget_deferred")
+                )
+                continue
             report.errors.append(f"official website search failed for a listed company: {exc}")
             target.status = "research_error"
             if screening_state:
@@ -1389,11 +1466,21 @@ def run_btp_outreach(
             target.status = "blocked_by_safety_gate"
             if screening_state:
                 screening_state.mark(candidate, status)
-        report.companies.append(_company_result(candidate, status))
+        report.companies.append(_company_result(
+            candidate,
+            status,
+            gmail_draft_confirmed=bool(result.get("draft_id"))
+            if result.get("status") == "drafted" else False,
+        ))
     return report
 
 
-def _company_result(candidate: BtpCompany, status: str) -> dict:
+def _company_result(
+    candidate: BtpCompany,
+    status: str,
+    *,
+    gmail_draft_confirmed: bool = False,
+) -> dict:
     return {
         "name": candidate.name,
         "city": candidate.city,
@@ -1401,6 +1488,7 @@ def _company_result(candidate: BtpCompany, status: str) -> dict:
         "distance_km": round(candidate.distance_km, 1),
         "source": candidate.source,
         "status": status,
+        "gmail_draft_confirmed": gmail_draft_confirmed,
     }
 
 

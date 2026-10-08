@@ -200,6 +200,44 @@ def test_gmail_transport_returns_message_id_on_success(settings, monkeypatch):
     assert err == ""
 
 
+@pytest.mark.parametrize(
+    ("draft_response", "expected_ok", "expected_id"),
+    [({"id": "draft-api-123"}, True, "draft-api-123"), ({}, False, "")],
+)
+def test_gmail_draft_transport_requires_api_draft_id(
+    settings, monkeypatch, draft_response, expected_ok, expected_id
+):
+    settings = _settings(settings, email_mode="draft")
+
+    class _FakeDraftCreate:
+        def execute(self):
+            return draft_response
+
+    class _FakeDrafts:
+        def create(self, **_kwargs):
+            return _FakeDraftCreate()
+
+    class _FakeUsers:
+        def drafts(self):
+            return _FakeDrafts()
+
+    class _FakeService:
+        def users(self):
+            return _FakeUsers()
+
+    monkeypatch.setattr(gmail_oauth, "authenticated_service", lambda _settings: _FakeService())
+    monkeypatch.setattr(provider_mod, "_build_mime", lambda *_args: "encoded-message")
+
+    ok, draft_id, error = provider_mod.create_draft(
+        settings, to="jobs@employer.example", subject="Application", body="Hello",
+    )
+
+    assert ok is expected_ok
+    assert draft_id == expected_id
+    if not expected_ok:
+        assert "did not contain a draft ID" in error
+
+
 # ---------------------------------------------------------------------------
 # OAuth hygiene
 # ---------------------------------------------------------------------------
@@ -236,14 +274,15 @@ def test_secret_and_token_never_logged_on_failure(settings, caplog, monkeypatch)
     secret_value = None
     import os
     if os.path.exists("secrets/client_secret.json"):
-        secret_value = json.load(open("secrets/client_secret.json", encoding="utf-8"))["web"]["client_secret"]
+        with open("secrets/client_secret.json", encoding="utf-8") as secret_file:
+            secret_value = json.load(secret_file)["web"]["client_secret"]
 
     def failing_service(s):
         raise RuntimeError("oauth handshake failed")
 
     monkeypatch.setattr(gmail_oauth, "authenticated_service", failing_service)
     with caplog.at_level(logging.INFO):
-        ok, mid, err = provider_mod.send(settings, to="x@y.example", subject="s", body="b")
+        ok, _mid, err = provider_mod.send(settings, to="x@y.example", subject="s", body="b")
 
     assert ok is False
     for secretish in (secret_value, "GOCSPX", "gmail_token", "refresh_token"):

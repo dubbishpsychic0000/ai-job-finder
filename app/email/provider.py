@@ -36,7 +36,10 @@ def create_draft(settings, *, to: str, subject: str, body: str,
         msg = _build_mime(to, subject, body, attachments or [])
         created = (service.users().drafts()
                    .create(userId="me", body={"message": {"raw": msg}}).execute())
-        return True, created.get("id", "gmail_draft"), ""
+        draft_id = str(created.get("id", "")).strip()
+        if not draft_id:
+            return False, "", "Gmail draft creation response did not contain a draft ID"
+        return True, draft_id, ""
     except Exception as exc:
         logger.exception("Gmail draft creation failed")
         return False, "", str(exc)

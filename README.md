@@ -117,6 +117,12 @@ actions are not paused. It shares the same daily limits and creates drafts only
 when the strict spontaneous-application evidence checks pass; it never sends.
 Both workflow reports remain separate so job-specific applications and
 spontaneous company leads can be tracked independently.
+Spontaneous BTP drafts use action `APPLY` and share the same configurable
+`max_daily_applications` cap as job applications; all drafted or sent
+communications also share `max_daily_outbound`. There is no separate BTP
+application allowance, so BTP work cannot bypass or be double-counted outside
+those aggregate limits. Drafts consume both limits, while failed or dry-run
+attempts do not count as dispatched.
 
 ### Safety defaults
 

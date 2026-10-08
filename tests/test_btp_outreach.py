@@ -579,10 +579,11 @@ def test_configured_public_search_uses_tavily_budgeted_keys(monkeypatch, tmp_pat
 
     monkeypatch.setattr(btp_outreach, "ResilientTavily", FakeTavily)
     search = btp_outreach._configured_public_search()
-    assert isinstance(search, btp_outreach._TavilyCompanySearch)
-    assert len(search.connector.options["keys"]) == 2
-    assert search.connector.options["query_suffix"] == ""
-    assert search.max_api_calls == 3
+    assert isinstance(search, btp_outreach._BoundedPublicSearchRouter)
+    assert isinstance(search.primary, btp_outreach._TavilyCompanySearch)
+    assert len(search.primary.connector.options["keys"]) == 2
+    assert search.primary.connector.options["query_suffix"] == ""
+    assert search.primary.max_api_calls == 3
 
 
 def test_tavily_company_search_maps_public_results():
@@ -646,6 +647,27 @@ def test_tavily_company_search_caps_uncached_requests_but_allows_cache_hits():
         search("new query")
     search("cached query")
     assert connector.calls == ["cached query"]
+
+
+def test_bounded_public_search_falls_back_when_tavily_budget_is_exhausted(monkeypatch):
+    calls = []
+    monkeypatch.setattr(btp_outreach.time, "monotonic", lambda: 10.0)
+    monkeypatch.setattr(btp_outreach.time, "sleep", lambda _seconds: None)
+    router = btp_outreach._BoundedPublicSearchRouter(
+        primary=lambda _query: (_ for _ in ()).throw(
+            btp_outreach.PublicSearchBudgetError("Tavily daily budget exhausted")
+        ),
+        fallback=lambda query: (
+            calls.append(query) or [{"url": "https://example-company.ma"}]
+        ),
+        max_fallback_calls=2,
+    )
+
+    assert router("example company") == [{"url": "https://example-company.ma"}]
+    assert router("another company") == [{"url": "https://example-company.ma"}]
+    assert calls == ["example company", "another company"]
+    with pytest.raises(btp_outreach.PublicSearchBudgetError, match="run budgets"):
+        router("third company")
 
 
 def test_resilient_tavily_can_search_without_job_suffix(monkeypatch, tmp_path):
@@ -790,6 +812,97 @@ def test_osm_company_without_website_uses_public_site_lookup_before_research(
     assert researcher.visited == ["build.ma"]
 
 
+def test_search_budget_defers_only_unknown_site_and_known_sites_still_create_draft(
+    db, config, settings, profile, monkeypatch, tmp_path
+):
+    settings = settings.model_copy(update={
+        "email_mode": "draft", "enable_email": True, "email_provider": "gmail",
+    })
+    candidate_a = _company("Unknown BTP", website="", distance=1)
+    candidate_b = _company("Atlas Company", website="https://atlas.ma", distance=5)
+    candidate_c = _company("Rif Company", website="https://rif.ma", distance=8)
+    researcher = _Researcher({
+        "atlas.ma": _evidence("atlas.ma", email="recruitment@atlas.ma"),
+        "rif.ma": _evidence("rif.ma", instruction=True, email=""),
+    })
+    finder_calls = []
+
+    class ExhaustedFinder:
+        def find(self, company_name, location=""):
+            finder_calls.append(company_name)
+            raise btp_outreach.PublicSearchBudgetError("Tavily daily budget exhausted")
+
+    class ExhaustedCompanySearch:
+        def __init__(self):
+            self.errors = ["public company search failed: Tavily daily budget exhausted"]
+            self.search_budget_limited = True
+
+        def discover(self):
+            return []
+
+    draft_calls = []
+    screening_state_path = tmp_path / "btp-screening.json"
+    monkeypatch.setattr(
+        provider,
+        "create_draft",
+        lambda *_args, **_kwargs: (
+            draft_calls.append("draft") or (True, "draft-id", "")
+        ),
+    )
+    monkeypatch.setattr("app.scheduler.control.is_paused", lambda: False)
+
+    report = _run(
+        db, config, settings, profile,
+        [candidate_a, candidate_b, candidate_c],
+        researcher,
+        company_search=ExhaustedCompanySearch(),
+        website_finder=ExhaustedFinder(),
+        screening_state_path=screening_state_path,
+    )
+
+    statuses = {item["name"]: item["status"] for item in report.companies}
+    assert statuses == {
+        "Atlas Company": "drafted_for_review",
+        "Rif Company": "no_official_employer_email",
+        "Unknown BTP": "search_budget_deferred",
+    }
+    assert finder_calls == ["Unknown BTP"]
+    assert researcher.visited == ["atlas.ma", "rif.ma"]
+    assert draft_calls == ["draft"]
+    assert report.candidates == 3
+    assert report.known_website_candidates == 2
+    assert report.website_search_required == 1
+    assert report.search_budget_deferred == 1
+    assert report.search_budget_limited
+    assert report.researched == 2
+    assert report.drafts == 1
+    assert report.as_run_report()["action"]["btp"]["gmail_drafts_confirmed"] == 1
+    assert next(
+        company for company in report.companies if company["name"] == "Atlas Company"
+    )["gmail_draft_confirmed"]
+    assert report.no_qualifying_email == 1
+    serialized = report.as_run_report()["action"]["btp"]
+    assert serialized["known_website_candidates"] == 2
+    assert serialized["website_search_required"] == 1
+    assert serialized["search_budget_deferred"] == 1
+    assert serialized["drafts"] == 1
+    assert serialized["no_official_website"] == 0
+    assert serialized["sent"] == 0
+
+    next_run = _run(
+        db, config, settings, profile,
+        [candidate_a, candidate_b, candidate_c],
+        researcher,
+        company_search=ExhaustedCompanySearch(),
+        website_finder=ExhaustedFinder(),
+        screening_state_path=screening_state_path,
+    )
+    assert next_run.drafts == 0
+    assert next_run.existing == 2
+    assert next_run.search_budget_deferred == 1
+    assert draft_calls == ["draft"]
+
+
 @pytest.mark.parametrize(
     ("email", "portal", "expected"),
     [
@@ -894,6 +1007,54 @@ def test_repeat_run_keeps_unique_synthetic_company_tracking(
     assert db.query(models.Job).filter(
         models.Job.opportunity_type == "SPONTANEOUS_APPLICATION"
     ).count() == 1
+    assert db.query(models.Application).count() == 1
+    from app.memory.store import count_dispatched_today
+
+    assert count_dispatched_today(db, action="APPLY") == 1
+    assert count_dispatched_today(db) == 1
+
+
+def test_existing_job_application_consumes_shared_btp_application_quota(
+    db, config, settings, profile, monkeypatch
+):
+    settings = settings.model_copy(update={
+        "email_mode": "draft", "enable_email": True, "email_provider": "gmail",
+    })
+    config.rules["max_daily_applications"] = 1
+    job, _ = store.upsert_job(db, {
+        "source": "company_careers",
+        "external_id": "prior-job-application",
+        "dedup_key": "prior-job-application",
+        "title": "Technicien BTP",
+        "country": "Morocco",
+        "status": "acted",
+    })
+    prior = store.add_application(db, job.id, None, "APPLY", 90, "jobs@prior.ma")
+    prior.status = "drafted"
+    prior.sent_at = utcnow()
+    db.flush()
+    from app.memory.store import count_dispatched_today
+
+    assert prior.action == "APPLY"
+    assert prior.status == "drafted"
+    assert prior.sent_at is not None
+    assert count_dispatched_today(db, action="APPLY") == 1
+
+    def forbidden(*_args, **_kwargs):
+        raise AssertionError("BTP must respect the shared daily application cap")
+
+    monkeypatch.setattr(provider, "create_draft", forbidden)
+    researcher = _Researcher({
+        "build.ma": _evidence("build.ma", email="jobs@build.ma"),
+    })
+
+    report = _run(
+        db, config, settings, profile, [_company()], researcher,
+    )
+
+    assert report.daily_limit_reached
+    assert report.processed == 0
+    assert not researcher.visited
     assert db.query(models.Application).count() == 1
 
 
