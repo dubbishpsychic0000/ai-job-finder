@@ -66,13 +66,15 @@ and ranks candidates using public coordinates or coarse city centers. It
 researches at most 5 pages per official website
 with the robots-aware researcher, and prepares French Gmail drafts only when
 the employer's own website gives explicit spontaneous-application instructions
-and shows a safe address on that employer's domain. When an OSM listing lacks a
-website, a bounded public search may locate a likely company site; the site
-must still corroborate the company and independently meet the same evidence
-requirements. Portals, third-party/free
+and shows a safe address on that employer's domain. Public directory pages may
+seed company names and coarse locations, but are never treated as official
+websites or as evidence of a contact address; a bounded search must locate a
+likely company site, which must corroborate the company and independently meet
+the same evidence requirements. Portals, third-party/free
 email addresses, missing instructions, and missing CVs are skipped or blocked;
 no address is guessed. The hard cap is 50 companies per run. OpenStreetMap is
-community-maintained and incomplete, not a canonical directory.
+community-maintained and incomplete, not a canonical directory; indexed public
+search and directory listings are also incomplete and not an exhaustive source.
 Already-screened targets are recorded so later batches advance to the next
 nearest unprocessed listings instead of repeating the same first batch.
 

@@ -238,6 +238,23 @@ def test_public_btp_search_queries_cities_from_nearest_outward():
     assert results[0].distance_km < results[1].distance_km
 
 
+def test_public_btp_search_uses_directory_only_as_a_company_name_seed():
+    def search(query):
+        if query.endswith("Casablanca"):
+            return [{
+                "url": "https://telecontact.ma/annuaire/atlas",
+                "title": "Société Atlas BTP Casablanca - Annuaire Maroc",
+                "snippet": "Entreprise de construction et travaux publics",
+            }]
+        return []
+
+    results = PublicBtpCompanySearch(search=search).discover()
+    assert len(results) == 1
+    assert results[0].name == "Atlas"
+    assert results[0].website == ""
+    assert results[0].city == "Casablanca"
+
+
 def test_explicit_instruction_requires_submission_direction():
     assert extract_spontaneous_instruction(
         "Envoyez votre candidature spontanée à recrutement@entreprise.ma."

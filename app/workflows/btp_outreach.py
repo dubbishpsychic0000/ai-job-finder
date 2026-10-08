@@ -7,6 +7,7 @@ import ipaddress
 import json
 import math
 import re
+import unicodedata
 from dataclasses import dataclass, field
 from urllib.parse import urlparse
 
@@ -248,21 +249,29 @@ class PublicBtpCompanySearch:
                 break
             for item in results:
                 url = _eligible_website(str(item.get("url", "")))
-                if not url or _is_directory_or_job_site(url):
+                if not url:
                     continue
                 text = f"{item.get('title', '')} {item.get('snippet', '')} {host_domain(url)}"
                 if not _mentions_construction(text):
                     continue
-                candidate = classify_result(
-                    url, str(item.get("title", "")), str(item.get("snippet", "")),
-                    country="Morocco",
-                )
-                if not candidate or candidate.name == "Unknown":
+                if _is_directory_or_job_site(url):
+                    name = _directory_company_name(str(item.get("title", "")), city)
+                    website = ""
+                else:
+                    candidate = classify_result(
+                        url, str(item.get("title", "")), str(item.get("snippet", "")),
+                        country="Morocco",
+                    )
+                    if not candidate or candidate.name == "Unknown":
+                        continue
+                    name = candidate.name
+                    website = url
+                if not name:
                     continue
-                key = host_domain(url) or candidate.name.casefold()
+                key = host_domain(url) if website else name.casefold()
                 found.setdefault(key, BtpCompany(
-                    name=candidate.name,
-                    website=url,
+                    name=name,
+                    website=website,
                     city=city,
                     region=region,
                     latitude=latitude,
@@ -279,6 +288,25 @@ def _mentions_construction(text: str) -> bool:
         "btp", "construction", "travaux publics", "génie civil", "genie civil",
         "bâtiment", "batiment", "infrastructure",
     ))
+
+
+def _directory_company_name(title: str, city: str) -> str:
+    value = re.split(r"\s+(?:\||—|–|-|:)\s+", title, maxsplit=1)[0]
+    value = unicodedata.normalize("NFKD", value).encode("ascii", "ignore").decode()
+    city = unicodedata.normalize("NFKD", city).encode("ascii", "ignore").decode()
+    stop_words = {
+        "entreprise", "entreprises", "societe", "compagnie", "company", "groupe",
+        "group", "sarl", "sasu", "s.a", "casa",
+        "btp", "construction", "constructions", "travaux", "publics", "génie",
+        "genie", "civil", "bâtiment", "batiment", "maroc", "morocco",
+        "annuaire", "directory", "liste", "des", "les", "de", "du", "la", "le",
+        *re.sub(r"[^a-z0-9]+", " ", city.casefold()).split(),
+    }
+    tokens = [
+        token for token in re.sub(r"[^a-z0-9&]+", " ", value.casefold()).split()
+        if len(token) > 2 and token not in stop_words
+    ]
+    return " ".join(token.title() for token in tokens)[:255]
 
 
 def _is_directory_or_job_site(url: str) -> bool:
@@ -560,13 +588,16 @@ def run_btp_outreach(
     report.candidates = len(candidates)
     targets = []
     for candidate in candidates:
+        discovery_source = (
+            "openstreetmap" if candidate.source_url == OVERPASS_URL else "public_company_search"
+        )
         company = mem.store.get_or_create_company(
             session,
             candidate.name,
             candidate.website,
             "Morocco",
             industry="BTP / construction",
-            source="osm",
+            source=discovery_source,
             official_domain=host_domain(candidate.website),
         )
         company.website = company.website or candidate.website
@@ -577,8 +608,8 @@ def run_btp_outreach(
             title=candidate.name,
             company_name=candidate.name,
             company_id=company.id,
-            source="osm",
-            source_type="openstreetmap",
+            source=discovery_source,
+            source_type=discovery_source,
             discovery_channel="btp_outreach",
             evidence={
                 "city": candidate.city,
@@ -587,8 +618,9 @@ def run_btp_outreach(
                 "latitude": candidate.latitude,
                 "longitude": candidate.longitude,
                 "distance_km": round(candidate.distance_km, 1),
+                "discovery_source_url": candidate.source_url,
             },
-            reason="Public OpenStreetMap construction-company directory entry",
+            reason=f"Public {discovery_source.replace('_', ' ')} BTP company listing",
             canonical_key=f"btp-outreach:{company.id}",
         )
         if target.status in TERMINAL_TARGET_STATUSES:
