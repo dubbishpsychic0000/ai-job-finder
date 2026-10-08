@@ -21,7 +21,7 @@ def test_email_verification_rejects_placeholders_and_only_trusts_evidence(db):
     assert not service.verify("jobs@company.com", source_url="https://board.example/job",
                               source_type="job_board").verified
     verified = service.verify("recruitment@company.fr", source_url="https://company.fr/jobs/1",
-                              source_type="ats")
+                              source_type="ats", employer_domain="company.fr")
     assert verified.verified
     assert verified.verification_method == "official_employer_posting"
 

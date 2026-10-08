@@ -59,7 +59,11 @@ discovery:
   website_research: false           # robots-aware official-site research for discovered companies/jobs
   website_research_max_pages: 12
   website_research_delay_seconds: 0.25
+  website_research_refresh_days: 7
   company_universe_discovery: false
+  company_universe_sources: []       # bounded OSM/Wikidata source configurations; see docs
+  company_universe_max_candidates: 100
+  company_universe_min_relevance: 0
   social_sources_path: "config/social_sources.yaml"
   country_ranking_weights:          # §12 — relative importance of each scoring dimension
     language: 25

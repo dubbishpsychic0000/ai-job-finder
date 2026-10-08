@@ -69,3 +69,42 @@ def test_company_universe_workflow_accepts_no_vacancy_candidate(db, config):
     report = asyncio.run(run_company_universe_discovery(db, config, candidates=candidates))
     assert report.stored == 1
     assert mem.store.get_discoveries(db, kind="COMPANY")[0].kind == "COMPANY"
+
+
+def test_company_universe_workflow_uses_configured_open_source(db, config):
+    config.discovery.update({
+        "company_universe_sources": [{
+            "kind": "osm",
+            "overpass_url": "https://overpass.test/api",
+            "query": "[out:json];",
+            "country": "Morocco",
+            "target_terms": ["engineering"],
+        }],
+    })
+
+    class FakeDiscovery:
+        def osm(self, **kwargs):
+            assert kwargs["country"] == "Morocco"
+            return [CompanyCandidate(
+                name="Rif Engineering", website="https://rif.ma",
+                source="osm", relevance_score=50,
+            )]
+
+        def persist(self, session, candidates, *, minimum_relevance=0):
+            assert len(candidates) == 1
+            return 1, 0
+
+    report = asyncio.run(run_company_universe_discovery(
+        db, config, candidate_discovery=FakeDiscovery(),
+    ))
+    assert report.candidates == 1
+    assert report.stored == 1
+    assert not report.errors
+
+
+def test_enabled_company_universe_reports_missing_sources(db, config):
+    report = asyncio.run(run_company_universe_discovery(db, config))
+    assert report.stored == 0
+    assert report.errors == [
+        "company-universe discovery is enabled but company_universe_sources is empty"
+    ]

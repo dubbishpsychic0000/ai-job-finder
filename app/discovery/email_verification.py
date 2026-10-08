@@ -46,25 +46,26 @@ class EmailVerificationService:
         return list(dict.fromkeys(email.lower() for email in EMAIL_RE.findall(text or "") if is_safe_email(email)))
 
     def verify(self, email: str, *, source_url: str = "", source_type: str = "",
-               official: bool = False, job_id: int | None = None) -> Verification:
+               official: bool = False, employer_domain: str = "",
+               job_id: int | None = None) -> Verification:
         email = (email or "").strip().lower()
         domain = urlparse(source_url).netloc.lower().split(":")[0]
         email_domain = email.rsplit("@", 1)[-1] if "@" in email else ""
+        trusted_domain = (employer_domain or "").strip().lower().removeprefix("www.").rstrip(".")
         if not is_safe_email(email):
             result = Verification(email=email, source_url=source_url, source_domain=domain,
                                   reason="placeholder, test, malformed, or no-reply email")
         elif official or source_type in {"ats", "company_career"}:
-            same_domain = bool(domain) and (
-                email_domain == domain or email_domain.endswith("." + domain) or domain.endswith("." + email_domain)
-            )
-            ats_page = source_type == "ats" and (
-                domain in ATS_VENDOR_DOMAINS
-                or any(domain.endswith("." + vendor) for vendor in ATS_VENDOR_DOMAINS)
+            page_domain = domain.removeprefix("www.").rstrip(".")
+            if not trusted_domain and source_type != "ats":
+                trusted_domain = page_domain
+            same_domain = bool(trusted_domain) and (
+                email_domain == trusted_domain or email_domain.endswith("." + trusted_domain)
             )
             vendor_domain = email_domain in ATS_VENDOR_DOMAINS or any(
                 email_domain.endswith("." + vendor) for vendor in ATS_VENDOR_DOMAINS
             )
-            if (not same_domain and not ats_page) or vendor_domain or email_domain in FREE_EMAIL_DOMAINS:
+            if not same_domain or vendor_domain or email_domain in FREE_EMAIL_DOMAINS:
                 result = Verification(
                     email, source_url, domain, False, "domain_mismatch", 20,
                     "address is not on the employer's domain",
@@ -99,13 +100,17 @@ class EmailVerificationService:
             candidates = self._public_page_emails(source_url)
         if not candidates:
             return Verification(reason="no email found on posting or eligible public career page")
+        company = getattr(job, "company", None)
+        employer_domain = getattr(company, "official_domain", "") if company else ""
         # First verifiable address wins; a fake/example address never does.
         for address in candidates:
             result = self.verify(address, source_url=source_url, source_type=source_type,
+                                 employer_domain=employer_domain,
                                  job_id=getattr(job, "id", None))
             if result.verified:
                 return result
         return self.verify(candidates[0], source_url=source_url, source_type=source_type,
+                           employer_domain=employer_domain,
                            job_id=getattr(job, "id", None))
 
     def _public_page_emails(self, url: str) -> list[str]:

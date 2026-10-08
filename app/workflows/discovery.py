@@ -5,9 +5,11 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from dotenv import load_dotenv
 from sqlalchemy.orm import Session
 
 from app import memory as mem
@@ -36,6 +38,7 @@ class DiscoveryReport:
     duplicates: int = 0
     source_errors: list[str] = field(default_factory=list)
     employers_discovered: int = 0
+    companies_discovered: int = 0
     immigration_facts: int = 0
     opportunity_sources: int = 0
     social_signals: int = 0
@@ -48,8 +51,6 @@ class DiscoveryReport:
 def _load_source_connectors(path: Path | None = None) -> list[tuple[dict, object]]:
     path = path or DEFAULT_SOURCES_PATH
     cfg = load_yaml(path)
-    import os
-    from dotenv import load_dotenv
     # Ensure .env is loaded into os.environ so downstream modules see TAVILY_API_KEYS
     load_dotenv()
     proxy = os.getenv("HTTP_PROXY") or os.getenv("HTTPS_PROXY") or None
@@ -58,7 +59,7 @@ def _load_source_connectors(path: Path | None = None) -> list[tuple[dict, object
     tavily_keys_str = os.getenv("TAVILY_API_KEYS", "")
     tavily_keys = [k.strip() for k in tavily_keys_str.split(",") if k.strip()]
     tavily_resilient_keys = []
-    for i, k in enumerate(tavily_keys):
+    for k in tavily_keys:
         budget_path = Path(f"data/tavily_budget_{key_fingerprint(k)}.json")
         budget_path.parent.mkdir(parents=True, exist_ok=True)
         tavily_resilient_keys.append(TavilyKey(
@@ -139,6 +140,7 @@ async def run_discovery(session: Session, config: AgentConfig, prefs: Preference
             per_host_delay=float(discovery_cfg.get("website_research_delay_seconds", 0.25)),
             state_path=ROOT_DIR / "data" / "website_research_state.json",
             session=session,
+            refresh_after_days=int(discovery_cfg.get("website_research_refresh_days", 7)),
         )
     plan = build_adaptive_plan(session, prefs, config, vocab=vocab, profile=profile,
                                max_per_country=max_per_country,
@@ -152,6 +154,15 @@ async def run_discovery(session: Session, config: AgentConfig, prefs: Preference
 
         ereport = await run_employer_discovery(session, config, prefs, profile=profile)
         report.employers_discovered = ereport.stored
+
+    if discovery_cfg.get("company_universe_discovery", False):
+        from app.workflows.company_universe import run_company_universe_discovery
+
+        company_report = await run_company_universe_discovery(
+            session, config, researcher=researcher,
+        )
+        report.companies_discovered = company_report.stored
+        report.source_errors.extend(company_report.errors)
 
     # Immigration & work-pathway discovery (§11, §13) — opt-in, official web sources.
     if discovery_cfg.get("immigration_discovery", False):
@@ -202,7 +213,7 @@ async def run_discovery(session: Session, config: AgentConfig, prefs: Preference
         combos = plan[:max_requests] if max_requests else plan
         parallel = bool(discovery_cfg.get("parallel_fetch", False))  # §26 — concurrent searches
 
-        def process(combo, results, source_name) -> int:
+        def process(combo, results, source_name, source_report) -> int:
             """Normalize + dedup + store one combo's results; returns jobs found."""
             for o in results:
                 raw = dict(o.raw or {})
@@ -292,10 +303,10 @@ async def run_discovery(session: Session, config: AgentConfig, prefs: Preference
                 }
                 job, created = mem.store.upsert_job(session, job_data)
                 if created:
-                    if researcher is not None and src_type in {"company_career", "ats"} and opp.url:
+                    if researcher is not None and src_type == "company_career" and opp.url:
                         researcher.research_and_apply(
                             opp.url, company_id=company.id, job_id=job.id,
-                            official_domain=host_domain(opp.url),
+                            official_domain=company.official_domain or host_domain(opp.url),
                         )
                     verification = EmailVerificationService(session).verify_job(job, source_type=src_type)
                     # Never copy an unverified string into a job as a sendable recipient.
@@ -329,12 +340,12 @@ async def run_discovery(session: Session, config: AgentConfig, prefs: Preference
                 for combo, results in zip(combos, batch, strict=True):
                     if isinstance(results, BaseException):
                         raise results  # connector-level isolation below
-                    items_found += process(combo, results, source_name)
+                    items_found += process(combo, results, source_name, source_report)
             else:
                 for combo in combos:
                     report.combinations_attempted += 1
                     source_report["queries"] += 1
-                    items_found += process(combo, await search(combo), source_name)
+                    items_found += process(combo, await search(combo), source_name, source_report)
         except Exception as exc:  # connector-level isolation
             logger.exception("Discovery connector %s failed", source_name)
             report.source_errors.append(f"{source_name}: {exc}")

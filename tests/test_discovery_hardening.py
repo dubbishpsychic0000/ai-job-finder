@@ -78,3 +78,17 @@ def test_email_verification_requires_employer_domain():
     )
     assert verified.verified
     assert verified.confidence == 100
+
+    parent_domain = service.verify(
+        "jobs@acme.ma",
+        source_url="https://careers.acme.ma/jobs",
+        source_type="company_career",
+    )
+    assert not parent_domain.verified
+
+    unrelated_domain = service.verify(
+        "jobs@other.ma",
+        source_url="https://jobs.lever.co/acme",
+        source_type="ats",
+    )
+    assert not unrelated_domain.verified

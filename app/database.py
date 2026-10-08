@@ -50,9 +50,7 @@ def init_db() -> None:
 
 
 def _upgrade_schema() -> None:
-    """Idempotent ALTER TABLEs for columns added after the first release."""
-    if not engine.url.drivername.startswith("sqlite"):
-        return
+    """Idempotently add columns introduced after the initial schema."""
     from sqlalchemy import inspect, text
 
     insp = inspect(engine)
@@ -69,7 +67,7 @@ def _upgrade_schema() -> None:
         "source_type": "VARCHAR(32) DEFAULT ''",
         "source_quality": "INTEGER",
         "source_confidence": "INTEGER",
-        "closing_at": "DATETIME",
+        "closing_at": "TIMESTAMP",
         "language": "VARCHAR(16) DEFAULT ''",
         "sponsorship_signal": "VARCHAR(16) DEFAULT 'unknown'",
         "international_candidate_signal": "VARCHAR(16) DEFAULT 'unknown'",
@@ -81,7 +79,7 @@ def _upgrade_schema() -> None:
         "search_country": "VARCHAR(64) DEFAULT ''",
         "canonical_job_id": "VARCHAR(64) DEFAULT ''",
         "freshness": "VARCHAR(16) DEFAULT 'unknown'",
-        "last_verified_at": "DATETIME",
+        "last_verified_at": "TIMESTAMP",
         "opportunity_type": "VARCHAR(32) DEFAULT 'JOB'",
         "application_method": "VARCHAR(32) DEFAULT 'UNKNOWN'",
         "application_url": "VARCHAR(1024) DEFAULT ''",
@@ -94,16 +92,16 @@ def _upgrade_schema() -> None:
         "recruitment_url": "VARCHAR(1024) DEFAULT ''",
         "international_recruitment_signal": "VARCHAR(16) DEFAULT 'unknown'",
         "sponsorship_signal": "VARCHAR(16) DEFAULT 'unknown'",
-        "last_checked_at": "DATETIME",
-        "last_researched_at": "DATETIME",
+        "last_checked_at": "TIMESTAMP",
+        "last_researched_at": "TIMESTAMP",
         "discovery_reason": "TEXT DEFAULT ''",
         "relevance_score": "FLOAT DEFAULT 0",
         "source": "VARCHAR(128) DEFAULT ''",
     })
 
     _add_missing_columns(insp, "sources", {
-        "last_success_at": "DATETIME",
-        "last_failure_at": "DATETIME",
+        "last_success_at": "TIMESTAMP",
+        "last_failure_at": "TIMESTAMP",
         "rate_limit_status": "VARCHAR(16) DEFAULT 'ok'",
     })
 

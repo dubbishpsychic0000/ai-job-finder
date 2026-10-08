@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import json
+import time
 from pathlib import Path
 
-from app import memory as mem, models
+from app import memory as mem
 from app.discovery.website_researcher import (
     WebsiteResearcher,
     classify_email,
@@ -118,6 +120,38 @@ def test_incremental_research_reuses_frontier(tmp_path: Path):
     second = researcher(pages, state_path=state).research("https://acme.ma/")
     assert first.visited
     assert second.visited == []
+
+
+def test_failed_fetch_is_retried(tmp_path: Path):
+    attempts = {"count": 0}
+
+    def fetch(url):
+        if url.endswith(("sitemap.xml", "sitemap_index.xml")):
+            return None
+        attempts["count"] += 1
+        return None if attempts["count"] == 1 else Response("careers")
+
+    crawler = WebsiteResearcher(
+        max_pages=1, per_host_delay=0, state_path=tmp_path / "state.json",
+        fetcher=fetch, robots_fetcher=lambda domain: None,
+    )
+    first = crawler.research("https://acme.ma/")
+    second = crawler.research("https://acme.ma/")
+    assert not first.visited
+    assert second.visited == ["https://acme.ma/"]
+    assert attempts["count"] == 2
+
+
+def test_research_refreshes_expired_pages(tmp_path: Path):
+    pages = {"https://acme.ma/": Response("Careers")}
+    state = tmp_path / "state.json"
+    first = researcher(pages, state_path=state).research("https://acme.ma/")
+    assert first.visited
+    saved = json.loads(state.read_text(encoding="utf-8"))
+    saved["acme.ma"]["https://acme.ma/"] = time.time() - 8 * 86400
+    state.write_text(json.dumps(saved), encoding="utf-8")
+    refreshed = researcher(pages, state_path=state).research("https://acme.ma/")
+    assert refreshed.visited == ["https://acme.ma/"]
 
 
 def test_llm_values_without_matching_evidence_are_discarded():

@@ -18,8 +18,8 @@ from bs4 import BeautifulSoup
 from app import models
 from app.discovery.email_verification import (
     ATS_VENDOR_DOMAINS,
-    FREE_EMAIL_DOMAINS,
     EMAIL_RE,
+    FREE_EMAIL_DOMAINS,
     is_safe_email,
 )
 
@@ -49,7 +49,7 @@ def host_domain(url: str) -> str:
 
 def same_site(url: str, official_domain: str) -> bool:
     domain = host_domain(url)
-    official = (official_domain or "").lower().lstrip(".")
+    official = (official_domain or "").lower().removeprefix("www.").strip(".")
     return bool(domain and official and (domain == official or domain.endswith("." + official)))
 
 
@@ -57,8 +57,8 @@ def classify_email(email: str, official_domain: str, source_domain: str = "") ->
     """Return relationship, reason code, confidence without guessing."""
     value = email.lower().strip()
     domain = value.rsplit("@", 1)[-1] if "@" in value else ""
-    official = (official_domain or "").lower().lstrip("www.")
-    source = (source_domain or "").lower().lstrip("www.")
+    official = (official_domain or "").lower().removeprefix("www.").rstrip(".")
+    source = (source_domain or "").lower().removeprefix("www.").rstrip(".")
     if not is_safe_email(value):
         return "unsupported", "invalid_or_placeholder", 0
     if domain in ATS_VENDOR_DOMAINS or any(domain.endswith("." + d) for d in ATS_VENDOR_DOMAINS):
@@ -107,9 +107,10 @@ class WebsiteResearcher:
 
     def __init__(self, *, max_pages: int = 12, per_host_delay: float = 0.25,
                  state_path: Path | None = None, session=None, fetcher=None,
-                 robots_fetcher=None):
+                 robots_fetcher=None, refresh_after_days: int = 7):
         self.max_pages = max(1, max_pages)
         self.per_host_delay = max(0.0, per_host_delay)
+        self.refresh_after_days = max(1, refresh_after_days)
         self.state_path = state_path
         self.db_session = session if session is not None and hasattr(session, "add") else None
         self.session = requests.Session() if self.db_session is not None else (session or requests.Session())
@@ -123,7 +124,7 @@ class WebsiteResearcher:
     def research(self, start_url: str, *, company_id: int | None = None,
                  job_id: int | None = None, official_domain: str = "") -> ResearchResult:
         start = normalize_url(start_url)
-        domain = (official_domain or host_domain(start)).lower().lstrip("www.")
+        domain = (official_domain or host_domain(start)).lower().removeprefix("www.")
         result = ResearchResult(official_domain=domain)
         if not start or not domain:
             return result
@@ -131,13 +132,23 @@ class WebsiteResearcher:
         for sitemap_url in self.discover_sitemap(start):
             if same_site(sitemap_url, domain):
                 queue.append((self._priority(sitemap_url), sitemap_url))
-        seen = set(self._state.get(domain, []))
+        now = datetime.now(timezone.utc)
+        refresh_before = now.timestamp() - self.refresh_after_days * 86400
+        saved = self._state.get(domain, {})
+        if not isinstance(saved, dict):
+            # Legacy state had no timestamps; let these pages be refreshed now.
+            saved = {}
+        fetched_at = {
+            url: timestamp for url, timestamp in saved.items()
+            if isinstance(timestamp, (int, float)) and timestamp > refresh_before
+        }
+        attempted: set[str] = set()
         while queue and len(result.visited) < self.max_pages:
             _, url = queue.pop(0)
             url = normalize_url(url)
-            if not url or url in seen or not same_site(url, domain):
+            if not url or url in fetched_at or url in attempted or not same_site(url, domain):
                 continue
-            seen.add(url)
+            attempted.add(url)
             if not self._allowed(url):
                 result.blocked.append(url)
                 continue
@@ -145,6 +156,7 @@ class WebsiteResearcher:
             if response is None:
                 result.blocked.append(url)
                 continue
+            fetched_at[url] = now.timestamp()
             result.visited.append(url)
             content_type = response.headers.get("Content-Type", "").lower()
             if "pdf" in content_type or url.lower().endswith(".pdf"):
@@ -159,10 +171,10 @@ class WebsiteResearcher:
             result.pages.append(url)
             self._extract_page(result, soup, url, title, domain, company_id, job_id)
             for href, anchor in self._links(soup, url):
-                if same_site(href, domain) and href not in seen:
+                if same_site(href, domain) and href not in fetched_at and href not in attempted:
                     queue.append((self._priority(href, anchor), href))
             queue.sort(key=lambda item: item[0], reverse=True)
-        self._state[domain] = sorted(seen)
+        self._state[domain] = fetched_at
         self._save_state()
         return result
 
@@ -173,7 +185,6 @@ class WebsiteResearcher:
                                official_domain=official_domain)
         if self.db_session is None:
             return result
-        from app import memory as mem
         company = self.db_session.get(models.Company, company_id) if company_id else None
         job = self.db_session.get(models.Job, job_id) if job_id else None
         pages = result.facts("relevant_page")
@@ -227,7 +238,6 @@ class WebsiteResearcher:
         for email in dict.fromkeys(EMAIL_RE.findall(text)):
             relationship, reason, confidence = classify_email(email, domain, host_domain(url))
             if relationship in {"company_recruitment", "company_general", "free_mail", "ats_vendor", "third_party"}:
-                local = email.split("@", 1)[0].lower()
                 field = "recruitment_email" if relationship == "company_recruitment" else "general_email"
                 self._add(result, url, page_kind, field, email, self._snippet(text, email),
                           confidence, reason, company_id, job_id, relationship)
