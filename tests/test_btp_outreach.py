@@ -918,6 +918,7 @@ def test_existing_safety_gate_blocks_missing_cv_and_daily_cap(
     report = _run(db, config, settings, profile, [_company()], researcher)
     if safety_failure == "daily_limit":
         assert report.daily_limit_reached
+        assert report.candidates == 1
         assert report.processed == 0
         assert db.query(models.Application).count() == 0
         assert db.query(models.Email).count() == 0

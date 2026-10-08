@@ -63,8 +63,10 @@ wca dashboard                     # web dashboard at http://127.0.0.1:8000
 bounded workflow. It combines public OpenStreetMap, monthly cached Wikidata,
 optional audited CSV leads, and capped indexed web-search listings; it ranks
 candidates using public coordinates or coarse city centers from Casablanca
-outward. It researches at most 5 pages per official website with the
-robots-aware researcher, and prepares French Gmail drafts only when
+outward. It researches up to 12 pages per official website, including
+same-site sitemap discovery, with the robots-aware researcher. The job path
+also uses this bounded official-site research for direct company-career sources.
+It prepares French Gmail drafts only when
 the employer's own website gives explicit spontaneous-application instructions
 and shows a safe address on that employer's domain. Public directory pages may
 seed company names and coarse locations, but are never treated as official
@@ -108,8 +110,13 @@ The command refuses to run unless `EMAIL_MODE=draft`, `ENABLE_EMAIL=true`, and
 claim allowlist, CV requirement, and daily limits still apply. It never sends
 email and does not feed its explicitly marked `SPONTANEOUS_APPLICATION` records
 to vacancy analysis, generic actions, or follow-ups. GitHub Actions manual
-dispatch offers this workflow separately from the default pipeline; scheduled
-runs continue to use the pipeline.
+dispatch can run this workflow on its own. The normal `run-once` and scheduled
+pipeline also runs the independent BTP company-discovery path after job
+applications, provided enabled Gmail draft mode is configured and outbound
+actions are not paused. It shares the same daily limits and creates drafts only
+when the strict spontaneous-application evidence checks pass; it never sends.
+Both workflow reports remain separate so job-specific applications and
+spontaneous company leads can be tracked independently.
 
 ### Safety defaults
 

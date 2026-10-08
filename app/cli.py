@@ -57,8 +57,10 @@ def cmd_run_once(args) -> None:
             "asked": result.action.get("asked"),
             "investigated": result.action.get("investigated", 0),
             "blocked": len(result.action.get("blocked", [])),
-            "drafts": result.action.get("drafts", 0),
+            "drafts": result.action.get("drafts", 0)
+                      + result.company_outreach.get("action", {}).get("btp", {}).get("drafts", 0),
         },
+        "company_outreach": result.company_outreach,
         "followup": result.followup,
     }
     if args.json:
@@ -75,6 +77,13 @@ def _render_run(data: dict) -> None:
     t.add_row("Analysis", str(data["analysis"].get("decisions")))
     a = data["action"]
     t.add_row("Actions", f"applied {a['applied']}, asked {a['asked']}, investigated {a['investigated']}")
+    company_outreach = data.get("company_outreach", {})
+    btp = company_outreach.get("action", {}).get("btp", {})
+    if btp:
+        t.add_row("BTP companies", f"{btp.get('candidates', 0)} candidates, "
+                     f"{btp.get('drafts', 0)} drafts")
+    elif company_outreach.get("status") == "skipped":
+        t.add_row("BTP companies", f"skipped ({company_outreach.get('reason', '')})")
     t.add_row("Follow-ups", f"sent {data['followup'].get('sent', 0)}, blocked {data['followup'].get('blocked', 0)}")
     console.print(t)
 

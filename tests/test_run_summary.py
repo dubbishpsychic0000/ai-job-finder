@@ -22,6 +22,21 @@ def test_run_summary_counts_drafts_and_errors():
     assert "Gmail drafts: 2 | Errors: 2" in text
 
 
+def test_run_summary_includes_btp_company_drafts_and_errors():
+    text = render_run_summary(RunResult(
+        discovery={"new_jobs": 1, "fetched": 3, "errors": []},
+        analysis={"errors": []},
+        action={"applied": 0, "asked": 0, "investigated": 0, "drafts": 1, "errors": []},
+        company_outreach={
+            "discovery": {"errors": ["quota exhausted"]},
+            "action": {"drafts": 2, "btp": {"drafts": 2, "candidates": 8}},
+        },
+        followup={"errors": []},
+    ))
+    assert "Gmail drafts: 3 | Errors: 1" in text
+    assert "BTP: 8 companies checked" in text
+
+
 def test_notification_digest_handles_sqlite_naive_delivery_time(db):
     """SQLite round-trips DateTime values without timezone metadata."""
     from datetime import timedelta

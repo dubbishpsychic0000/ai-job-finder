@@ -28,6 +28,7 @@ class RunResult:
     discovery: dict = field(default_factory=dict)
     analysis: dict = field(default_factory=dict)
     action: dict = field(default_factory=dict)
+    company_outreach: dict = field(default_factory=dict)
     followup: dict = field(default_factory=dict)
     notifications: dict = field(default_factory=dict)
 
@@ -77,6 +78,10 @@ def run_pipeline(session: Session | None = None, *, sources_path: Path | None = 
                 "drafts": sum(1 for item in (action.applied + action.asked)
                               if item.get("status") == "drafted"),
             }
+            result.company_outreach = _run_company_outreach(
+                s, config, settings, profile,
+                paused=settings.global_pause or _is_paused(),
+            )
             if do_followups and not settings.global_pause and not _is_paused():
                 from app.agents.communication_agent import CommunicationAgent
 
@@ -121,15 +126,48 @@ def render_run_summary(result: RunResult) -> str:
     discovery = result.discovery
     action = result.action
     drafts = int(action.get("drafts", 0))
+    company_outreach = result.company_outreach
+    btp_action = company_outreach.get("action", {}).get("btp", {})
+    company_errors = list(company_outreach.get("errors", []))
+    for stage in ("discovery", "action", "followup"):
+        company_errors.extend(company_outreach.get(stage, {}).get("errors", []))
     errors = (len(discovery.get("errors", [])) + len(action.get("errors", [])) +
-              len(result.analysis.get("errors", [])) + len(result.followup.get("errors", [])))
+              len(result.analysis.get("errors", [])) + len(result.followup.get("errors", [])) +
+              len(company_errors))
     return (
         "Career Agent run complete\n"
         f"Jobs: {discovery.get('new_jobs', 0)} new / {discovery.get('fetched', 0)} fetched\n"
         f"Actions: {action.get('applied', 0)} apply, {action.get('asked', 0)} ask, "
         f"{action.get('investigated', 0)} investigated\n"
-        f"Gmail drafts: {drafts} | Errors: {errors}"
+        f"Gmail drafts: {drafts + int(btp_action.get('drafts', 0))} | "
+        f"Errors: {errors} | BTP: {btp_action.get('candidates', 0)} companies checked"
     )
+
+
+def _run_company_outreach(session, config, settings, profile, *, paused: bool) -> dict:
+    if paused:
+        return {"status": "skipped", "reason": "outbound actions are paused"}
+    if (settings.email_mode != "draft" or settings.enable_email is not True
+            or settings.email_provider != "gmail"):
+        return {
+            "status": "skipped",
+            "reason": "BTP outreach requires enabled Gmail draft mode",
+        }
+    try:
+        from app.workflows.btp_outreach import run_btp_outreach
+
+        return run_btp_outreach(session, config, settings, profile).as_run_report()
+    except Exception as exc:
+        logger.exception("Independent BTP company discovery/outreach failed")
+        from app import memory as mem
+
+        mem.store.record_event(
+            session,
+            "company_outreach",
+            f"BTP company discovery/outreach failed: {exc}",
+            "error",
+        )
+        return {"status": "error", "errors": [str(exc)]}
 
 
 def _is_paused() -> bool:

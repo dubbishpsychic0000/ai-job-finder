@@ -1135,7 +1135,6 @@ def run_btp_outreach(
     ))
     if remaining_budget == 0:
         report.daily_limit_reached = True
-        return report
     cap = min(requested_cap, remaining_budget)
     screening_state = (
         BtpOutreachState(screening_state_path) if screening_state_path else None
@@ -1248,7 +1247,7 @@ def run_btp_outreach(
 
     state_path = ROOT_DIR / "data" / "website_research_state.json"
     crawler = researcher or WebsiteResearcher(
-        max_pages=5,
+        max_pages=12,
         per_host_delay=0.25,
         state_path=state_path,
         session=session,
@@ -1295,7 +1294,6 @@ def run_btp_outreach(
                 website,
                 company_id=company.id,
                 official_domain=domain,
-                discover_sitemaps=False,
             )
             evidence = list(result.evidence)
             evidence.extend(
