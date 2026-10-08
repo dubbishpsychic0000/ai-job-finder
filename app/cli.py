@@ -32,6 +32,10 @@ from app.database import init_db, session_scope
 console = Console()
 
 
+def _print_json(data: dict) -> None:
+    sys.stdout.write(json.dumps(data, ensure_ascii=False, indent=2) + "\n")
+
+
 def _setup_logging(verbose: bool = False) -> None:
     logging.basicConfig(
         level=logging.DEBUG if verbose else logging.INFO,
@@ -64,7 +68,7 @@ def cmd_run_once(args) -> None:
         "followup": result.followup,
     }
     if args.json:
-        console.print(json.dumps(data, indent=2))
+        _print_json(data)
         return
     _render_run(data)
 
@@ -130,7 +134,7 @@ def cmd_btp_outreach(args) -> None:
     except BtpOutreachSafetyError as exc:
         console.print(f"[red]{exc}[/red]")
         raise SystemExit(2) from exc
-    console.print(json.dumps(report.as_run_report(), ensure_ascii=False, indent=2))
+    _print_json(report.as_run_report())
 
 
 def cmd_analyze(_args) -> None:
