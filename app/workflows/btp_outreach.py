@@ -6,14 +6,17 @@ import hashlib
 import ipaddress
 import json
 import math
+import re
 from dataclasses import dataclass, field
 from urllib.parse import urlparse
 
 import requests
+from bs4 import BeautifulSoup
 from sqlalchemy.orm import Session
 
 from app import memory as mem
 from app.config import ROOT_DIR, AgentConfig, CandidateProfile, RunnerSettings
+from app.connectors.search_engine import resolve_search_url
 from app.discovery.email_verification import EmailVerificationService
 from app.discovery.website_researcher import (
     EvidenceFact,
@@ -30,10 +33,11 @@ MAX_OVERPASS_BYTES = 5 * 1024 * 1024
 MAX_CANDIDATES = 1000
 DEFAULT_MAX_COMPANIES = 20
 HARD_MAX_COMPANIES = 50
+MAX_WEBSITE_SEARCH_RESULTS = 8
 CASABLANCA_CENTER = (33.5731, -7.5898)
 SPONTANEOUS_APPLICATION = "SPONTANEOUS_APPLICATION"
 TERMINAL_TARGET_STATUSES = {
-    "no_official_website",
+    "no_verified_website",
     "no_explicit_instructions",
     "no_official_employer_email",
     "portal_or_form",
@@ -156,6 +160,68 @@ class OverpassBtpDiscovery:
                     raise ValueError("Overpass response exceeded the 5 MiB safety limit")
                 chunks.append(chunk)
         return json.loads(b"".join(chunks))
+
+
+class PublicCompanyWebsiteFinder:
+    """Find likely official sites for directory-listed companies, never contacts."""
+
+    def __init__(self, search=None):
+        self.search = search or self._search
+
+    def find(self, company_name: str, location: str = "") -> str:
+        query = f'"{company_name}" BTP entreprise Maroc site officiel {location}'.strip()
+        for item in self.search(query)[:MAX_WEBSITE_SEARCH_RESULTS]:
+            url = _eligible_website(str(item.get("url", "")))
+            if not url or _is_directory_or_job_site(url):
+                continue
+            if _company_name_matches(company_name, url, str(item.get("title", ""))):
+                return url
+        return ""
+
+    @staticmethod
+    def _search(query: str) -> list[dict[str, str]]:
+        response = requests.post(
+            "https://html.duckduckgo.com/html/",
+            data={"q": query, "kl": "ma-fr", "ia": "web"},
+            headers={"User-Agent": "WorldwideCareerAgent/0.1 (public company website lookup)"},
+            timeout=20,
+        )
+        response.raise_for_status()
+        soup = BeautifulSoup(response.text, "lxml")
+        results = []
+        for result in soup.select(".result")[:MAX_WEBSITE_SEARCH_RESULTS]:
+            anchor = result.select_one(".result__a")
+            if not anchor:
+                continue
+            snippet = result.select_one(".result__snippet")
+            results.append({
+                "url": resolve_search_url(anchor.get("href", "")),
+                "title": anchor.get_text(" ", strip=True),
+                "snippet": snippet.get_text(" ", strip=True) if snippet else "",
+            })
+        return results
+
+
+def _is_directory_or_job_site(url: str) -> bool:
+    domain = host_domain(url)
+    excluded = (
+        "annuaire", "telecontact", "kerix", "charika", "kompass",
+        "marocannuaire", "goafricaonline", "linkedin", "indeed",
+        "facebook", "instagram", "youtube",
+    )
+    return any(term in domain for term in excluded)
+
+
+def _company_name_matches(company_name: str, url: str, text: str) -> bool:
+    host = host_domain(url).replace("-", " ").replace(".", " ")
+    haystack = f"{host} {text}".casefold()
+    ignored = {"btp", "sarl", "sa", "societe", "société", "entreprise", "company", "maroc"}
+    tokens = [
+        token for token in re.sub(r"[^a-z0-9]+", " ", company_name.casefold()).split()
+        if len(token) >= 3 and token not in ignored
+    ]
+    matches = sum(token in haystack for token in tokens)
+    return bool(tokens and matches == len(tokens))
 
 
 def haversine_km(latitude: float, longitude: float,
@@ -365,6 +431,7 @@ def run_btp_outreach(
     max_companies: int = DEFAULT_MAX_COMPANIES,
     discovery: OverpassBtpDiscovery | None = None,
     researcher: WebsiteResearcher | None = None,
+    website_finder: PublicCompanyWebsiteFinder | None = None,
 ) -> BtpOutreachReport:
     """Research nearest public BTP companies and prepare only eligible Gmail drafts."""
     if origin_city != "Casablanca":
@@ -460,13 +527,18 @@ def run_btp_outreach(
         session=session,
         allow_redirects=False,
     )
+    finder = website_finder or PublicCompanyWebsiteFinder()
     for candidate, company, target, existing_outreach in targets:
-        website = _eligible_website(candidate.website)
+        website = _eligible_website(candidate.website) or finder.find(
+            candidate.name, candidate.location,
+        )
         if not website:
             report.no_website += 1
-            target.status = "no_official_website"
+            target.status = "no_verified_website"
             report.companies.append(_company_result(candidate, "no_official_website"))
             continue
+        company.website = website
+        company.official_domain = host_domain(website)
         report.researched += 1
         domain = host_domain(website)
         try:

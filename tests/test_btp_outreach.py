@@ -17,6 +17,7 @@ from app.workflows.btp_outreach import (
     BtpCompany,
     BtpOutreachSafetyError,
     OverpassBtpDiscovery,
+    PublicCompanyWebsiteFinder,
     extract_spontaneous_instruction,
     haversine_km,
     parse_overpass_companies,
@@ -77,6 +78,11 @@ class _Researcher:
         )
 
 
+class _NoWebsiteFinder:
+    def find(self, company_name, location=""):
+        return ""
+
+
 def _evidence(domain, *, instruction=True, email="recrutement@build.ma", portal=""):
     url = f"https://{domain}/contact"
     result = []
@@ -124,6 +130,7 @@ def _run(db, config, settings, profile, companies, researcher, **kwargs):
         profile,
         discovery=_Discovery(companies),
         researcher=researcher,
+        website_finder=kwargs.pop("website_finder", _NoWebsiteFinder()),
         **kwargs,
     )
 
@@ -190,6 +197,19 @@ def test_nearest_first_and_per_run_cap():
     assert len(rank_nearest(companies, 500)) == 3
 
 
+def test_public_website_search_requires_company_name_and_skips_directories():
+    finder = PublicCompanyWebsiteFinder(search=lambda query: [
+        {"url": "https://telecontact.ma/build", "title": "Build SARL BTP"},
+        {"url": "https://build.ma", "title": "Build SARL - site officiel"},
+    ])
+    assert finder.find("Build SARL", "Casablanca") == "https://build.ma/"
+
+    unrelated = PublicCompanyWebsiteFinder(search=lambda query: [
+        {"url": "https://other.ma", "title": "Other Construction Maroc"},
+    ])
+    assert unrelated.find("Build SARL", "Casablanca") == ""
+
+
 def test_explicit_instruction_requires_submission_direction():
     assert extract_spontaneous_instruction(
         "Envoyez votre candidature spontanée à recrutement@entreprise.ma."
@@ -240,6 +260,33 @@ def test_only_explicit_instructions_and_official_domain_contact_create_french_dr
     assert synthetic.status == "outreach_only"
     application = db.query(models.Application).one()
     assert application.follow_up_at is None
+
+
+def test_osm_company_without_website_uses_public_site_lookup_before_research(
+    db, config, settings, profile, monkeypatch
+):
+    settings = settings.model_copy(update={
+        "email_mode": "draft", "enable_email": True, "email_provider": "gmail",
+    })
+    researcher = _Researcher({
+        "build.ma": _evidence("build.ma", email="jobs@build.ma"),
+    })
+    finder_calls = []
+
+    class Finder:
+        def find(self, company_name, location=""):
+            finder_calls.append((company_name, location))
+            return "https://build.ma"
+
+    monkeypatch.setattr(provider, "create_draft", lambda *_a, **_kw: (True, "draft", ""))
+    monkeypatch.setattr("app.scheduler.control.is_paused", lambda: False)
+    report = _run(
+        db, config, settings, profile, [_company(website="")], researcher,
+        website_finder=Finder(),
+    )
+    assert finder_calls == [("Build SARL", "Rabat, Morocco")]
+    assert report.drafts == 1
+    assert researcher.visited == ["build.ma"]
 
 
 @pytest.mark.parametrize(

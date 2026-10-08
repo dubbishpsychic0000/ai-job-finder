@@ -65,7 +65,10 @@ per pass and ranks them from the fixed
 Casablanca city center outward, researches at most 5 pages per official website
 with the robots-aware researcher, and prepares French Gmail drafts only when
 the employer's own website gives explicit spontaneous-application instructions
-and shows a safe address on that employer's domain. Portals, third-party/free
+and shows a safe address on that employer's domain. When an OSM listing lacks a
+website, a bounded public search may locate a likely company site; the site
+must still corroborate the company and independently meet the same evidence
+requirements. Portals, third-party/free
 email addresses, missing instructions, and missing CVs are skipped or blocked;
 no address is guessed. The hard cap is 50 companies per run. OpenStreetMap is
 community-maintained and incomplete, not a canonical directory.
