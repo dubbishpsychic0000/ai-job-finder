@@ -6,9 +6,11 @@ import hashlib
 import ipaddress
 import json
 import math
+import os
 import re
 import unicodedata
 from dataclasses import dataclass, field
+from pathlib import Path
 from urllib.parse import urlparse
 
 import requests
@@ -36,6 +38,9 @@ MAX_CANDIDATES = 1000
 DEFAULT_MAX_COMPANIES = 20
 HARD_MAX_COMPANIES = 50
 MAX_WEBSITE_SEARCH_RESULTS = 8
+MAX_TAVILY_API_CALLS_PER_RUN = 3
+MAX_CITY_SEARCHES_PER_RUN = 2
+CITY_SEARCH_STATE_PATH = ROOT_DIR / "data" / "btp_search_state.json"
 CASABLANCA_CENTER = (33.5731, -7.5898)
 SPONTANEOUS_APPLICATION = "SPONTANEOUS_APPLICATION"
 MOROCCO_CITY_CENTERS = {
@@ -64,6 +69,11 @@ TERMINAL_TARGET_STATUSES = {
     "portal_or_form",
     "drafted_for_review",
 }
+
+
+class PublicSearchBudgetError(RuntimeError):
+    """Raised when the BTP workflow reaches its bounded public-search budget."""
+
 
 OVERPASS_QUERY = (
     '[out:json][timeout:25][maxsize:5242880];'
@@ -109,6 +119,7 @@ class BtpOutreachReport:
     no_spontaneous_instructions: int = 0
     no_qualifying_email: int = 0
     portal_or_form: int = 0
+    search_budget_limited: bool = False
     blocked: int = 0
     daily_limit_reached: bool = False
     errors: list[str] = field(default_factory=list)
@@ -147,6 +158,7 @@ class BtpOutreachReport:
                     "no_spontaneous_instructions": self.no_spontaneous_instructions,
                     "no_qualifying_email": self.no_qualifying_email,
                     "portal_or_form": self.portal_or_form,
+                    "search_budget_limited": self.search_budget_limited,
                     "daily_limit_reached": self.daily_limit_reached,
                 },
             },
@@ -191,7 +203,7 @@ class PublicCompanyWebsiteFinder:
     """Find likely official sites for directory-listed companies, never contacts."""
 
     def __init__(self, search=None):
-        self.search = search or self._search
+        self.search = search or _configured_public_search()
 
     def find(self, company_name: str, location: str = "") -> str:
         query = f'"{company_name}" BTP entreprise Maroc site officiel {location}'.strip()
@@ -211,6 +223,13 @@ class PublicCompanyWebsiteFinder:
             headers={"User-Agent": "WorldwideCareerAgent/0.1 (public company website lookup)"},
             timeout=20,
         )
+        lowered = response.text.casefold()
+        if "unfortunately, bots use duckduckgo too" in lowered:
+            raise RuntimeError("DuckDuckGo returned a human-verification challenge")
+        if response.status_code != 200:
+            raise RuntimeError(
+                f"DuckDuckGo returned HTTP {response.status_code}; public search is unavailable"
+            )
         response.raise_for_status()
         soup = BeautifulSoup(response.text, "lxml")
         results = []
@@ -227,26 +246,101 @@ class PublicCompanyWebsiteFinder:
         return results
 
 
+class _TavilyCompanySearch:
+    def __init__(self, connector, max_api_calls: int = MAX_TAVILY_API_CALLS_PER_RUN):
+        self.connector = connector
+        self.max_api_calls = max_api_calls
+        self.api_calls = 0
+
+    def __call__(self, query: str) -> list[dict[str, str]]:
+        cached = self.connector.has_cached_result(query)
+        if not cached and self.api_calls >= self.max_api_calls:
+            raise PublicSearchBudgetError("BTP Tavily per-run search cap reached")
+        if not cached and not any(key.budget.remaining() > 0 for key in self.connector.keys):
+            raise PublicSearchBudgetError("Tavily daily key budget exhausted")
+        results = asyncio.run(self.connector.search(query))
+        if not cached:
+            self.api_calls += 1
+        if self.connector.last_status == "degraded":
+            raise RuntimeError("Tavily company search failed or its daily budget is exhausted")
+        return [
+            {"url": item.url, "title": item.title, "snippet": item.description}
+            for item in results
+        ]
+
+
+def _configured_public_search():
+    from dotenv import load_dotenv
+
+    load_dotenv()
+    api_keys = [key.strip() for key in os.getenv("TAVILY_API_KEYS", "").split(",") if key.strip()]
+    if not api_keys:
+        return PublicCompanyWebsiteFinder._search
+
+    from app.connectors.tavily_resilience import (
+        DailyBudget,
+        ResilientTavily,
+        TavilyCache,
+        TavilyKey,
+        key_fingerprint,
+    )
+
+    data_dir = ROOT_DIR / "data"
+    data_dir.mkdir(parents=True, exist_ok=True)
+    keys = [
+        TavilyKey(
+            api_key=key,
+            budget=DailyBudget(data_dir / f"tavily_budget_{key_fingerprint(key)}.json", limit=20),
+            fp=key_fingerprint(key),
+        )
+        for key in api_keys
+    ]
+    return _TavilyCompanySearch(ResilientTavily(
+        keys=keys,
+        cache=TavilyCache(data_dir / "tavily_cache.json"),
+        results_per_query=MAX_WEBSITE_SEARCH_RESULTS,
+        source_name="btp_company_search",
+        result_source_type="search_engine",
+        query_suffix="",
+        max_key_attempts=1,
+    ))
+
+
 class PublicBtpCompanySearch:
     """Bounded city-by-city web search that augments incomplete OSM listings."""
 
-    def __init__(self, search=None):
-        self.search = search or PublicCompanyWebsiteFinder._search
+    def __init__(self, search=None, *, state_path=None,
+                 max_city_searches: int = MAX_CITY_SEARCHES_PER_RUN):
+        self.search = search or _configured_public_search()
+        self.state_path = state_path or (CITY_SEARCH_STATE_PATH if search is None else None)
+        self.max_city_searches = max(1, int(max_city_searches))
         self.errors: list[str] = []
+        self.search_budget_limited = False
 
     def discover(self) -> list[BtpCompany]:
-        cities = sorted(
+        all_cities = sorted(
             MOROCCO_CITY_CENTERS.items(),
             key=lambda item: haversine_km(item[1][1], item[1][2]),
         )
+        cursor = _load_city_search_cursor(self.state_path, len(all_cities))
+        cities = all_cities[cursor:] + all_cities[:cursor]
         found: dict[str, BtpCompany] = {}
-        for city, (region, latitude, longitude) in cities:
+        searched_cities = 0
+        for offset, (city, (region, latitude, longitude)) in enumerate(cities):
+            if searched_cities >= self.max_city_searches:
+                break
             query = f'entreprise BTP travaux publics génie civil Maroc {city}'
             try:
                 results = self.search(query)[:MAX_WEBSITE_SEARCH_RESULTS]
             except Exception as exc:
                 self.errors.append(f"public company search failed for {city}: {exc}")
+                self.search_budget_limited = isinstance(exc, PublicSearchBudgetError)
                 break
+            searched_cities += 1
+            _save_city_search_cursor(
+                self.state_path,
+                (cursor + offset + 1) % len(all_cities),
+            )
             for item in results:
                 url = _eligible_website(str(item.get("url", "")))
                 if not url:
@@ -280,6 +374,26 @@ class PublicBtpCompanySearch:
                     source_url=url,
                 ))
         return sorted(found.values(), key=lambda item: (item.distance_km, item.name.casefold()))
+
+
+def _load_city_search_cursor(path: Path | None, city_count: int) -> int:
+    if path is None or not path.exists():
+        return 0
+    state = json.loads(path.read_text(encoding="utf-8"))
+    cursor = int(state.get("next_city_index", 0))
+    return cursor % city_count
+
+
+def _save_city_search_cursor(path: Path | None, cursor: int) -> None:
+    if path is None:
+        return
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_suffix(path.suffix + ".tmp")
+    temporary.write_text(
+        json.dumps({"next_city_index": cursor}),
+        encoding="utf-8",
+    )
+    temporary.replace(path)
 
 
 def _mentions_construction(text: str) -> bool:
@@ -578,6 +692,7 @@ def run_btp_outreach(
     try:
         searched = search.discover()
         report.errors.extend(getattr(search, "errors", []))
+        report.search_budget_limited = getattr(search, "search_budget_limited", False)
     except Exception as exc:
         report.errors.append(f"public company web search failed: {exc}")
     if not listed and not searched:
@@ -651,11 +766,25 @@ def run_btp_outreach(
         session=session,
         allow_redirects=False,
     )
-    finder = website_finder or PublicCompanyWebsiteFinder()
-    for candidate, company, target, existing_outreach in targets:
-        website = _eligible_website(candidate.website) or finder.find(
-            candidate.name, candidate.location,
+    finder = website_finder
+    if finder is None:
+        finder = PublicCompanyWebsiteFinder(
+            search=search.search if isinstance(search, PublicBtpCompanySearch) else None,
         )
+    for candidate, company, target, existing_outreach in targets:
+        try:
+            website = _eligible_website(candidate.website) or finder.find(
+                candidate.name, candidate.location,
+            )
+        except Exception as exc:
+            if isinstance(exc, PublicSearchBudgetError):
+                report.search_budget_limited = True
+                target.status = "search_budget_deferred"
+                break
+            report.errors.append(f"official website search failed for a listed company: {exc}")
+            target.status = "research_error"
+            report.companies.append(_company_result(candidate, "research_error"))
+            continue
         if not website:
             report.no_website += 1
             target.status = "no_verified_website"

@@ -78,6 +78,13 @@ search and directory listings are also incomplete and not an exhaustive source.
 Already-screened targets are recorded so later batches advance to the next
 nearest unprocessed listings instead of repeating the same first batch.
 
+Public discovery rotates through at most two cities per run and persists its
+cursor with the vault state. Tavily-backed BTP lookup is capped at three
+uncached API requests per run, including official-site lookups; cached queries
+do not consume that cap, and each query tries at most one credential. The
+existing shared per-key daily budget remains in force, and the run report marks
+when a search budget defers work.
+
 The command refuses to run unless `EMAIL_MODE=draft`, `ENABLE_EMAIL=true`, and
 `EMAIL_PROVIDER=gmail`; the existing safety gate, cooldowns, duplicate checks,
 claim allowlist, CV requirement, and daily limits still apply. It never sends

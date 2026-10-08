@@ -5,7 +5,9 @@ from datetime import timedelta
 
 import pytest
 
+import app.workflows.btp_outreach as btp_outreach
 from app import models
+from app.connectors.tavily_resilience import DailyBudget, ResilientTavily, TavilyCache, TavilyKey
 from app.discovery.website_researcher import EvidenceFact, ResearchResult
 from app.email import provider
 from app.memory import store
@@ -14,6 +16,7 @@ from app.models import utcnow
 from app.workflows.action import pending_actions
 from app.workflows.analysis import analyze_job
 from app.workflows.btp_outreach import (
+    MOROCCO_CITY_CENTERS,
     BtpCompany,
     BtpOutreachSafetyError,
     OverpassBtpDiscovery,
@@ -233,7 +236,10 @@ def test_public_btp_search_queries_cities_from_nearest_outward():
             }]
         return []
 
-    results = PublicBtpCompanySearch(search=search).discover()
+    results = PublicBtpCompanySearch(
+        search=search,
+        max_city_searches=len(MOROCCO_CITY_CENTERS),
+    ).discover()
     assert [company.city for company in results] == ["Casablanca", "Rabat"]
     assert results[0].distance_km < results[1].distance_km
 
@@ -253,6 +259,182 @@ def test_public_btp_search_uses_directory_only_as_a_company_name_seed():
     assert results[0].name == "Atlas"
     assert results[0].website == ""
     assert results[0].city == "Casablanca"
+
+
+def test_public_btp_search_rotates_city_batches_without_repeating_nearby_queries(tmp_path):
+    calls = []
+
+    def search(query):
+        city = next(
+            name for name in MOROCCO_CITY_CENTERS if query.endswith(name)
+        )
+        calls.append(city)
+        return []
+
+    state_path = tmp_path / "btp_search_state.json"
+    first = PublicBtpCompanySearch(
+        search=search, state_path=state_path, max_city_searches=2,
+    )
+    first.discover()
+    second = PublicBtpCompanySearch(
+        search=search, state_path=state_path, max_city_searches=2,
+    )
+    second.discover()
+
+    assert calls == ["Casablanca", "Mohammedia", "Settat", "Rabat"]
+
+
+def test_public_search_reports_duckduckgo_human_verification(monkeypatch):
+    class Response:
+        status_code = 202
+        text = "Unfortunately, bots use DuckDuckGo too. Please complete the following challenge"
+
+    monkeypatch.setattr(btp_outreach.requests, "post", lambda *args, **kwargs: Response())
+    with pytest.raises(RuntimeError, match="human-verification challenge"):
+        PublicCompanyWebsiteFinder._search("construction companies Casablanca")
+
+
+def test_configured_public_search_uses_tavily_budgeted_keys(monkeypatch, tmp_path):
+    monkeypatch.setenv("TAVILY_API_KEYS", "key-one,key-two")
+    monkeypatch.setattr(btp_outreach, "ROOT_DIR", tmp_path)
+
+    class FakeTavily:
+        def __init__(self, **kwargs):
+            self.options = kwargs
+
+    monkeypatch.setattr(
+        "app.connectors.tavily_resilience.ResilientTavily", FakeTavily,
+    )
+    search = btp_outreach._configured_public_search()
+    assert isinstance(search, btp_outreach._TavilyCompanySearch)
+    assert len(search.connector.options["keys"]) == 2
+    assert search.connector.options["query_suffix"] == ""
+
+
+def test_tavily_company_search_maps_public_results():
+    class FakeBudget:
+        def remaining(self):
+            return 10
+
+    class FakeConnector:
+        last_status = "ok"
+
+        def __init__(self):
+            self.keys = [type("Key", (), {"budget": FakeBudget()})()]
+
+        def has_cached_result(self, query):
+            return False
+
+        async def search(self, query):
+            assert query == "construction companies Casablanca"
+            return [type("Result", (), {
+                "url": "https://builder.ma",
+                "title": "Builder Morocco",
+                "description": "Construction company",
+            })()]
+
+    result = btp_outreach._TavilyCompanySearch(FakeConnector())(
+        "construction companies Casablanca"
+    )
+    assert result == [{
+        "url": "https://builder.ma",
+        "title": "Builder Morocco",
+        "snippet": "Construction company",
+    }]
+
+
+def test_tavily_company_search_caps_uncached_requests_but_allows_cache_hits():
+    class FakeBudget:
+        def remaining(self):
+            return 10
+
+    class FakeConnector:
+        last_status = "ok"
+
+        def __init__(self):
+            self.keys = [type("Key", (), {"budget": FakeBudget()})()]
+            self.cached_queries = set()
+            self.calls = []
+
+        def has_cached_result(self, query):
+            return query in self.cached_queries
+
+        async def search(self, query):
+            if query not in self.cached_queries:
+                self.calls.append(query)
+                self.cached_queries.add(query)
+            return []
+
+    connector = FakeConnector()
+    search = btp_outreach._TavilyCompanySearch(connector, max_api_calls=1)
+    search("cached query")
+    with pytest.raises(btp_outreach.PublicSearchBudgetError, match="per-run"):
+        search("new query")
+    search("cached query")
+    assert connector.calls == ["cached query"]
+
+
+def test_resilient_tavily_can_search_without_job_suffix(monkeypatch, tmp_path):
+    request = {}
+
+    class Response:
+        status_code = 200
+
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {"results": [{
+                "url": "https://builder.ma",
+                "title": "Builder Morocco",
+                "content": "Construction company",
+            }]}
+
+    monkeypatch.setattr(
+        "app.connectors.tavily_resilience.requests.post",
+        lambda _url, *, json, timeout: (request.update(json) or Response()),
+    )
+    budget = DailyBudget(tmp_path / "budget.json", limit=5)
+    connector = ResilientTavily(
+        keys=[TavilyKey("test-key", budget, "test-key")],
+        cache=TavilyCache(tmp_path / "cache.json"),
+        query_suffix="",
+    )
+
+    results = asyncio.run(connector.search("construction companies Casablanca"))
+
+    assert request["query"] == "construction companies Casablanca"
+    assert len(results) == 1
+    assert budget.remaining() == 4
+
+
+def test_resilient_tavily_caps_api_key_attempts(monkeypatch, tmp_path):
+    calls = []
+
+    class Response:
+        status_code = 429
+
+    monkeypatch.setattr(
+        "app.connectors.tavily_resilience.requests.post",
+        lambda *_args, **_kwargs: (calls.append("request") or Response()),
+    )
+    first_budget = DailyBudget(tmp_path / "first.json", limit=5)
+    second_budget = DailyBudget(tmp_path / "second.json", limit=5)
+    connector = ResilientTavily(
+        keys=[
+            TavilyKey("first", first_budget, "first"),
+            TavilyKey("second", second_budget, "second"),
+        ],
+        cache=TavilyCache(tmp_path / "cache.json"),
+        query_suffix="",
+        max_key_attempts=1,
+    )
+
+    assert asyncio.run(connector.search("construction company Casablanca")) == []
+    assert asyncio.run(connector.search("construction company Rabat")) == []
+    assert calls == ["request", "request"]
+    assert first_budget.remaining() == 0
+    assert second_budget.remaining() == 0
 
 
 def test_explicit_instruction_requires_submission_direction():

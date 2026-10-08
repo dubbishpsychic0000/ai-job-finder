@@ -177,6 +177,8 @@ class ResilientTavily:
         domains: list[str] | None = None,
         source_name: str = "tavily",
         result_source_type: str = "search_engine",
+        query_suffix: str = "job",
+        max_key_attempts: int | None = None,
     ):
         if keys:
             self.keys = list(keys)
@@ -200,8 +202,18 @@ class ResilientTavily:
         self.domains = [domain.lower().lstrip(".") for domain in (domains or [])]
         self.source_name = source_name
         self.result_source_type = result_source_type
+        self.query_suffix = query_suffix
+        self.max_key_attempts = max_key_attempts
         self.name = f"tavily_resilient:{self.keys[0].fp}"
         self.last_status = "ready"
+
+    def has_cached_result(self, query: str, location: str = "") -> bool:
+        q = f"{query} {location} {self.query_suffix}".strip()
+        if self.official_only:
+            q += " (site:boards.greenhouse.io OR site:jobs.lever.co OR site:myworkdayjobs.com OR site:jobs.smartrecruiters.com OR site:icims.com OR site:jobs.ashbyhq.com OR site:recruitee.com)"
+        elif self.domains:
+            q += " (" + " OR ".join(f"site:{domain}" for domain in self.domains) + ")"
+        return self.cache.get(_cache_key(q, location)) is not None
 
     def _allowed(self, href: str, *, ats: str = "") -> bool:
         from urllib.parse import urlparse
@@ -223,7 +235,7 @@ class ResilientTavily:
         return host.split(".")[0].replace("-", " ").title()
 
     async def search(self, query: str, location: str = "") -> list[Opportunity]:
-        q = f"{query} {location} job".strip()
+        q = f"{query} {location} {self.query_suffix}".strip()
         if self.official_only:
             q += " (site:boards.greenhouse.io OR site:jobs.lever.co OR site:myworkdayjobs.com OR site:jobs.smartrecruiters.com OR site:icims.com OR site:jobs.ashbyhq.com OR site:recruitee.com)"
         elif self.domains:
@@ -236,7 +248,12 @@ class ResilientTavily:
             # Convert cached dicts back to Opportunity objects
             return [Opportunity(**d) for d in cached]
 
-        for key in self.keys:
+        keys = self.keys
+        if self.max_key_attempts is not None:
+            keys = [
+                key for key in keys if key.budget.remaining() > 0
+            ][:max(0, self.max_key_attempts)]
+        for key in keys:
             if key.budget.remaining() <= 0:
                 logger.debug("Tavily key %s budget exhausted, skipping", key.fp)
                 continue
