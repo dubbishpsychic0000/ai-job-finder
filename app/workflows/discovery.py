@@ -7,8 +7,10 @@ import asyncio
 import logging
 import os
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
+from enum import StrEnum
 from pathlib import Path
-from urllib.parse import urlparse
+from urllib.parse import urlparse, urlunparse
 
 from dotenv import load_dotenv
 from sqlalchemy.orm import Session
@@ -28,6 +30,7 @@ from app.discovery.opportunity_details import classify_opportunity, detect_appli
 from app.discovery.verification import freshness_label
 from app.discovery.vocabulary import CandidateVocabulary
 from app.discovery.website_researcher import host_domain, normalize_url
+from app.models import Company
 from app.normalization import normalize
 
 logger = logging.getLogger(__name__)
@@ -38,15 +41,99 @@ ATS_DOMAINS = (
     "greenhouse.io", "lever.co", "myworkdayjobs.com", "smartrecruiters.com",
     "ashbyhq.com", "personio.com", "workable.com",
 )
+JOB_BOARD_DOMAINS = (
+    "linkedin.com", "indeed.com", "glassdoor.com", "monster.com",
+    "ziprecruiter.com", "naukri.com", "bayt.com", "rekrute.com",
+    "emploi.ma", "anapec.org", "welcome-to-the-jungle.com",
+)
+DIRECTORY_DOMAINS = (
+    "annuaire.com", "telecontact.ma", "kerix.net", "kompass.com",
+    "marocannuaire.org", "goafricaonline.com",
+)
 
 
-def _direct_company_career_url(opp, source_type: str) -> str:
-    """Return an employer-owned HTTPS career page, never an ATS or job-board URL."""
+class CompanyUrlKind(StrEnum):
+    EMPLOYER_OFFICIAL_WEBSITE = "EMPLOYER_OFFICIAL_WEBSITE"
+    EMPLOYER_CAREERS_PAGE = "EMPLOYER_CAREERS_PAGE"
+    EMPLOYER_RECRUITMENT_PAGE = "EMPLOYER_RECRUITMENT_PAGE"
+    ATS = "ATS"
+    JOB_BOARD = "JOB_BOARD"
+    DIRECTORY = "DIRECTORY"
+    UNKNOWN = "UNKNOWN"
+
+
+def _classify_company_urls(opp, source_type: str) -> dict[str, str]:
+    """Classify employer-related links without promoting job/ATS URLs to official sites."""
     raw = opp.raw or {}
-    if source_type != "company_career" or raw.get("ats"):
-        return ""
-    page = normalize_url(str(raw.get("page") or ""))
-    parsed = urlparse(page)
+    result = {
+        "kind": CompanyUrlKind.UNKNOWN.value,
+        "website": "",
+        "official_domain": "",
+        "careers_url": "",
+        "recruitment_url": "",
+        "profile_url": "",
+    }
+    direct_values = (
+        ("company_website", CompanyUrlKind.EMPLOYER_OFFICIAL_WEBSITE),
+        ("official_website", CompanyUrlKind.EMPLOYER_OFFICIAL_WEBSITE),
+        ("careers_url", CompanyUrlKind.EMPLOYER_CAREERS_PAGE),
+        ("recruitment_url", CompanyUrlKind.EMPLOYER_RECRUITMENT_PAGE),
+        ("company_profile_url", CompanyUrlKind.EMPLOYER_OFFICIAL_WEBSITE),
+    )
+    for field_name, kind in direct_values:
+        direct = _trusted_employer_url(raw.get(field_name))
+        if not direct:
+            continue
+        result["kind"] = kind.value
+        if kind == CompanyUrlKind.EMPLOYER_OFFICIAL_WEBSITE:
+            result["website"] = _website_origin(direct)
+            result["official_domain"] = host_domain(direct)
+            if field_name == "company_profile_url":
+                result["profile_url"] = direct
+        elif kind == CompanyUrlKind.EMPLOYER_CAREERS_PAGE:
+            result["careers_url"] = direct
+            result["website"] = _website_origin(direct)
+            result["official_domain"] = host_domain(direct)
+        else:
+            result["recruitment_url"] = direct
+            result["website"] = _website_origin(direct)
+            result["official_domain"] = host_domain(direct)
+        return result
+
+    if source_type == "ats" or raw.get("ats"):
+        result["kind"] = CompanyUrlKind.ATS.value
+        return result
+
+    page = _trusted_employer_url(raw.get("page"))
+    if page and source_type == "company_career":
+        result.update(
+            kind=CompanyUrlKind.EMPLOYER_CAREERS_PAGE.value,
+            website=_website_origin(page),
+            official_domain=host_domain(page),
+            careers_url=page,
+        )
+        return result
+
+    url = str(getattr(opp, "url", "") or "")
+    domain = host_domain(url)
+    if domain and any(domain == item or domain.endswith(f".{item}") for item in ATS_DOMAINS):
+        result["kind"] = CompanyUrlKind.ATS.value
+    elif domain and any(
+        domain == item or domain.endswith(f".{item}") for item in DIRECTORY_DOMAINS
+    ):
+        result["kind"] = CompanyUrlKind.DIRECTORY.value
+    elif source_type == "job_board" or (
+        domain and any(
+            domain == item or domain.endswith(f".{item}") for item in JOB_BOARD_DOMAINS
+        )
+    ):
+        result["kind"] = CompanyUrlKind.JOB_BOARD.value
+    return result
+
+
+def _trusted_employer_url(value) -> str:
+    normalized = normalize_url(str(value or ""))
+    parsed = urlparse(normalized)
     if parsed.scheme != "https" or parsed.username or parsed.password:
         return ""
     try:
@@ -54,10 +141,52 @@ def _direct_company_career_url(opp, source_type: str) -> str:
             return ""
     except ValueError:
         return ""
-    domain = host_domain(page)
+    domain = host_domain(normalized)
     if not domain or any(domain == item or domain.endswith(f".{item}") for item in ATS_DOMAINS):
         return ""
-    return page
+    if any(domain == item or domain.endswith(f".{item}") for item in (
+        *JOB_BOARD_DOMAINS,
+        *DIRECTORY_DOMAINS,
+    )):
+        return ""
+    return normalized
+
+
+def _website_origin(url: str) -> str:
+    parsed = urlparse(url)
+    return urlunparse((parsed.scheme, parsed.netloc, "/", "", "", ""))
+
+
+def _direct_company_career_url(opp, source_type: str) -> str:
+    """Compatibility helper returning only a provenance-qualified career page."""
+    classified = _classify_company_urls(opp, source_type)
+    return classified["careers_url"]
+
+
+def _upsert_opportunity_company(
+    session: Session, opp, source_type: str,
+) -> tuple[Company, dict[str, str]]:
+    company_urls = _classify_company_urls(opp, source_type)
+    company = mem.store.get_or_create_company(
+        session,
+        opp.company or "Unknown",
+        company_urls["website"],
+        opp.country,
+        careers_url=company_urls["careers_url"],
+        recruitment_url=company_urls["recruitment_url"],
+        source=opp.source,
+        official_domain=company_urls["official_domain"],
+        sponsorship_signal=opp.sponsorship_signal,
+        international_recruitment_signal=opp.international_candidate_signal,
+    )
+    incoming_domain = company_urls["official_domain"]
+    if incoming_domain and (
+        not company.official_domain or company.official_domain == incoming_domain
+    ):
+        company.official_domain = incoming_domain
+        if not company.website or host_domain(company.website) != incoming_domain:
+            company.website = company_urls["website"]
+    return company, company_urls
 
 
 @dataclass
@@ -277,23 +406,9 @@ async def run_discovery(session: Session, config: AgentConfig, prefs: Preference
                 src_type = opp.effective_source_type()
                 qmap = discovery_cfg.get("source_quality") or {}
                 quality = int(qmap.get(src_type, opp.effective_quality())) if qmap else opp.effective_quality()
-                careers_url = (opp.raw or {}).get("page", "") if src_type in ("company_career", "ats") else ""
-                employer_career_url = _direct_company_career_url(opp, src_type)
-                company = mem.store.get_or_create_company(
-                    session, opp.company or "Unknown",
-                    employer_career_url or opp.url, opp.country,
-                    careers_url=careers_url, source=opp.source,
-                    official_domain=host_domain(employer_career_url),
-                    sponsorship_signal=opp.sponsorship_signal,
-                    international_recruitment_signal=opp.international_candidate_signal,
+                company, company_urls = _upsert_opportunity_company(
+                    session, opp, src_type
                 )
-                if employer_career_url and (
-                    not company.official_domain
-                    or company.official_domain == host_domain(employer_career_url)
-                ):
-                    company.official_domain = host_domain(employer_career_url)
-                    if not company.website or host_domain(company.website) != company.official_domain:
-                        company.website = employer_career_url
                 raw_channel = (opp.raw or {}).get("channel", "")
                 kind = "RECRUITMENT_POST" if src_type == "recruitment_post" else "JOB"
                 if src_type in {"company_career", "ats"}:
@@ -304,7 +419,14 @@ async def run_discovery(session: Session, config: AgentConfig, prefs: Preference
                     source=opp.source, source_type=src_type,
                     discovery_channel=raw_channel or ("indexed" if "search" in source_name else "direct"),
                     evidence={"description": opp.description[:4000], "query": combo["query"],
-                              "location": combo["location"]},
+                              "location": opp.location,
+                              "search_location": combo["location"],
+                              "company_url_kind": company_urls["kind"],
+                              "company_website": company_urls["website"],
+                              "careers_url": company_urls["careers_url"],
+                              "recruitment_url": company_urls["recruitment_url"],
+                              "company_profile_url": company_urls["profile_url"],
+                              "source_url": opp.url},
                     reason="discovered opportunity", relevance_score=quality,
                 )
                 job_data = {
@@ -346,8 +468,9 @@ async def run_discovery(session: Session, config: AgentConfig, prefs: Preference
                     if researcher is not None and src_type == "company_career" and opp.url:
                         researcher.research_and_apply(
                             opp.url, company_id=company.id, job_id=job.id,
-                            official_domain=company.official_domain or host_domain(opp.url),
+                            official_domain=company.official_domain,
                         )
+                        company.last_researched_at = datetime.now(timezone.utc)
                     verification = EmailVerificationService(session).verify_job(job, source_type=src_type)
                     # Never copy an unverified string into a job as a sendable recipient.
                     job.contact_email = verification.email if verification.verified else ""

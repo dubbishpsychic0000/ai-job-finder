@@ -44,7 +44,7 @@ from app.discovery.website_researcher import (
     normalize_url,
 )
 from app.email.service import ApplicationEngine
-from app.models import Company, Job
+from app.models import Company, Discovery, Evidence, Job
 
 OVERPASS_URL = "https://overpass-api.de/api/interpreter"
 MAX_OVERPASS_BYTES = 5 * 1024 * 1024
@@ -64,6 +64,8 @@ BTPOUTREACH_STATE_MAX_BYTES = 5 * 1024 * 1024
 BTPOUTREACH_SCREENING_POLICY_VERSION = 2
 WIKIDATA_CACHE_PATH = ROOT_DIR / "data" / "btp_wikidata_cache.json"
 WIKIDATA_CACHE_TTL = timedelta(days=30)
+COMPANY_EVIDENCE_TTL = timedelta(days=30)
+CONTACT_VERIFICATION_TTL = timedelta(days=30)
 WIKIDATA_SPARQL_URL = "https://query.wikidata.org/sparql"
 MAX_SEED_FILE_BYTES = 1024 * 1024
 MAX_SEED_COMPANIES = 2000
@@ -272,7 +274,7 @@ class BtpOutreachSafetyError(ValueError):
     """Raised when this workflow's mandatory draft-only gates are not met."""
 
 
-@dataclass(frozen=True)
+@dataclass
 class BtpCompany:
     name: str
     website: str
@@ -284,10 +286,14 @@ class BtpCompany:
     source_url: str = OVERPASS_URL
     source: str = ""
     company_id: int | None = None
+    readiness: str = "DISCOVERED"
+    source_location: str = ""
 
     @property
     def location(self) -> str:
-        return ", ".join(value for value in (self.city, self.region, "Morocco") if value)
+        return self.source_location or ", ".join(
+            value for value in (self.city, self.region, "Morocco") if value
+        )
 
 
 @dataclass
@@ -314,6 +320,8 @@ class BtpOutreachReport:
     search_budget_limited: bool = False
     blocked: int = 0
     daily_limit_reached: bool = False
+    external_company_search_skipped: bool = False
+    readiness_counts: dict[str, int] = field(default_factory=dict)
     errors: list[str] = field(default_factory=list)
     companies: list[dict] = field(default_factory=list)
     limitation: str = (
@@ -324,6 +332,24 @@ class BtpOutreachReport:
     @property
     def no_explicit_instructions(self) -> int:
         return self.no_spontaneous_instructions
+
+    def refresh_readiness_counts(self) -> None:
+        states = (
+            "DISCOVERED",
+            "WEBSITE_KNOWN",
+            "WEBSITE_VERIFIED",
+            "RECRUITMENT_CHANNEL_FOUND",
+            "CONTACT_FOUND",
+            "OUTREACH_ELIGIBLE",
+            "CONTACTED",
+            "COOLDOWN",
+            "RESEARCH_DEFERRED",
+        )
+        counts = dict.fromkeys(states, 0)
+        for company in self.companies:
+            readiness = company.get("readiness", "DISCOVERED")
+            counts[readiness] = counts.get(readiness, 0) + 1
+        self.readiness_counts = counts
 
     def as_run_report(self) -> dict:
         return {
@@ -373,6 +399,7 @@ class BtpOutreachReport:
                     "blocked": self.blocked,
                     "search_budget_limited": self.search_budget_limited,
                     "daily_limit_reached": self.daily_limit_reached,
+                    "external_company_search_skipped": self.external_company_search_skipped,
                     "production_smoke_outcome": (
                         "draft_created"
                         if self.drafts
@@ -382,6 +409,7 @@ class BtpOutreachReport:
                             else "no eligible production smoke target"
                         )
                     ),
+                    "readiness": self.readiness_counts,
                 },
             },
             "followup": {"sent": 0, "blocked": 0, "errors": []},
@@ -975,6 +1003,30 @@ def _company_pool_candidates(session: Session) -> list[BtpCompany]:
         if job.location:
             job_locations.setdefault(company.id, []).append(job.location)
 
+    for discovery in (
+        session.query(Discovery)
+        .filter(Discovery.company_id.in_(companies))
+        .order_by(Discovery.discovered_at.desc())
+        .limit(5000)
+    ):
+        evidence = discovery.evidence or {}
+        for key in ("location", "city"):
+            value = evidence.get(key)
+            if isinstance(value, str) and value.strip():
+                job_locations.setdefault(discovery.company_id, []).append(value.strip())
+        if discovery.title or evidence.get("description"):
+            job_facts.setdefault(discovery.company_id, []).append(
+                f"{discovery.title} {str(evidence.get('description', ''))[:4000]}"
+            )
+
+    company_evidence: dict[int, list[Evidence]] = {}
+    evidence_rows = session.query(Evidence).filter(
+        Evidence.company_id.in_(companies)
+    ).order_by(Evidence.discovered_at.desc()).limit(10000)
+    for row in evidence_rows:
+        company_evidence.setdefault(row.company_id, []).append(row)
+
+    now = datetime.now(timezone.utc)
     candidates = []
     for company in companies.values():
         official_domain = (
@@ -999,15 +1051,18 @@ def _company_pool_candidates(session: Session) -> list[BtpCompany]:
         ))
         if not _mentions_construction(employer_text):
             continue
-        city = ""
+        source_location = ""
+        actual_location = ""
         locations = [
             *job_locations.get(company.id, []),
             company.notes or "",
             company.discovery_reason or "",
         ]
         for location in locations:
+            if not actual_location and location.strip():
+                actual_location = location.strip()[:120]
             normalized_location = _normalize_city_name(location)
-            city = next(
+            known_city = next(
                 (
                     known_city for known_city in MOROCCO_CITY_CENTERS
                     if f" {_normalize_city_name(known_city)} "
@@ -1015,29 +1070,96 @@ def _company_pool_candidates(session: Session) -> list[BtpCompany]:
                 ),
                 "",
             )
-            if city:
+            if known_city:
+                source_location = known_city
                 break
+            if location.strip():
+                source_location = location.strip()[:120]
+                break
+        city = _canonical_city(source_location)
         if city:
             region, latitude, longitude = _city_location(city)
             distance = haversine_km(latitude, longitude)
         else:
             region, latitude, longitude = "", 0.0, 0.0
             distance = 20_000.0
+        facts = _evidence_facts(company_evidence.get(company.id, []))
+        latest_evidence = max(
+            (row.discovered_at for row in company_evidence.get(company.id, [])),
+            default=None,
+        )
+        if latest_evidence and latest_evidence.tzinfo is None:
+            latest_evidence = latest_evidence.replace(tzinfo=timezone.utc)
+        fresh_evidence = bool(
+            latest_evidence and now - latest_evidence <= COMPANY_EVIDENCE_TTL
+        )
+        readiness = "WEBSITE_VERIFIED"
+        if any(
+            fact.field_name == "relevant_page"
+            and fact.source_type in {"careers", "recruitment", "spontaneous"}
+            for fact in facts
+        ) or company.careers_url or company.recruitment_url:
+            readiness = "RECRUITMENT_CHANNEL_FOUND"
+        if fresh_evidence and _qualifying_contact(facts, official_domain):
+            readiness = "OUTREACH_ELIGIBLE"
+        elif any(fact.field_name in {"general_email", "recruitment_email"} for fact in facts):
+            readiness = "CONTACT_FOUND"
         candidates.append(BtpCompany(
             name=company.name,
             website=website,
-            city=city,
+            city=city or source_location,
             region=region,
             latitude=latitude,
             longitude=longitude,
             distance_km=distance,
-            source_url=company.careers_url or website,
+            source_url=company.recruitment_url or company.careers_url or website,
             source="company_pool",
             company_id=company.id,
+            readiness=readiness,
+            source_location=actual_location,
         ))
-    return sorted(candidates, key=lambda item: (item.distance_km, item.name.casefold()))[
-        :MAX_CANDIDATES
+    readiness_priority = {
+        "OUTREACH_ELIGIBLE": 0,
+        "CONTACT_FOUND": 1,
+        "RECRUITMENT_CHANNEL_FOUND": 2,
+        "WEBSITE_VERIFIED": 3,
+        "WEBSITE_KNOWN": 4,
+        "DISCOVERED": 5,
+    }
+    return sorted(
+        candidates,
+        key=lambda item: (
+            readiness_priority.get(item.readiness, 6),
+            item.distance_km,
+            item.name.casefold(),
+        ),
+    )[:MAX_CANDIDATES]
+
+
+def _evidence_facts(rows: list[Evidence]) -> list[EvidenceFact]:
+    return [
+        EvidenceFact(
+            source_url=row.source_url,
+            source_type=row.source_type,
+            page_title=row.page_title,
+            field_name=row.field_name,
+            extracted_value=row.extracted_value,
+            snippet=row.snippet,
+            domain_relationship=row.domain_relationship,
+            confidence=row.confidence,
+            reason_code=row.reason_code,
+        )
+        for row in rows
     ]
+
+
+def _research_is_fresh(company: Company, evidence_rows: list[Evidence]) -> bool:
+    if not company.last_researched_at or not evidence_rows:
+        return False
+    researched_at = company.last_researched_at
+    if researched_at.tzinfo is None:
+        researched_at = researched_at.replace(tzinfo=timezone.utc)
+    return datetime.now(timezone.utc) - researched_at <= COMPANY_EVIDENCE_TTL
 
 
 def _mentions_construction(text: str) -> bool:
@@ -1166,6 +1288,24 @@ def rank_nearest(companies: list[BtpCompany], max_companies: int = DEFAULT_MAX_C
                  ) -> list[BtpCompany]:
     cap = max(1, min(HARD_MAX_COMPANIES, int(max_companies)))
     return sorted(companies, key=lambda item: (item.distance_km, item.name.casefold()))[:cap]
+
+
+def _rank_company_candidates(companies: list[BtpCompany]) -> list[BtpCompany]:
+    readiness_priority = {
+        "OUTREACH_ELIGIBLE": 0,
+        "CONTACT_FOUND": 1,
+        "RECRUITMENT_CHANNEL_FOUND": 2,
+        "WEBSITE_VERIFIED": 3,
+        "WEBSITE_KNOWN": 4,
+        "DISCOVERED": 5,
+        "RESEARCH_DUE": 6,
+    }
+    return sorted(companies, key=lambda item: (
+        readiness_priority.get(item.readiness, 6),
+        not bool(_eligible_website(item.website)),
+        item.distance_km,
+        item.name.casefold(),
+    ))
 
 
 def _is_btp_business(tags: dict) -> bool:
@@ -1424,21 +1564,30 @@ def run_btp_outreach(
         wikidata_companies = []
         report.errors.append(f"Wikidata BTP discovery failed: {exc}")
     search = company_search or PublicBtpCompanySearch()
-    try:
-        searched = search.discover()
-        report.errors.extend(getattr(search, "errors", []))
-        report.search_budget_limited = getattr(search, "search_budget_limited", False)
-    except Exception as exc:
-        report.errors.append(f"public company web search failed: {exc}")
-    if not listed and not seeded and not wikidata_companies and not searched and not pooled:
+    base_candidates = _merge_candidates(pooled, listed, seeded, wikidata_companies)
+    reusable_known_sites = sum(
+        bool(_eligible_website(candidate.website))
+        and not (screening_state and screening_state.is_suppressed(candidate))
+        for candidate in base_candidates
+    )
+    if reusable_known_sites < cap:
+        try:
+            searched = search.discover()
+            report.errors.extend(getattr(search, "errors", []))
+            report.search_budget_limited = getattr(search, "search_budget_limited", False)
+        except Exception as exc:
+            report.errors.append(f"public company web search failed: {exc}")
+    else:
+        report.external_company_search_skipped = True
+    if not base_candidates and not searched:
+        report.refresh_readiness_counts()
         return report
     report.osm_candidates = len(listed)
     report.seed_candidates = len(seeded)
     report.wikidata_candidates = len(wikidata_companies)
     report.web_candidates = len(searched)
-    candidates = rank_nearest(
-        _merge_candidates(pooled, listed, seeded, wikidata_companies, searched),
-        MAX_CANDIDATES,
+    candidates = _rank_company_candidates(
+        _merge_candidates(base_candidates, searched)[:MAX_CANDIDATES]
     )
     report.candidates = len(candidates)
     report.known_website_candidates = sum(
@@ -1456,6 +1605,8 @@ def run_btp_outreach(
                 record.get("status") == "drafted_for_review"
                 or bool(record.get("gmail_draft_id"))
             )
+            if previous_draft:
+                candidate.readiness = "OUTREACH_ELIGIBLE"
             report.companies.append(_company_result(
                 candidate,
                 record.get("status", "existing"),
@@ -1513,12 +1664,20 @@ def run_btp_outreach(
             None,
         )
         existing_applications = (
-            mem.store.find_applications(session, existing_outreach.id)
+            mem.store.find_applications(
+                session,
+                existing_outreach.id,
+                statuses=("sent", "drafted", "deferred", "dry_run"),
+            )
             if existing_outreach else []
         )
         if existing_applications:
             previous_draft = any(
                 application.status == "drafted" for application in existing_applications
+            )
+            candidate.readiness = (
+                "OUTREACH_ELIGIBLE"
+                if previous_draft else "CONTACTED"
             )
             target.status = "drafted_for_review"
             if screening_state:
@@ -1538,6 +1697,7 @@ def run_btp_outreach(
             session, company.id, days=cooldown_days,
         ):
             report.existing += 1
+            candidate.readiness = "COOLDOWN"
             report.companies.append(_company_result(
                 candidate,
                 "cooldown",
@@ -1549,6 +1709,15 @@ def run_btp_outreach(
         targets.append((candidate, company, target, existing_outreach))
 
     targets.sort(key=lambda item: (
+        {
+            "OUTREACH_ELIGIBLE": 0,
+            "CONTACT_FOUND": 1,
+            "RECRUITMENT_CHANNEL_FOUND": 2,
+            "WEBSITE_VERIFIED": 3,
+            "WEBSITE_KNOWN": 4,
+            "DISCOVERED": 5,
+            "RESEARCH_DUE": 6,
+        }.get(item[0].readiness, 6),
         not bool(_eligible_website(item[0].website)),
         item[0].distance_km,
         item[0].name.casefold(),
@@ -1583,12 +1752,14 @@ def run_btp_outreach(
                 if screening_state:
                     screening_state.clear(candidate)
                 report.search_budget_deferred += 1
+                candidate.readiness = "RESEARCH_DEFERRED"
                 report.companies.append(
                     _company_result(candidate, "search_budget_deferred")
                 )
                 continue
             report.errors.append(f"official website search failed for a listed company: {exc}")
             target.status = "research_error"
+            candidate.readiness = "RESEARCH_DEFERRED"
             if screening_state:
                 screening_state.mark(candidate, "research_error")
             report.companies.append(_company_result(candidate, "research_error"))
@@ -1596,6 +1767,7 @@ def run_btp_outreach(
         if not website:
             report.no_website += 1
             target.status = "no_verified_website"
+            candidate.readiness = "DISCOVERED"
             if screening_state:
                 screening_state.mark(candidate, "no_verified_website")
             report.companies.append(_company_result(candidate, "no_official_website"))
@@ -1603,28 +1775,35 @@ def run_btp_outreach(
         company.website = website
         company.official_domain = host_domain(website)
         report.researched += 1
+        candidate.readiness = "WEBSITE_VERIFIED"
         domain = host_domain(website)
         try:
-            result = crawler.research(
-                website,
-                company_id=company.id,
-                official_domain=domain,
-            )
-            evidence = list(result.evidence)
-            evidence.extend(
-                EvidenceFact(
-                    source_url=row.source_url,
-                    source_type=row.source_type,
-                    page_title=row.page_title,
-                    field_name=row.field_name,
-                    extracted_value=row.extracted_value,
-                    snippet=row.snippet,
-                    domain_relationship=row.domain_relationship,
-                    confidence=row.confidence,
-                    reason_code=row.reason_code,
+            stored_rows = mem.store.get_evidence(session, company_id=company.id)
+            if _research_is_fresh(company, stored_rows):
+                evidence = _evidence_facts(stored_rows)
+            else:
+                research_url = (
+                    _eligible_website(company.recruitment_url)
+                    or _eligible_website(company.careers_url)
+                    or website
                 )
-                for row in mem.store.get_evidence(session, company_id=company.id)
-            )
+                result = crawler.research(
+                    research_url,
+                    company_id=company.id,
+                    official_domain=domain,
+                )
+                evidence = list(result.evidence)
+                if result.visited or result.evidence:
+                    company.last_researched_at = datetime.now(timezone.utc)
+                for fact in evidence:
+                    if fact.field_name != "relevant_page":
+                        continue
+                    if fact.source_type in {"careers", "recruitment", "spontaneous"}:
+                        company.careers_url = company.careers_url or fact.extracted_value
+                    if fact.source_type in {"recruitment", "spontaneous"}:
+                        company.recruitment_url = (
+                            company.recruitment_url or fact.extracted_value
+                        )
         except Exception as exc:
             report.errors.append(f"website research failed for a listed company: {exc}")
             target.status = "research_error"
@@ -1642,6 +1821,17 @@ def run_btp_outreach(
             report.no_spontaneous_instructions += 1
         contact = _qualifying_contact(evidence, domain)
         if not contact:
+            if any(
+                fact.field_name == "relevant_page"
+                and fact.source_type in {"careers", "recruitment", "spontaneous"}
+                for fact in evidence
+            ):
+                candidate.readiness = "RECRUITMENT_CHANNEL_FOUND"
+            elif any(
+                fact.field_name in {"general_email", "recruitment_email"}
+                for fact in evidence
+            ):
+                candidate.readiness = "CONTACT_FOUND"
             if not instructions:
                 report.no_qualifying_email += 1
                 target.status = "no_explicit_instructions"
@@ -1665,6 +1855,7 @@ def run_btp_outreach(
                 report.companies.append(_company_result(candidate, "no_official_employer_email"))
             continue
         address, instruction_fact, email_fact = contact
+        candidate.readiness = "OUTREACH_ELIGIBLE"
         job = existing_outreach or _outreach_job(session, company, address, candidate.location)
         job.contact_email = address
         verification = EmailVerificationService(session).verify(
@@ -1737,6 +1928,7 @@ def run_btp_outreach(
             report.blocked += 1
             status = "draft_unconfirmed"
             target.status = "drafted_for_review"
+            candidate.readiness = "OUTREACH_ELIGIBLE"
             if screening_state:
                 screening_state.mark(candidate, "drafted_for_review")
             eligibility_reason = "Gmail draft ID missing; outcome is not confirmed"
@@ -1746,6 +1938,7 @@ def run_btp_outreach(
             target.status = "blocked_by_safety_gate"
             if screening_state:
                 screening_state.mark(candidate, status)
+            candidate.readiness = "WEBSITE_VERIFIED"
             eligibility_reason = "ApplicationEngine did not approve or confirm a Gmail draft"
         report.companies.append(_company_result(
             candidate,
@@ -1759,6 +1952,7 @@ def run_btp_outreach(
             previous_draft=False,
             cooldown=False,
         ))
+    report.refresh_readiness_counts()
     return report
 
 
@@ -1793,6 +1987,7 @@ def _company_result(
         "previous_draft": previous_draft,
         "cooldown": cooldown,
         "gmail_draft_confirmed": gmail_draft_confirmed,
+        "readiness": candidate.readiness,
     }
 
 
@@ -1804,16 +1999,55 @@ def _merge_candidates(*groups: list[BtpCompany]) -> list[BtpCompany]:
             existing = by_name.get(key)
             if existing is None:
                 by_name[key] = candidate
-            elif not existing.website and candidate.website:
+            else:
+                website = (
+                    _eligible_website(existing.website)
+                    or _eligible_website(candidate.website)
+                )
+                location = existing.city or candidate.city
+                region = existing.region or candidate.region
+                latitude = (
+                    existing.latitude
+                    if existing.latitude or existing.longitude
+                    else candidate.latitude
+                )
+                longitude = (
+                    existing.longitude
+                    if existing.latitude or existing.longitude
+                    else candidate.longitude
+                )
+                distance = (
+                    haversine_km(latitude, longitude)
+                    if latitude or longitude else min(existing.distance_km, candidate.distance_km)
+                )
+                readiness_order = {
+                    "OUTREACH_ELIGIBLE": 0,
+                    "CONTACT_FOUND": 1,
+                    "RECRUITMENT_CHANNEL_FOUND": 2,
+                    "WEBSITE_VERIFIED": 3,
+                    "WEBSITE_KNOWN": 4,
+                    "DISCOVERED": 5,
+                    "RESEARCH_DUE": 6,
+                }
+                selected = existing if (
+                    readiness_order.get(existing.readiness, 6)
+                    <= readiness_order.get(candidate.readiness, 6)
+                ) else candidate
                 by_name[key] = BtpCompany(
-                    name=existing.name,
-                    website=candidate.website,
-                    city=existing.city or candidate.city,
-                    region=existing.region or candidate.region,
-                    latitude=existing.latitude,
-                    longitude=existing.longitude,
-                    distance_km=existing.distance_km,
-                    source_url=candidate.source_url,
-                    source=candidate.source or existing.source,
+                    name=selected.name,
+                    website=website,
+                    city=location,
+                    region=region,
+                    latitude=latitude,
+                    longitude=longitude,
+                    distance_km=distance,
+                    source_url=selected.source_url or candidate.source_url,
+                    source=selected.source or candidate.source,
+                    company_id=existing.company_id or candidate.company_id,
+                    readiness=min(
+                        (existing.readiness, candidate.readiness),
+                        key=lambda value: readiness_order.get(value, 6),
+                    ),
+                    source_location=existing.source_location or candidate.source_location,
                 )
     return sorted(by_name.values(), key=lambda item: (item.distance_km, item.name.casefold()))

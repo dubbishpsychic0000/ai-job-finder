@@ -74,13 +74,17 @@ It prepares French Gmail drafts when the employer's own website gives explicit
 spontaneous-application instructions and shows a safe address on that employer's
 domain, or when a recruitment email is published on the employer's official
 careers/recruitment page. A generic contact address still requires explicit
-spontaneous-application instructions. Public directory pages may
+spontaneous-application instructions. Recent company-linked website evidence is
+reused; stale or inconclusive research is retried, and indexed company search is
+skipped when known eligible company websites can fill the requested batch.
+The run report includes company readiness counts from discovery through outreach
+eligibility. Public directory pages may
 seed company names and coarse locations, but are never treated as official
 websites or as evidence of a contact address; a bounded search must locate a
 likely company site, which must corroborate the company and independently meet
 the same evidence requirements. Portals, third-party/free
-email addresses, missing instructions, and missing CVs are skipped or blocked;
-no address is guessed. The hard cap is 50 companies per run. OpenStreetMap is
+email addresses without recruitment evidence, and missing CVs are skipped or
+blocked; no address is guessed. The hard cap is 50 companies per run. OpenStreetMap is
 community-maintained and incomplete, not a canonical directory; indexed public
 search and directory listings are also incomplete and not an exhaustive source.
 Candidate acquisition is capped at 1,000 companies per run.

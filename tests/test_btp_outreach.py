@@ -148,6 +148,7 @@ def _run(db, config, settings, profile, companies, researcher, **kwargs):
         researcher=researcher,
         website_finder=kwargs.pop("website_finder", _NoWebsiteFinder()),
         screening_state_path=kwargs.pop("screening_state_path", None),
+        max_companies=kwargs.pop("max_companies", 20),
         **kwargs,
     )
 
@@ -1068,6 +1069,106 @@ def test_company_pool_reuses_verified_morocco_employer_website_without_search(
     assert report.drafts == 1
     assert researcher.visited == ["civil-pool.ma"]
     assert report.companies[0]["name"] == "Civil Pool Employer"
+
+
+def test_company_pool_reuses_fresh_recruitment_evidence_without_search_or_recrawl(
+    db, config, settings, profile, monkeypatch, tmp_path
+):
+    settings = settings.model_copy(update={
+        "email_mode": "draft", "enable_email": True, "email_provider": "gmail",
+    })
+    company = store.get_or_create_company(
+        db,
+        "Morocco Civil Works",
+        "https://civil-works.ma/",
+        "Morocco",
+        careers_url="https://civil-works.ma/careers",
+        recruitment_url="https://civil-works.ma/careers",
+        industry="BTP civil engineering and infrastructure",
+        source="company_careers_direct",
+        official_domain="civil-works.ma",
+    )
+    company.last_researched_at = datetime.now(timezone.utc) - timedelta(days=1)
+    db.add(models.Job(
+        source="company_careers_direct",
+        external_id="civil-works-job",
+        dedup_key="civil-works-job",
+        title="Technicien BTP",
+        company_id=company.id,
+        location="Rabat, Morocco",
+        country="Morocco",
+        description="Civil construction and infrastructure role.",
+    ))
+    db.add(models.Evidence(
+        company_id=company.id,
+        source_url="https://civil-works.ma/careers",
+        source_type="recruitment",
+        page_title="Careers",
+        field_name="recruitment_email",
+        extracted_value="recrutement@civil-works.ma",
+        snippet="Recruitment contact: recrutement@civil-works.ma",
+        domain_relationship="company_recruitment",
+        confidence=100,
+        reason_code="employer_domain",
+    ))
+    db.flush()
+
+    class SearchMustNotRun:
+        called = False
+
+        def discover(self):
+            self.called = True
+            raise AssertionError("Company-pool target must be consumed before web search")
+
+    class ResearchMustNotRun:
+        def research(self, *_args, **_kwargs):
+            raise AssertionError("Fresh persisted employer recruitment evidence must be reused")
+
+    search = SearchMustNotRun()
+    draft_ids = iter(("pool-draft-id", "unexpected-second-draft"))
+    draft_calls = []
+    monkeypatch.setattr(
+        provider,
+        "create_draft",
+        lambda *_args, **_kwargs: (
+            draft_calls.append("draft") or (True, next(draft_ids), "")
+        ),
+    )
+    monkeypatch.setattr("app.scheduler.control.is_paused", lambda: False)
+    state_path = tmp_path / "company-pool-screening.json"
+
+    first = _run(
+        db, config, settings, profile, [], ResearchMustNotRun(),
+        company_search=search,
+        screening_state_path=state_path,
+        max_companies=1,
+    )
+    assert first.company_pool_candidates == 1
+    assert first.external_company_search_skipped
+    assert first.known_website_candidates == 1
+    assert first.draft_attempts == 1
+    assert first.drafts == 1
+    assert first.as_run_report()["action"]["btp"]["gmail_drafts_confirmed"] == 1
+    assert first.companies[0]["readiness"] == "OUTREACH_ELIGIBLE"
+    assert first.companies[0]["location"] == "Rabat, Morocco"
+    assert first.companies[0]["previous_application"] is False
+    assert first.companies[0]["previous_draft"] is False
+    assert first.companies[0]["cooldown"] is False
+    assert db.query(models.Email).one().draft_id == "pool-draft-id"
+    assert not search.called
+
+    second = _run(
+        db, config, settings, profile, [], ResearchMustNotRun(),
+        company_search=search,
+        screening_state_path=state_path,
+        max_companies=1,
+    )
+    assert second.drafts == 0
+    assert second.as_run_report()["action"]["btp"]["gmail_drafts_confirmed"] == 0
+    assert second.existing == 1
+    assert second.as_run_report()["action"]["sent"] == 0
+    assert second.companies[0]["previous_draft"] is True
+    assert draft_calls == ["draft"]
 
 
 def test_official_recruitment_page_email_can_qualify_without_spontaneous_wording(

@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 from types import SimpleNamespace
 
+from app.connectors.base import Opportunity
 from app.connectors.linkedin import LinkedInJobsSource
 from app.connectors.search_engine import SearchEngineSource
 from app.connectors.tavily_resilience import (
@@ -16,7 +17,12 @@ from app.connectors.tavily_resilience import (
     key_fingerprint,
 )
 from app.discovery.email_verification import EmailVerificationService, is_safe_email
-from app.workflows.discovery import _direct_company_career_url
+from app.workflows.discovery import (
+    CompanyUrlKind,
+    _classify_company_urls,
+    _direct_company_career_url,
+    _upsert_opportunity_company,
+)
 
 
 def test_linkedin_index_results_are_kept_without_allowing_direct_fetch():
@@ -141,3 +147,101 @@ def test_company_website_provenance_excludes_ats_and_requires_employer_https_pag
     assert not _direct_company_career_url(ats_flagged, "company_career")
     assert not _direct_company_career_url(vendor_page, "company_career")
     assert not _direct_company_career_url(http_page, "company_career")
+
+
+def test_company_url_classification_never_promotes_job_or_ats_urls():
+    direct_careers = SimpleNamespace(
+        url="https://build.example.ma/careers/job-123",
+        raw={"page": "https://build.example.ma/careers"},
+    )
+    ats = SimpleNamespace(
+        url="https://jobs.lever.co/build/123",
+        raw={"ats": "lever"},
+    )
+    job_board = SimpleNamespace(
+        url="https://www.linkedin.com/jobs/view/123",
+        raw={},
+    )
+    unrelated_social = SimpleNamespace(
+        url="https://www.instagram.com/company-profile",
+        raw={},
+    )
+    untrusted_career_host = SimpleNamespace(
+        url="https://www.linkedin.com/jobs/view/123",
+        raw={"page": "https://www.linkedin.com/jobs/view/123"},
+    )
+    explicit_domain_from_ats = SimpleNamespace(
+        url="https://jobs.lever.co/build/123",
+        raw={"ats": "lever", "company_website": "https://build.example.ma"},
+    )
+
+    career = _classify_company_urls(direct_careers, "company_career")
+    assert career["kind"] == CompanyUrlKind.EMPLOYER_CAREERS_PAGE
+    assert career["website"] == "https://build.example.ma/"
+    assert career["official_domain"] == "build.example.ma"
+    assert career["careers_url"] == "https://build.example.ma/careers"
+
+    assert _classify_company_urls(ats, "ats")["kind"] == CompanyUrlKind.ATS
+    assert not _classify_company_urls(ats, "ats")["website"]
+    assert _classify_company_urls(job_board, "social_signal")["kind"] == (
+        CompanyUrlKind.JOB_BOARD
+    )
+    assert _classify_company_urls(unrelated_social, "social_signal")["kind"] == (
+        CompanyUrlKind.UNKNOWN
+    )
+    assert not _classify_company_urls(untrusted_career_host, "company_career")["website"]
+    explicit = _classify_company_urls(explicit_domain_from_ats, "ats")
+    assert explicit["website"] == "https://build.example.ma/"
+    assert explicit["official_domain"] == "build.example.ma"
+
+
+def test_company_table_persists_direct_employer_site_but_not_job_or_ats_url(db):
+    career_opportunity = Opportunity(
+        source="company_careers",
+        source_type="company_career",
+        external_id="career-job-1",
+        title="Technicien BTP",
+        company="Build Morocco",
+        location="Rabat, Morocco",
+        country="Morocco",
+        url="https://build.example.ma/careers/job-1",
+        raw={"page": "https://build.example.ma/careers"},
+    )
+    company, urls = _upsert_opportunity_company(
+        db, career_opportunity, "company_career"
+    )
+
+    assert urls["kind"] == CompanyUrlKind.EMPLOYER_CAREERS_PAGE
+    assert company.website == "https://build.example.ma/"
+    assert company.official_domain == "build.example.ma"
+    assert company.careers_url == "https://build.example.ma/careers"
+
+    ats_opportunity = Opportunity(
+        source="lever:build-morocco",
+        source_type="ats",
+        external_id="lever-job-2",
+        title="Civil Engineer",
+        company="Build ATS Employer",
+        country="Morocco",
+        url="https://jobs.lever.co/build/2",
+        raw={"ats": "lever"},
+    )
+    ats_company, ats_urls = _upsert_opportunity_company(db, ats_opportunity, "ats")
+    assert ats_urls["kind"] == CompanyUrlKind.ATS
+    assert ats_company.website == ""
+    assert ats_company.official_domain == ""
+
+    conflicting = Opportunity(
+        source="company_careers",
+        source_type="company_career",
+        external_id="other-career",
+        title="Technicien",
+        company="Build Morocco",
+        country="Morocco",
+        url="https://other-build.example/careers/job-3",
+        raw={"page": "https://other-build.example/careers"},
+    )
+    same_company, _ = _upsert_opportunity_company(db, conflicting, "company_career")
+    assert same_company.official_domain == "build.example.ma"
+    assert same_company.website == "https://build.example.ma/"
+    assert same_company.careers_url == "https://build.example.ma/careers"

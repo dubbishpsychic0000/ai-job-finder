@@ -51,12 +51,18 @@ def get_or_create_company(session: Session, name: str, url: str = "", country: s
         norm = "unknown"
     existing = session.execute(select(Company).where(Company.normalized_name == norm)).scalar_one_or_none()
     if existing:
-        if careers_url and not existing.careers_url:
-            existing.careers_url = careers_url
-        if official_domain and not existing.official_domain:
-            existing.official_domain = official_domain
-        if recruitment_url and not existing.recruitment_url:
-            existing.recruitment_url = recruitment_url
+        current_domain = (existing.official_domain or "").lower().removeprefix("www.")
+        incoming_domain = (official_domain or "").lower().removeprefix("www.")
+        domain_conflict = bool(
+            current_domain and incoming_domain and current_domain != incoming_domain
+        )
+        if not domain_conflict:
+            if careers_url and not existing.careers_url:
+                existing.careers_url = careers_url
+            if official_domain and not existing.official_domain:
+                existing.official_domain = official_domain
+            if recruitment_url and not existing.recruitment_url:
+                existing.recruitment_url = recruitment_url
         if industry and not existing.industry:
             existing.industry = industry
         if source and not existing.source:
