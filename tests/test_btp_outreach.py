@@ -877,9 +877,22 @@ def test_search_budget_defers_only_unknown_site_and_known_sites_still_create_dra
     assert report.researched == 2
     assert report.drafts == 1
     assert report.as_run_report()["action"]["btp"]["gmail_drafts_confirmed"] == 1
-    assert next(
+    drafted_company = next(
         company for company in report.companies if company["name"] == "Atlas Company"
-    )["gmail_draft_confirmed"]
+    )
+    assert drafted_company["gmail_draft_confirmed"]
+    assert drafted_company["company"] == "Atlas Company"
+    assert drafted_company["website"] == "https://atlas.ma/"
+    assert drafted_company["official_domain"] == "atlas.ma"
+    assert drafted_company["recruitment_evidence_source"] == "https://atlas.ma/contact"
+    assert drafted_company["contact_email_source"] == "https://atlas.ma/contact"
+    assert drafted_company["eligibility_reason"]
+    assert drafted_company["previous_application"] is False
+    assert drafted_company["previous_draft"] is False
+    assert drafted_company["cooldown"] is False
+    assert json.loads(screening_state_path.read_text(encoding="utf-8"))[
+        "companies"
+    ][BtpOutreachState.key(candidate_b)]["gmail_draft_id"] == "draft-id"
     assert report.no_qualifying_email == 1
     serialized = report.as_run_report()["action"]["btp"]
     assert serialized["known_website_candidates"] == 2
@@ -900,7 +913,139 @@ def test_search_budget_defers_only_unknown_site_and_known_sites_still_create_dra
     assert next_run.drafts == 0
     assert next_run.existing == 2
     assert next_run.search_budget_deferred == 1
+    duplicate_company = next(
+        company for company in next_run.companies
+        if company["name"] == "Atlas Company"
+    )
+    assert duplicate_company["previous_application"] is True
+    assert duplicate_company["previous_draft"] is True
     assert draft_calls == ["draft"]
+
+
+def test_draft_without_gmail_id_is_not_counted_as_confirmed(
+    db, config, settings, profile, monkeypatch, tmp_path
+):
+    settings = settings.model_copy(update={
+        "email_mode": "draft", "enable_email": True, "email_provider": "gmail",
+    })
+    company = _company("Unconfirmed", "https://unconfirmed.ma")
+    researcher = _Researcher({
+        "unconfirmed.ma": _evidence("unconfirmed.ma", email="jobs@unconfirmed.ma"),
+    })
+    monkeypatch.setattr(provider, "create_draft", lambda *_args, **_kwargs: (True, "", ""))
+    monkeypatch.setattr("app.scheduler.control.is_paused", lambda: False)
+
+    report = _run(
+        db, config, settings, profile, [company], researcher,
+        screening_state_path=tmp_path / "screening.json",
+    )
+
+    assert report.drafts == 0
+    assert report.blocked == 1
+    assert report.as_run_report()["action"]["btp"]["gmail_drafts_confirmed"] == 0
+    assert report.companies[0]["status"] == "draft_unconfirmed"
+    assert any("without a draft ID" in error for error in report.errors)
+    assert db.query(models.Email).one().draft_id == ""
+
+
+def test_company_pool_reuses_verified_morocco_employer_website_without_search(
+    db, config, settings, profile, monkeypatch
+):
+    settings = settings.model_copy(update={
+        "email_mode": "draft", "enable_email": True, "email_provider": "gmail",
+    })
+    company = store.get_or_create_company(
+        db,
+        "Civil Pool Employer",
+        "https://civil-pool.ma/careers",
+        "Morocco",
+        industry="civil engineering",
+        source="company_careers_direct",
+        official_domain="civil-pool.ma",
+    )
+    db.add(models.Job(
+        source="company_careers_direct",
+        external_id="pool-job",
+        dedup_key="pool-job",
+        title="Ingénieur génie civil",
+        company_id=company.id,
+        country="Morocco",
+        location="Rabat",
+        description="Infrastructure and public works engineering.",
+    ))
+    db.flush()
+    researcher = _Researcher({
+        "civil-pool.ma": _evidence(
+            "civil-pool.ma", email="recrutement@civil-pool.ma"
+        ),
+    })
+
+    class NoSearchFinder:
+        def find(self, *_args, **_kwargs):
+            raise AssertionError("A verified company-pool website must bypass search")
+
+    monkeypatch.setattr(
+        provider, "create_draft", lambda *_args, **_kwargs: (True, "draft-id", "")
+    )
+    monkeypatch.setattr("app.scheduler.control.is_paused", lambda: False)
+    report = _run(
+        db, config, settings, profile, [], researcher, website_finder=NoSearchFinder()
+    )
+
+    assert report.company_pool_candidates == 1
+    assert report.candidates == 1
+    assert report.researched == 1
+    assert report.drafts == 1
+    assert researcher.visited == ["civil-pool.ma"]
+    assert report.companies[0]["name"] == "Civil Pool Employer"
+
+
+def test_official_recruitment_page_email_can_qualify_without_spontaneous_wording(
+    db, config, settings, profile, monkeypatch
+):
+    settings = settings.model_copy(update={
+        "email_mode": "draft", "enable_email": True, "email_provider": "gmail",
+    })
+    recruitment_email = EvidenceFact(
+        source_url="https://recruiting.ma/careers",
+        source_type="recruitment",
+        page_title="Careers",
+        field_name="recruitment_email",
+        extracted_value="recrutement@recruiting.ma",
+        snippet="Recruitment contact: recrutement@recruiting.ma",
+        domain_relationship="company_recruitment",
+        confidence=100,
+        reason_code="employer_domain",
+    )
+    researcher = _Researcher({"recruiting.ma": [recruitment_email]})
+    monkeypatch.setattr(
+        provider, "create_draft", lambda *_args, **_kwargs: (True, "draft-id", "")
+    )
+    monkeypatch.setattr("app.scheduler.control.is_paused", lambda: False)
+
+    report = _run(
+        db, config, settings, profile,
+        [_company("Recruiting Company", "https://recruiting.ma")],
+        researcher,
+    )
+
+    assert report.drafts == 1
+    assert report.no_explicit_instructions == 1
+    assert report.companies[0]["status"] == "drafted_for_review"
+
+
+def test_recruitment_evidence_from_third_party_domain_is_not_qualifying():
+    evidence = EvidenceFact(
+        source_url="https://jobs.third-party.example/careers",
+        source_type="recruitment",
+        page_title="Careers",
+        field_name="recruitment_email",
+        extracted_value="recrutement@recruiting.ma",
+        snippet="Recruitment contact",
+        confidence=100,
+    )
+
+    assert btp_outreach._qualifying_contact([evidence], "recruiting.ma") is None
 
 
 @pytest.mark.parametrize(

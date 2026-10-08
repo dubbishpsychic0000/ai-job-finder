@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from types import SimpleNamespace
 
 from app.connectors.linkedin import LinkedInJobsSource
 from app.connectors.search_engine import SearchEngineSource
@@ -15,6 +16,7 @@ from app.connectors.tavily_resilience import (
     key_fingerprint,
 )
 from app.discovery.email_verification import EmailVerificationService, is_safe_email
+from app.workflows.discovery import _direct_company_career_url
 
 
 def test_linkedin_index_results_are_kept_without_allowing_direct_fetch():
@@ -121,3 +123,21 @@ def test_email_verification_requires_employer_domain():
         source_type="ats",
     )
     assert not unrelated_domain.verified
+
+
+def test_company_website_provenance_excludes_ats_and_requires_employer_https_page():
+    direct = SimpleNamespace(raw={"page": "https://build.example.ma/careers"})
+    ats_flagged = SimpleNamespace(raw={
+        "page": "https://build.example.ma/careers",
+        "ats": True,
+    })
+    vendor_page = SimpleNamespace(raw={"page": "https://jobs.myworkdayjobs.com/build"})
+    http_page = SimpleNamespace(raw={"page": "http://build.example.ma/careers"})
+
+    assert _direct_company_career_url(direct, "company_career") == (
+        "https://build.example.ma/careers"
+    )
+    assert not _direct_company_career_url(direct, "ats")
+    assert not _direct_company_career_url(ats_flagged, "company_career")
+    assert not _direct_company_career_url(vendor_page, "company_career")
+    assert not _direct_company_career_url(http_page, "company_career")

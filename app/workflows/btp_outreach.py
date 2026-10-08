@@ -19,6 +19,7 @@ from urllib.parse import urlparse
 
 import requests
 from bs4 import BeautifulSoup
+from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
 from app import memory as mem
@@ -43,7 +44,7 @@ from app.discovery.website_researcher import (
     normalize_url,
 )
 from app.email.service import ApplicationEngine
-from app.models import Job
+from app.models import Company, Job
 
 OVERPASS_URL = "https://overpass-api.de/api/interpreter"
 MAX_OVERPASS_BYTES = 5 * 1024 * 1024
@@ -212,8 +213,14 @@ class BtpOutreachState:
             return False
         return record.get("status") not in {"drafted_for_review"}
 
-    def mark(self, candidate: BtpCompany, status: str) -> None:
-        self.records[self.key(candidate)] = {
+    def mark(
+        self,
+        candidate: BtpCompany,
+        status: str,
+        *,
+        gmail_draft_id: str = "",
+    ) -> None:
+        record = {
             "name": candidate.name[:255],
             "city": _canonical_city(candidate.city)
                     or _nearest_city(candidate.latitude, candidate.longitude),
@@ -221,6 +228,9 @@ class BtpOutreachState:
             "status": status[:64],
             "updated_at": datetime.now(timezone.utc).isoformat(),
         }
+        if gmail_draft_id:
+            record["gmail_draft_id"] = gmail_draft_id[:255]
+        self.records[self.key(candidate)] = record
         self._save()
 
     def clear(self, candidate: BtpCompany) -> None:
@@ -265,6 +275,7 @@ class BtpCompany:
     distance_km: float
     source_url: str = OVERPASS_URL
     source: str = ""
+    company_id: int | None = None
 
     @property
     def location(self) -> str:
@@ -279,6 +290,7 @@ class BtpOutreachReport:
     wikidata_candidates: int = 0
     seed_candidates: int = 0
     web_candidates: int = 0
+    company_pool_candidates: int = 0
     known_website_candidates: int = 0
     website_search_required: int = 0
     search_budget_deferred: int = 0
@@ -299,6 +311,10 @@ class BtpOutreachReport:
         "OpenStreetMap and indexed public search results are incomplete; this is not a "
         "canonical or exhaustive list of Moroccan BTP employers."
     )
+
+    @property
+    def no_explicit_instructions(self) -> int:
+        return self.no_spontaneous_instructions
 
     def as_run_report(self) -> dict:
         return {
@@ -328,6 +344,7 @@ class BtpOutreachReport:
                     "wikidata_candidates": self.wikidata_candidates,
                     "seed_candidates": self.seed_candidates,
                     "web_candidates": self.web_candidates,
+                    "company_pool_candidates": self.company_pool_candidates,
                     "processed": self.processed,
                     "researched": self.researched,
                     "drafts": self.drafts,
@@ -340,6 +357,7 @@ class BtpOutreachReport:
                     "no_website": self.no_website,
                     "no_official_website": self.no_website,
                     "no_spontaneous_instructions": self.no_spontaneous_instructions,
+                    "no_explicit_instructions": self.no_spontaneous_instructions,
                     "no_qualifying_email": self.no_qualifying_email,
                     "portal_or_form": self.portal_or_form,
                     "blocked": self.blocked,
@@ -903,12 +921,133 @@ def _city_location(city: str) -> tuple[str, float, float]:
     return MOROCCO_CITY_CENTERS[city]
 
 
+def _company_pool_candidates(session: Session) -> list[BtpCompany]:
+    """Reuse only Moroccan construction employers with a provenance-backed domain."""
+    companies: dict[int, Company] = {}
+    job_facts: dict[int, list[str]] = {}
+    job_locations: dict[int, list[str]] = {}
+
+    company_country = or_(
+        Company.country.ilike("%morocco%"),
+        Company.country.ilike("%maroc%"),
+        Company.country == "MA",
+    )
+    job_country = or_(
+        Job.country.ilike("%morocco%"),
+        Job.country.ilike("%maroc%"),
+        Job.country == "MA",
+    )
+    for company in session.query(Company).filter(
+        company_country
+    ).order_by(Company.id.desc()).limit(2000):
+        companies[company.id] = company
+
+    for job, company in (
+        session.query(Job, Company)
+        .join(Company, Job.company_id == Company.id)
+        .filter(job_country)
+        .order_by(Job.discovered_at.desc())
+        .limit(5000)
+    ):
+        companies[company.id] = company
+        job_facts.setdefault(company.id, []).append(
+            f"{job.title} {job.description[:4000]}"
+        )
+        if job.location:
+            job_locations.setdefault(company.id, []).append(job.location)
+
+    candidates = []
+    for company in companies.values():
+        official_domain = (
+            (company.official_domain or "").strip().lower()
+            .removeprefix("www.").rstrip(".")
+        )
+        if not official_domain:
+            continue
+        website = _eligible_website(company.website)
+        if not website or host_domain(website) != official_domain:
+            careers_url = _eligible_website(company.careers_url)
+            if careers_url and host_domain(careers_url) == official_domain:
+                website = careers_url
+        if not website or host_domain(website) != official_domain:
+            continue
+        job_text = " ".join(job_facts.get(company.id, []))
+        employer_text = " ".join((
+            company.name,
+            company.industry or "",
+            company.discovery_reason or "",
+            job_text,
+        ))
+        if not _mentions_construction(employer_text):
+            continue
+        city = ""
+        locations = [
+            *job_locations.get(company.id, []),
+            company.notes or "",
+            company.discovery_reason or "",
+        ]
+        for location in locations:
+            normalized_location = _normalize_city_name(location)
+            city = next(
+                (
+                    known_city for known_city in MOROCCO_CITY_CENTERS
+                    if f" {_normalize_city_name(known_city)} "
+                    in f" {normalized_location} "
+                ),
+                "",
+            )
+            if city:
+                break
+        if city:
+            region, latitude, longitude = _city_location(city)
+            distance = haversine_km(latitude, longitude)
+        else:
+            region, latitude, longitude = "", 0.0, 0.0
+            distance = 20_000.0
+        candidates.append(BtpCompany(
+            name=company.name,
+            website=website,
+            city=city,
+            region=region,
+            latitude=latitude,
+            longitude=longitude,
+            distance_km=distance,
+            source_url=company.careers_url or website,
+            source="company_pool",
+            company_id=company.id,
+        ))
+    return sorted(candidates, key=lambda item: (item.distance_km, item.name.casefold()))[
+        :MAX_CANDIDATES
+    ]
+
+
 def _mentions_construction(text: str) -> bool:
     value = text.casefold()
-    return any(term in value for term in (
+    direct_terms = (
         "btp", "construction", "travaux publics", "génie civil", "genie civil",
-        "bâtiment", "batiment", "infrastructure",
-    ))
+        "bâtiment", "batiment", "infrastructure", "maîtrise d'oeuvre",
+        "maitrise d'oeuvre", "maîtrise d'ouvrage", "maitrise d'ouvrage",
+        "gros oeuvre", "gros œuvre", "roadworks", "highway construction",
+        "railway construction", "water treatment", "geotechnical", "géotechnique",
+        "travaux routiers", "travaux ferroviaires", "ouvrages d'art",
+        "voirie et réseaux divers", "vrd", "assainissement", "irrigation",
+        "génie rural", "genie rural", "béton", "beton", "charpente",
+        "fondations", "barrage", "barrages", "tunnel", "tunnels",
+        "quarry", "aggregates", "matériaux de construction",
+    )
+    related_terms = (
+        "engineering", "ingénierie", "ingenierie", "architect", "architecture",
+        "urbanisme", "urban planning", "hydraulic", "topography", "topographie",
+        "surveying", "énergie", "energy",
+    )
+    context_terms = (
+        "civil", "construction", "building", "bâtiment", "batiment",
+        "infrastructure", "travaux", "public works", "génie", "genie",
+    )
+    return any(term in value for term in direct_terms) or (
+        any(term in value for term in related_terms)
+        and any(term in value for term in context_terms)
+    )
 
 
 def _directory_company_name(title: str, city: str) -> str:
@@ -1081,11 +1220,14 @@ def _qualifying_contact(evidence: list[EvidenceFact], official_domain: str
     instructions = [
         fact for fact in evidence
         if fact.field_name == "spontaneous_application"
+        and _evidence_is_on_official_domain(fact, official_domain)
         and extract_spontaneous_instruction(fact.extracted_value or fact.snippet)
     ]
     for instruction in instructions:
         for fact in evidence:
             if fact.source_url != instruction.source_url:
+                continue
+            if not _evidence_is_on_official_domain(fact, official_domain):
                 continue
             if fact.field_name not in {"general_email", "recruitment_email"}:
                 continue
@@ -1099,7 +1241,45 @@ def _qualifying_contact(evidence: list[EvidenceFact], official_domain: str
             )
             if verified.verified:
                 return address, instruction, fact
+    recruitment_pages = [
+        fact for fact in evidence
+        if fact.source_type in {"careers", "recruitment"}
+        and fact.field_name == "recruitment_email"
+        and _evidence_is_on_official_domain(fact, official_domain)
+    ]
+    for fact in recruitment_pages:
+        address = fact.extracted_value.strip().lower()
+        verified = EmailVerificationService().verify(
+            address,
+            source_url=fact.source_url,
+            source_type="company_career",
+            official=True,
+            employer_domain=official_domain,
+        )
+        if verified.verified:
+            authorization = EvidenceFact(
+                source_url=fact.source_url,
+                source_type=fact.source_type,
+                page_title=fact.page_title,
+                field_name="recruitment_channel",
+                extracted_value="Official employer recruitment channel",
+                snippet=fact.snippet,
+                confidence=fact.confidence,
+                reason_code="official_recruitment_page",
+            )
+            return address, authorization, fact
     return None
+
+
+def _evidence_is_on_official_domain(fact: EvidenceFact, official_domain: str) -> bool:
+    source_url = _eligible_website(fact.source_url)
+    source_domain = host_domain(source_url)
+    trusted_domain = official_domain.lower().removeprefix("www.").rstrip(".")
+    return bool(
+        source_url
+        and trusted_domain
+        and (source_domain == trusted_domain or source_domain.endswith("." + trusted_domain))
+    )
 
 
 def _application_portal(evidence: list[EvidenceFact], official_domain: str) -> bool:
@@ -1186,6 +1366,8 @@ def run_btp_outreach(
         )
     requested_cap = max(1, min(HARD_MAX_COMPANIES, int(max_companies)))
     report = BtpOutreachReport(origin_city=origin_city)
+    pooled = _company_pool_candidates(session)
+    report.company_pool_candidates = len(pooled)
     sent_today = mem.store.count_dispatched_today(session)
     applications_today = mem.store.count_dispatched_today(session, action="APPLY")
     total_limit = int(config.email.get(
@@ -1229,14 +1411,14 @@ def run_btp_outreach(
         report.search_budget_limited = getattr(search, "search_budget_limited", False)
     except Exception as exc:
         report.errors.append(f"public company web search failed: {exc}")
-    if not listed and not seeded and not wikidata_companies and not searched:
+    if not listed and not seeded and not wikidata_companies and not searched and not pooled:
         return report
     report.osm_candidates = len(listed)
     report.seed_candidates = len(seeded)
     report.wikidata_candidates = len(wikidata_companies)
     report.web_candidates = len(searched)
     candidates = rank_nearest(
-        _merge_candidates(listed, seeded, wikidata_companies, searched),
+        _merge_candidates(pooled, listed, seeded, wikidata_companies, searched),
         MAX_CANDIDATES,
     )
     report.candidates = len(candidates)
@@ -1250,17 +1432,28 @@ def run_btp_outreach(
     for candidate in candidates:
         if screening_state and screening_state.is_suppressed(candidate):
             report.existing += 1
+            record = screening_state.records.get(screening_state.key(candidate), {})
+            previous_draft = (
+                record.get("status") == "drafted_for_review"
+                or bool(record.get("gmail_draft_id"))
+            )
+            report.companies.append(_company_result(
+                candidate,
+                record.get("status", "existing"),
+                eligibility_reason="suppressed by persisted BTP screening state",
+                previous_application=previous_draft,
+                previous_draft=previous_draft,
+            ))
             continue
         discovery_source = candidate.source or (
             "openstreetmap" if candidate.source_url == OVERPASS_URL else "public_company_search"
         )
-        company = mem.store.get_or_create_company(
-            session,
-            candidate.name,
-            candidate.website,
-            "Morocco",
-            industry="BTP / construction",
-            source=discovery_source,
+        company = (
+            session.get(Company, candidate.company_id)
+            if candidate.company_id is not None else None
+        ) or mem.store.get_or_create_company(
+            session, candidate.name, candidate.website, "Morocco",
+            industry="BTP / construction", source=discovery_source,
             official_domain=host_domain(candidate.website),
         )
         company.website = company.website or candidate.website
@@ -1300,13 +1493,39 @@ def run_btp_outreach(
             ).all() if job.opportunity_type == SPONTANEOUS_APPLICATION),
             None,
         )
-        if existing_outreach and mem.store.find_applications(
-            session, existing_outreach.id, statuses=("sent", "drafted", "deferred", "dry_run")
-        ):
+        existing_applications = (
+            mem.store.find_applications(session, existing_outreach.id)
+            if existing_outreach else []
+        )
+        if existing_applications:
+            previous_draft = any(
+                application.status == "drafted" for application in existing_applications
+            )
             target.status = "drafted_for_review"
             if screening_state:
                 screening_state.mark(candidate, "drafted_for_review")
             report.existing += 1
+            report.companies.append(_company_result(
+                candidate,
+                "existing_application",
+                official_domain=company.official_domain,
+                eligibility_reason="an application record already exists",
+                previous_application=True,
+                previous_draft=previous_draft,
+            ))
+            continue
+        cooldown_days = int(settings.employer_cooldown_days)
+        if cooldown_days > 0 and mem.store.recent_company_contact(
+            session, company.id, days=cooldown_days,
+        ):
+            report.existing += 1
+            report.companies.append(_company_result(
+                candidate,
+                "cooldown",
+                official_domain=company.official_domain,
+                eligibility_reason=f"employer cooldown active ({cooldown_days} days)",
+                cooldown=True,
+            ))
             continue
         targets.append((candidate, company, target, existing_outreach))
 
@@ -1402,13 +1621,16 @@ def run_btp_outreach(
         ]
         if not instructions:
             report.no_spontaneous_instructions += 1
-            target.status = "no_explicit_instructions"
-            if screening_state:
-                screening_state.mark(candidate, "no_explicit_instructions")
-            report.companies.append(_company_result(candidate, "no_explicit_instructions"))
-            continue
         contact = _qualifying_contact(evidence, domain)
         if not contact:
+            if not instructions:
+                target.status = "no_explicit_instructions"
+                if screening_state:
+                    screening_state.mark(candidate, "no_explicit_instructions")
+                report.companies.append(
+                    _company_result(candidate, "no_explicit_instructions")
+                )
+                continue
             if _application_portal(evidence, domain):
                 report.portal_or_form += 1
                 target.status = "portal_or_form"
@@ -1440,11 +1662,32 @@ def run_btp_outreach(
                 screening_state.mark(candidate, "no_official_employer_email")
             report.companies.append(_company_result(candidate, "no_official_employer_email"))
             continue
+        contact_cooldown_days = int(config.rules.get("follow_up_days", [7])[0])
+        if mem.store.recent_contact(session, address, days=contact_cooldown_days):
+            report.blocked += 1
+            target.status = "blocked_by_safety_gate"
+            if screening_state:
+                screening_state.mark(candidate, "blocked_by_safety_gate")
+            report.companies.append(_company_result(
+                candidate,
+                "cooldown",
+                official_domain=domain,
+                recruitment_evidence_source=instruction_fact.source_url,
+                contact_email_source=email_fact.source_url,
+                eligibility_reason="recipient contact cooldown is active",
+                cooldown=True,
+            ))
+            continue
         decision = mem.store.get_last_decision(session, job.id)
         if not decision:
+            evidence_reason = (
+                "Official recruitment channel"
+                if instruction_fact.field_name == "recruitment_channel"
+                else "Official spontaneous-application instruction"
+            )
             decision = mem.store.add_decision(
                 session, job.id, SPONTANEOUS_APPLICATION, 0, {},
-                f"Official spontaneous-application instruction: {instruction_fact.source_url}",
+                f"{evidence_reason}: {instruction_fact.source_url}",
                 ["SPONTANEOUS_APPLICATION"],
             )
         engine = ApplicationEngine(
@@ -1454,23 +1697,46 @@ def run_btp_outreach(
         job.status = "outreach_only"
         job.opportunity_type = SPONTANEOUS_APPLICATION
         job.source_type = SPONTANEOUS_APPLICATION
-        if result.get("status") == "drafted":
+        draft_id = str(result.get("draft_id") or "")
+        if result.get("status") == "drafted" and draft_id:
             report.drafts += 1
             status = "drafted_for_review"
             target.status = status
             if screening_state:
-                screening_state.mark(candidate, status)
+                screening_state.mark(candidate, status, gmail_draft_id=draft_id)
+            eligibility_reason = (
+                "official HTTPS domain, employer recruitment evidence, verified "
+                "employer-domain email, no prior application or draft, no cooldown, "
+                "safety gate passed, and Gmail returned a draft ID"
+            )
+        elif result.get("status") == "drafted":
+            report.errors.append(
+                f"Gmail reported a draft for {candidate.name} without a draft ID"
+            )
+            report.blocked += 1
+            status = "draft_unconfirmed"
+            target.status = "drafted_for_review"
+            if screening_state:
+                screening_state.mark(candidate, "drafted_for_review")
+            eligibility_reason = "Gmail draft ID missing; outcome is not confirmed"
         else:
             report.blocked += 1
             status = "blocked_by_safety_gate"
             target.status = "blocked_by_safety_gate"
             if screening_state:
                 screening_state.mark(candidate, status)
+            eligibility_reason = "ApplicationEngine did not approve or confirm a Gmail draft"
         report.companies.append(_company_result(
             candidate,
             status,
-            gmail_draft_confirmed=bool(result.get("draft_id"))
-            if result.get("status") == "drafted" else False,
+            gmail_draft_confirmed=(result.get("status") == "drafted" and bool(draft_id)),
+            official_domain=domain,
+            recruitment_evidence_source=instruction_fact.source_url,
+            contact_email_source=email_fact.source_url,
+            eligibility_reason=eligibility_reason,
+            previous_application=False,
+            previous_draft=False,
+            cooldown=False,
         ))
     return report
 
@@ -1480,14 +1746,31 @@ def _company_result(
     status: str,
     *,
     gmail_draft_confirmed: bool = False,
+    official_domain: str = "",
+    recruitment_evidence_source: str = "",
+    contact_email_source: str = "",
+    eligibility_reason: str = "",
+    previous_application: bool = False,
+    previous_draft: bool = False,
+    cooldown: bool = False,
 ) -> dict:
     return {
         "name": candidate.name,
+        "company": candidate.name,
+        "website": _eligible_website(candidate.website),
+        "official_domain": official_domain or host_domain(candidate.website),
         "city": candidate.city,
         "region": candidate.region,
+        "location": candidate.location,
         "distance_km": round(candidate.distance_km, 1),
         "source": candidate.source,
         "status": status,
+        "recruitment_evidence_source": recruitment_evidence_source,
+        "contact_email_source": contact_email_source,
+        "eligibility_reason": eligibility_reason,
+        "previous_application": previous_application,
+        "previous_draft": previous_draft,
+        "cooldown": cooldown,
         "gmail_draft_confirmed": gmail_draft_confirmed,
     }
 

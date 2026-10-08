@@ -61,14 +61,20 @@ wca dashboard                     # web dashboard at http://127.0.0.1:8000
 
 `wca btp-outreach --origin-city Casablanca --max-companies 20` runs a separate,
 bounded workflow. It combines public OpenStreetMap, monthly cached Wikidata,
-optional audited CSV leads, and capped indexed web-search listings; it ranks
-candidates using public coordinates or coarse city centers from Casablanca
-outward. It researches up to 12 pages per official website, including
+existing Moroccan BTP companies from the job-discovery database, optional
+audited CSV leads, and capped indexed web-search listings; it ranks candidates
+using public coordinates or coarse city centers from Casablanca outward.
+Persisted company websites are reused only when their HTTPS host matches the
+stored official domain. Direct employer-career sources can establish that
+provenance, while ATS and job-board URLs remain separate from employer websites.
+It researches up to 12 pages per official website, including
 same-site sitemap discovery, with the robots-aware researcher. The job path
 also uses this bounded official-site research for direct company-career sources.
-It prepares French Gmail drafts only when
-the employer's own website gives explicit spontaneous-application instructions
-and shows a safe address on that employer's domain. Public directory pages may
+It prepares French Gmail drafts when the employer's own website gives explicit
+spontaneous-application instructions and shows a safe address on that employer's
+domain, or when a recruitment email is published on the employer's official
+careers/recruitment page. A generic contact address still requires explicit
+spontaneous-application instructions. Public directory pages may
 seed company names and coarse locations, but are never treated as official
 websites or as evidence of a contact address; a bounded search must locate a
 likely company site, which must corroborate the company and independently meet
@@ -114,7 +120,7 @@ dispatch can run this workflow on its own. The normal `run-once` and scheduled
 pipeline also runs the independent BTP company-discovery path after job
 applications, provided enabled Gmail draft mode is configured and outbound
 actions are not paused. It shares the same daily limits and creates drafts only
-when the strict spontaneous-application evidence checks pass; it never sends.
+when the official-site and recruitment evidence checks pass; it never sends.
 Both workflow reports remain separate so job-specific applications and
 spontaneous company leads can be tracked independently.
 Spontaneous BTP drafts use action `APPLY` and share the same configurable

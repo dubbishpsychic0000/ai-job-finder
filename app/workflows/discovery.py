@@ -8,6 +8,7 @@ import logging
 import os
 from dataclasses import dataclass, field
 from pathlib import Path
+from urllib.parse import urlparse
 
 from dotenv import load_dotenv
 from sqlalchemy.orm import Session
@@ -26,13 +27,37 @@ from app.discovery.email_verification import EmailVerificationService
 from app.discovery.opportunity_details import classify_opportunity, detect_application_method
 from app.discovery.verification import freshness_label
 from app.discovery.vocabulary import CandidateVocabulary
-from app.discovery.website_researcher import host_domain
+from app.discovery.website_researcher import host_domain, normalize_url
 from app.normalization import normalize
 
 logger = logging.getLogger(__name__)
 
 DEFAULT_SOURCES_PATH = ROOT_DIR / "config" / "sources.yaml"
 DEMO_SOURCES_PATH = ROOT_DIR / "config" / "sources_demo.yaml"
+ATS_DOMAINS = (
+    "greenhouse.io", "lever.co", "myworkdayjobs.com", "smartrecruiters.com",
+    "ashbyhq.com", "personio.com", "workable.com",
+)
+
+
+def _direct_company_career_url(opp, source_type: str) -> str:
+    """Return an employer-owned HTTPS career page, never an ATS or job-board URL."""
+    raw = opp.raw or {}
+    if source_type != "company_career" or raw.get("ats"):
+        return ""
+    page = normalize_url(str(raw.get("page") or ""))
+    parsed = urlparse(page)
+    if parsed.scheme != "https" or parsed.username or parsed.password:
+        return ""
+    try:
+        if parsed.port not in (None, 443):
+            return ""
+    except ValueError:
+        return ""
+    domain = host_domain(page)
+    if not domain or any(domain == item or domain.endswith(f".{item}") for item in ATS_DOMAINS):
+        return ""
+    return page
 
 
 @dataclass
@@ -253,12 +278,22 @@ async def run_discovery(session: Session, config: AgentConfig, prefs: Preference
                 qmap = discovery_cfg.get("source_quality") or {}
                 quality = int(qmap.get(src_type, opp.effective_quality())) if qmap else opp.effective_quality()
                 careers_url = (opp.raw or {}).get("page", "") if src_type in ("company_career", "ats") else ""
+                employer_career_url = _direct_company_career_url(opp, src_type)
                 company = mem.store.get_or_create_company(
-                    session, opp.company or "Unknown", opp.url, opp.country,
+                    session, opp.company or "Unknown",
+                    employer_career_url or opp.url, opp.country,
                     careers_url=careers_url, source=opp.source,
+                    official_domain=host_domain(employer_career_url),
                     sponsorship_signal=opp.sponsorship_signal,
                     international_recruitment_signal=opp.international_candidate_signal,
                 )
+                if employer_career_url and (
+                    not company.official_domain
+                    or company.official_domain == host_domain(employer_career_url)
+                ):
+                    company.official_domain = host_domain(employer_career_url)
+                    if not company.website or host_domain(company.website) != company.official_domain:
+                        company.website = employer_career_url
                 raw_channel = (opp.raw or {}).get("channel", "")
                 kind = "RECRUITMENT_POST" if src_type == "recruitment_post" else "JOB"
                 if src_type in {"company_career", "ats"}:
