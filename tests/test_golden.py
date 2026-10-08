@@ -6,6 +6,7 @@ one of these, the test fails loudly before an email goes out.
 from __future__ import annotations
 
 import asyncio
+from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import select
 
@@ -21,6 +22,14 @@ def _discover(db, config, prefs):
     asyncio.run(run_discovery(db, config, prefs, sources_path=ROOT / "tests" / "fixtures" / "sources_demo.yaml"))
 
 
+def _refresh_demo_posting_dates(db):
+    """Keep decision golden tests independent of the calendar date they run."""
+    posted_at = datetime.now(timezone.utc) - timedelta(days=1)
+    for job in db.execute(select(models.Job)).scalars():
+        job.posted_at = posted_at
+    db.flush()
+
+
 def _analyze(db, config, prefs, profile):
     llm = NullLLM(profile)
     report = asyncio.run(run_analysis(db, config, profile, llm, prefs.countries))
@@ -34,6 +43,7 @@ def _act(db, config, prefs, profile, settings):
 
 def test_golden_decisions(db, config, prefs, profile):
     _discover(db, config, prefs)
+    _refresh_demo_posting_dates(db)
     by_job = _analyze(db, config, prefs, profile)
 
     def dec(title, company=""):
@@ -61,6 +71,7 @@ def test_dedup_idempotent(db, config, prefs):
 
 def test_applications_recorded_but_blocked_without_email(db, config, prefs, profile, settings):
     _discover(db, config, prefs)
+    _refresh_demo_posting_dates(db)
     _analyze(db, config, prefs, profile)
     _act(db, config, prefs, profile, settings)
     apps = db.execute(select(models.Application)).scalars().all()
