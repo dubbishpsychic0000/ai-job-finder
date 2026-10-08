@@ -77,15 +77,15 @@ class MetaWhatsAppProvider:
             response = self._post(endpoint, headers={"Authorization": f"Bearer {self.settings.access_token}"},
                                   json=payload, timeout=20)
             if response.ok:
-                # Meta accepting a request is distinct from handset delivery,
-                # but its message id gives the operator an auditable reference
-                # without logging the recipient or any credential.
+                # Meta accepting a request is not evidence of handset delivery.
+                # The message id is an auditable reference without logging the
+                # recipient or any credential.
                 try:
                     message_id = (response.json().get("messages") or [{}])[0].get("id", "")
                 except (AttributeError, ValueError):
                     message_id = ""
                 self.last_message_id = message_id
-                logger.info("WhatsApp accepted by Meta%s",
+                logger.info("WhatsApp request accepted by Meta; handset delivery unverified%s",
                             f" (message id {message_id})" if message_id else "")
                 return True
             # Meta returns useful object/permission diagnostics here. It never

@@ -57,6 +57,29 @@ wca dashboard                     # web dashboard at http://127.0.0.1:8000
 `discover`, `analyze`, `act`, `followups`, `search-plan`, `pause`, `resume`,
 `scheduler`.
 
+### Moroccan BTP spontaneous applications
+
+`wca btp-outreach --origin-city Casablanca --max-companies 20` runs a separate,
+bounded workflow. It considers up to 1,000 public OpenStreetMap BTP listings
+per pass and ranks them from the fixed
+Casablanca city center outward, researches at most 5 pages per official website
+with the robots-aware researcher, and prepares French Gmail drafts only when
+the employer's own website gives explicit spontaneous-application instructions
+and shows a safe address on that employer's domain. Portals, third-party/free
+email addresses, missing instructions, and missing CVs are skipped or blocked;
+no address is guessed. The hard cap is 50 companies per run. OpenStreetMap is
+community-maintained and incomplete, not a canonical directory.
+Already-screened targets are recorded so later batches advance to the next
+nearest unprocessed listings instead of repeating the same first batch.
+
+The command refuses to run unless `EMAIL_MODE=draft`, `ENABLE_EMAIL=true`, and
+`EMAIL_PROVIDER=gmail`; the existing safety gate, cooldowns, duplicate checks,
+claim allowlist, CV requirement, and daily limits still apply. It never sends
+email and does not feed its explicitly marked `SPONTANEOUS_APPLICATION` records
+to vacancy analysis, generic actions, or follow-ups. GitHub Actions manual
+dispatch offers this workflow separately from the default pipeline; scheduled
+runs continue to use the pipeline.
+
 ### Safety defaults
 
 - **Email is OFF by default.** Three `EMAIL_MODE` levels, each storing every
@@ -104,12 +127,16 @@ wca dashboard                     # web dashboard at http://127.0.0.1:8000
 
 ### GitHub Actions rollout
 
-The scheduled workflow runs every two hours. During the real-source rollout it
-uses `EMAIL_MODE=draft`, so qualifying outreach is prepared as Gmail drafts for
-your review, never sent automatically. Run **Actions → Agent 24-7 → Run workflow**
-and choose `dry_run`, `draft`, or (only after review) `live` for a manual run.
-WhatsApp notifications require the configured Meta token and approved template;
-they are only sent for qualifying events, not when a source finds zero new jobs.
+The scheduled workflow runs every two hours and retains its existing pipeline
+behavior. Manual dispatch defaults to `pipeline`; choose `btp_outreach` to run
+the separate Casablanca-first BTP workflow, which is forced to draft mode even
+if another email mode is selected. Pipeline dispatch continues to offer
+`dry_run`, `draft`, and `live`.
+
+WhatsApp status-step success means Meta accepted the API request; it does not
+verify delivery to a handset. Use Meta delivery-status webhooks/provider
+diagnostics to investigate missing messages. No test message is sent by the
+BTP workflow.
 
 ### Email rollout checklist (safe)
 

@@ -22,8 +22,8 @@ from app.models import (
     Discovery,
     Email,
     EmailVerification,
-    Evidence,
     Event,
+    Evidence,
     ImmigrationFact,
     ImmigrationProgram,
     Job,
@@ -254,6 +254,7 @@ def applications_due_for_followup(session: Session, now: datetime | None = None)
     return list(session.execute(
         select(Application).where(
             Application.status.in_(["sent", "replied"]),
+            Application.job.has(Job.opportunity_type != "SPONTANEOUS_APPLICATION"),
             Application.follow_up_at.is_not(None),
             Application.follow_up_at <= now,
             Application.follow_ups_sent < _max_followups(),

@@ -98,6 +98,32 @@ def cmd_discover(args) -> None:
     console.print(table)
 
 
+def cmd_btp_outreach(args) -> None:
+    """Prepare bounded, safety-gated French spontaneous-application drafts."""
+    from app.workflows.btp_outreach import BtpOutreachSafetyError, run_btp_outreach
+
+    settings = get_settings()
+    if settings.email_mode != "draft" or settings.enable_email is not True:
+        raise SystemExit("BTP outreach requires EMAIL_MODE=draft and ENABLE_EMAIL=true; no Gmail interaction occurred")
+    if settings.email_provider != "gmail":
+        raise SystemExit("BTP outreach requires EMAIL_PROVIDER=gmail; no email-provider interaction occurred")
+    init_db()
+    try:
+        with session_scope() as s:
+            report = run_btp_outreach(
+                s,
+                get_config(),
+                settings,
+                get_profile(),
+                origin_city=args.origin_city,
+                max_companies=args.max_companies,
+            )
+    except BtpOutreachSafetyError as exc:
+        console.print(f"[red]{exc}[/red]")
+        raise SystemExit(2) from exc
+    console.print(json.dumps(report.as_run_report(), ensure_ascii=False, indent=2))
+
+
 def cmd_analyze(_args) -> None:
     from app.workflows.analysis import run_analysis
 
@@ -254,6 +280,12 @@ def main(argv: list[str] | None = None) -> None:
     discover_mode = discover.add_mutually_exclusive_group()
     discover_mode.add_argument("--real", action="store_true", help="explicitly select production public sources")
     discover_mode.add_argument("--demo", action="store_true", help="use offline demo fixtures only")
+    btp = sub.add_parser(
+        "btp-outreach",
+        help="prepare draft-only spontaneous applications to nearby Moroccan BTP companies",
+    )
+    btp.add_argument("--origin-city", choices=("Casablanca",), default="Casablanca")
+    btp.add_argument("--max-companies", type=int, default=20)
     for name in ("analyze", "act", "followups", "search-plan",
                  "stats", "pause", "resume", "scheduler"):
         sub.add_parser(name)
@@ -273,6 +305,7 @@ def main(argv: list[str] | None = None) -> None:
         "init": cmd_init,
         "run-once": cmd_run_once,
         "discover": cmd_discover,
+        "btp-outreach": cmd_btp_outreach,
         "analyze": cmd_analyze,
         "act": cmd_act,
         "followups": cmd_followups,

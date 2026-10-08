@@ -37,6 +37,9 @@ async def analyze_job(session: Session, job, analyzer: JobAnalyzer, matcher: Can
                       profile: CandidateProfile, config: AgentConfig,
                       target_countries: list[str]) -> dict | None:
     """Analyze one job. Returns summary dict (or None on failure)."""
+    if job.opportunity_type == "SPONTANEOUS_APPLICATION":
+        job.status = "outreach_only"
+        return None
     existing = mem.store.get_analysis(session, job.id)
     if not existing:
         analysis = await analyzer.analyze(job)
@@ -97,7 +100,10 @@ async def run_analysis(session: Session, config: AgentConfig, profile: Candidate
     mobility = MobilityAgent(llm)
     decision_agent = DecisionAgent(llm, config, profile=profile)
 
-    jobs = mem.store.get_jobs_by_status(session, ["new"])
+    jobs = [
+        job for job in mem.store.get_jobs_by_status(session, ["new"])
+        if job.opportunity_type != "SPONTANEOUS_APPLICATION"
+    ]
     for job in jobs:
         try:
             summary = await analyze_job(session, job, analyzer, matcher, mobility,

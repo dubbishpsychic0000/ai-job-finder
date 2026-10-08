@@ -39,6 +39,7 @@ def pending_actions(session: Session) -> list:
     return list(session.execute(
         select(models.Job).where(
             models.Job.status == "analyzed",
+            models.Job.opportunity_type != "SPONTANEOUS_APPLICATION",
             models.Job.id.in_(decided),
             models.Job.id.not_in(acted),
         )

@@ -34,6 +34,39 @@ PAGE_TERMS = {
 EMAIL_LOCAL_TERMS = ("recruit", "recrut", "career", "emploi", "talent", "hr", "rh", "hiring", "jobs")
 
 
+def extract_spontaneous_instruction(text: str) -> str:
+    """Return a short excerpt only when a page directs applicants to submit."""
+    patterns = (
+        re.compile(
+            r"(?:envoyez|adressez|transmettez|d[ée]posez|soumettez|"
+            r"faites parvenir|veuillez (?:envoyer|adresser|transmettre|d[ée]poser))"
+            r"[^.!?]{0,140}candidatures?\s+spontan[ée]es?",
+            re.IGNORECASE,
+        ),
+        re.compile(
+            r"candidatures?\s+spontan[ée]es?[^.!?]{0,140}"
+            r"(?:envoyer|adresser|transmettre|d[ée]poser|soumettre|"
+            r"par e[- ]?mail|à l'adresse|à adresser)",
+            re.IGNORECASE,
+        ),
+        re.compile(
+            r"(?:send|submit|email|e-mail)[^.!?]{0,140}"
+            r"(?:spontaneous|unsolicited)\s+applications?",
+            re.IGNORECASE,
+        ),
+        re.compile(
+            r"(?:spontaneous|unsolicited)\s+applications?[^.!?]{0,140}"
+            r"(?:send|submit|email|e-mail|to apply)",
+            re.IGNORECASE,
+        ),
+    )
+    for pattern in patterns:
+        match = pattern.search(text or "")
+        if match:
+            return re.sub(r"\s+", " ", match.group(0)).strip()[:500]
+    return ""
+
+
 def normalize_url(url: str) -> str:
     parsed = urlparse(urldefrag((url or "").strip())[0])
     if parsed.scheme not in {"http", "https"} or not parsed.netloc:
@@ -107,10 +140,12 @@ class WebsiteResearcher:
 
     def __init__(self, *, max_pages: int = 12, per_host_delay: float = 0.25,
                  state_path: Path | None = None, session=None, fetcher=None,
-                 robots_fetcher=None, refresh_after_days: int = 7):
+                 robots_fetcher=None, refresh_after_days: int = 7,
+                 allow_redirects: bool = True):
         self.max_pages = max(1, max_pages)
         self.per_host_delay = max(0.0, per_host_delay)
         self.refresh_after_days = max(1, refresh_after_days)
+        self.allow_redirects = allow_redirects
         self.state_path = state_path
         self.db_session = session if session is not None and hasattr(session, "add") else None
         self.session = requests.Session() if self.db_session is not None else (session or requests.Session())
@@ -122,16 +157,18 @@ class WebsiteResearcher:
         self._state = self._load_state()
 
     def research(self, start_url: str, *, company_id: int | None = None,
-                 job_id: int | None = None, official_domain: str = "") -> ResearchResult:
+                 job_id: int | None = None, official_domain: str = "",
+                 discover_sitemaps: bool = True) -> ResearchResult:
         start = normalize_url(start_url)
         domain = (official_domain or host_domain(start)).lower().removeprefix("www.")
         result = ResearchResult(official_domain=domain)
         if not start or not domain:
             return result
         queue: list[tuple[int, str]] = [(self._priority(start), start)]
-        for sitemap_url in self.discover_sitemap(start):
-            if same_site(sitemap_url, domain):
-                queue.append((self._priority(sitemap_url), sitemap_url))
+        if discover_sitemaps:
+            for sitemap_url in self.discover_sitemap(start):
+                if same_site(sitemap_url, domain):
+                    queue.append((self._priority(sitemap_url), sitemap_url))
         now = datetime.now(timezone.utc)
         refresh_before = now.timestamp() - self.refresh_after_days * 86400
         saved = self._state.get(domain, {})
@@ -247,9 +284,10 @@ class WebsiteResearcher:
                       title or url, 80, "page_canonical", company_id, job_id)
         if page_kind in {"careers", "recruitment", "contact", "spontaneous"}:
             self._add(result, url, page_kind, "relevant_page", url, title or url, 90, "keyword_page", company_id, job_id)
-        if re.search(r"(spontaneous|unsolicited|candidature spontan[ée]|candidatura espont[aâ]nea)", text, re.I):
-            self._add(result, url, page_kind, "spontaneous_application", text[:800],
-                      self._snippet(text, "spontaneous"), 90, "explicit_spontaneous_instruction", company_id, job_id)
+        instruction = extract_spontaneous_instruction(text)
+        if instruction:
+            self._add(result, url, page_kind, "spontaneous_application", instruction,
+                      instruction, 90, "explicit_spontaneous_instruction", company_id, job_id)
         for phrase, field in (("apply online", "application_method"), ("postuler en ligne", "application_method"),
                               ("submit your cv", "application_method"), ("submit application", "application_method")):
             if phrase in text.lower():
@@ -319,8 +357,15 @@ class WebsiteResearcher:
 
     def _fetch(self, url):
         try:
-            response = self.session.get(url, headers={"User-Agent": USER_AGENT}, timeout=15)
+            response = self.session.get(
+                url,
+                headers={"User-Agent": USER_AGENT},
+                timeout=15,
+                allow_redirects=self.allow_redirects,
+            )
             if response.status_code in {401, 403, 429}:
+                return None
+            if not self.allow_redirects and 300 <= response.status_code < 400:
                 return None
             response.raise_for_status()
             return response

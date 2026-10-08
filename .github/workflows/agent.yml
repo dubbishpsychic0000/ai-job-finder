@@ -15,11 +15,20 @@ on:
     - cron: "13 */2 * * *" # every 2h (UTC)
   workflow_dispatch:
     inputs:
-      email_mode:
-        description: "Email mode (dry_run never touches Gmail)"
+      task:
+        description: "Workflow to run"
         type: choice
-        default: dry_run
+        default: pipeline
+        options: [pipeline, btp_outreach]
+      email_mode:
+        description: "Email mode (BTP outreach is always draft-only)"
+        type: choice
+        default: draft
         options: [dry_run, draft, live]
+      max_companies:
+        description: "Maximum nearest BTP companies to process (1-50)"
+        type: number
+        default: 20
       whatsapp_test:
         description: "Send one WhatsApp connection-test template message"
         type: boolean
@@ -49,8 +58,8 @@ jobs:
       # and triggers an immediate WhatsApp alert instead.
       # Real-source rollout: scheduled runs create reviewable Gmail drafts only.
       # A manual dispatch may still explicitly choose live after review.
-      EMAIL_MODE: ${{ inputs.email_mode || 'draft' }}
-      ENABLE_EMAIL: ${{ (inputs.email_mode || 'draft') != 'dry_run' && 'true' || 'false' }}
+      EMAIL_MODE: ${{ inputs.task == 'btp_outreach' && 'draft' || inputs.email_mode || 'draft' }}
+      ENABLE_EMAIL: ${{ (inputs.task == 'btp_outreach' || (inputs.email_mode || 'draft') != 'dry_run') && 'true' || 'false' }}
       MIN_APPLICATION_SCORE: 80
       MIN_APPLICATION_CONFIDENCE: 0.8
     steps:
@@ -94,7 +103,7 @@ jobs:
           cat > .env << 'EOF'
           LLM_PROVIDER=gemini
           ENABLE_EMAIL=true
-          EMAIL_MODE=${{ inputs.email_mode || 'draft' }}
+          EMAIL_MODE=${{ inputs.task == 'btp_outreach' && 'draft' || inputs.email_mode || 'draft' }}
           EMAIL_PROVIDER=gmail
           EMAIL_FROM=omar.benhamid@gmail.com
           MIN_APPLICATION_SCORE=80
@@ -129,7 +138,8 @@ jobs:
           rm -f data/gemini_result.json data/run_*.json || true
           echo "✓ Cleared runtime DB/cache files before run"
 
-      - name: Run one pipeline pass
+      - name: Run selected workflow
+        if: ${{ github.event_name == 'schedule' || inputs.task == 'pipeline' }}
         env:
           GEMINI_API_KEYS: ${{ secrets.GEMINI_API_KEYS }}
           WHATSAPP_ACCESS_TOKEN: ${{ secrets.WHATSAPP_ACCESS_TOKEN }}
@@ -141,18 +151,32 @@ jobs:
           cat /tmp/run_report.json || true
           exit $(cat /tmp/pipeline_exit_code)
 
+      - name: Run BTP spontaneous-application workflow
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.task == 'btp_outreach' }}
+        env:
+          GEMINI_API_KEYS: ${{ secrets.GEMINI_API_KEYS }}
+          WHATSAPP_ACCESS_TOKEN: ${{ secrets.WHATSAPP_ACCESS_TOKEN }}
+          MAX_COMPANIES: ${{ inputs.max_companies || 20 }}
+        run: |
+          set +e
+          python -m app.cli btp-outreach --origin-city Casablanca --max-companies "$MAX_COMPANIES" > /tmp/run_report.json 2> /tmp/run.log
+          echo $? > /tmp/pipeline_exit_code
+          cat /tmp/run.log || true
+          cat /tmp/run_report.json || true
+          exit $(cat /tmp/pipeline_exit_code)
+
       - name: Upload run artifacts
         if: ${{ always() }}
         uses: actions/upload-artifact@v4
         with:
-          name: agent-logs-${{ github.run_id }}
+          name: ${{ (github.event_name == 'workflow_dispatch' && inputs.task == 'btp_outreach') && 'btp-outreach-logs' || 'agent-logs' }}-${{ github.run_id }}
           path: |
             /tmp/run_report.json
             /tmp/run.log
             /tmp/tavily_debug.json
 
       - name: Send WhatsApp run status
-        if: ${{ always() }}"
+        if: ${{ always() }}
         env:
           WHATSAPP_ACCESS_TOKEN: ${{ secrets.WHATSAPP_ACCESS_TOKEN }}
         run: |
@@ -167,22 +191,33 @@ jobs:
           if exit_code == '0' and report_path.exists():
               try:
                   report = json.loads(report_path.read_text(encoding='utf-8'))
-                  discovery = report.get('discovery', {})
-                  analysis = report.get('analysis', {})
-                  action = report.get('action', {})
-                  decisions = ', '.join(f'{k} {v}' for k, v in analysis.get('decisions', {}).items()) or 'none'
-                  message = (
-                      f"Career Agent run complete. Jobs: {discovery.get('new_jobs', 0)} new / "
-                      f"{discovery.get('fetched', 0)} fetched. Decisions: {decisions}. "
-                      f"Gmail drafts: {action.get('drafts', 0)}. "
-                      f"No action: {action.get('applied', 0) == 0 and action.get('asked', 0) == 0}."
-                  )
+                  if report.get('workflow') == 'btp_outreach':
+                      action = report.get('action', {})
+                      btp = action.get('btp', {})
+                      errors = report.get('discovery', {}).get('errors', [])
+                      state = "finished with errors" if errors else "complete"
+                      message = (
+                          f"BTP outreach {state} from Casablanca: {action.get('drafts', 0)} "
+                          f"Gmail drafts for review; {btp.get('processed', 0)} companies processed. "
+                          "OSM coverage is incomplete."
+                      )
+                  else:
+                      discovery = report.get('discovery', {})
+                      analysis = report.get('analysis', {})
+                      action = report.get('action', {})
+                      decisions = ', '.join(f'{k} {v}' for k, v in analysis.get('decisions', {}).items()) or 'none'
+                      message = (
+                          f"Career Agent run complete. Jobs: {discovery.get('new_jobs', 0)} new / "
+                          f"{discovery.get('fetched', 0)} fetched. Decisions: {decisions}. "
+                          f"Gmail drafts: {action.get('drafts', 0)}. "
+                          f"No action: {action.get('applied', 0) == 0 and action.get('asked', 0) == 0}."
+                      )
               except (OSError, ValueError, TypeError):
                   message = 'Career Agent run complete, but its report could not be read. Check GitHub Actions logs.'
           provider = MetaWhatsAppProvider()
           if not provider.send(message):
               raise SystemExit('WhatsApp status message was rejected by Meta')
-          print(f'WhatsApp accepted by Meta; message id: {provider.last_message_id or "not returned"}')
+          print(f'WhatsApp request accepted by Meta; handset delivery unverified; message id: {provider.last_message_id or "not returned"}')
           PY
 
       - name: Send WhatsApp connection test
@@ -190,7 +225,7 @@ jobs:
         env:
           WHATSAPP_ACCESS_TOKEN: ${{ secrets.WHATSAPP_ACCESS_TOKEN }}
         run: |
-          python -c "from app.notifications.whatsapp import MetaWhatsAppProvider; import sys; p=MetaWhatsAppProvider(); ok=p.send('WhatsApp connection test: your Worldwide Career Agent is configured and ready.'); print(f'WhatsApp accepted by Meta; message id: {p.last_message_id or \"not returned\"}'); sys.exit(0 if ok else 1)"
+          python -c "from app.notifications.whatsapp import MetaWhatsAppProvider; import sys; p=MetaWhatsAppProvider(); ok=p.send('WhatsApp connection test: your Worldwide Career Agent is configured and ready.'); print(f'WhatsApp request accepted by Meta; handset delivery unverified; message id: {p.last_message_id or \"not returned\"}'); sys.exit(0 if ok else 1)"
 
       - name: Persist state back to vault
         if: always()
@@ -213,7 +248,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: agent-runtime-logs-${{ github.run_id }}
+          name: ${{ (github.event_name == 'workflow_dispatch' && inputs.task == 'btp_outreach') && 'btp-outreach-runtime-logs' || 'agent-runtime-logs' }}-${{ github.run_id }}
           path: |
             data/*.log
             data/*.log.err

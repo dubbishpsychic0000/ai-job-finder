@@ -82,6 +82,11 @@ class ApplicationEngine:
 
         from app.scheduler.control import is_paused  # lazy: avoid import cycle
 
+        if getattr(job, "opportunity_type", "") == "SPONTANEOUS_APPLICATION" and mode != "draft":
+            return self._record_disabled(
+                job, decision, action, score, contact_email,
+                reason="spontaneous applications are draft-only",
+            )
         if is_paused():
             return self._record_disabled(
                 job, decision, action, score, contact_email,
@@ -220,8 +225,9 @@ class ApplicationEngine:
             email.sent_at = utcnow()
             app.status = "drafted"
             app.sent_at = email.sent_at
-            days = int(self.config.rules.get("follow_up_days", [7])[0])
-            app.follow_up_at = app.sent_at + timedelta(days=days)
+            if getattr(job, "opportunity_type", "") != "SPONTANEOUS_APPLICATION":
+                days = int(self.config.rules.get("follow_up_days", [7])[0])
+                app.follow_up_at = app.sent_at + timedelta(days=days)
             job.status = "acted"
             mem.store.upsert_contact(self.session, contact_email, source="gmail_draft",
                                      company_id=job.company_id)
