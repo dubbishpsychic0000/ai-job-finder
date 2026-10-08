@@ -213,7 +213,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: agent-logs-${{ github.run_id }}
+          name: agent-runtime-logs-${{ github.run_id }}
           path: |
             data/*.log
             data/*.log.err
