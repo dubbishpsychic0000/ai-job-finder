@@ -1643,6 +1643,7 @@ def run_btp_outreach(
         contact = _qualifying_contact(evidence, domain)
         if not contact:
             if not instructions:
+                report.no_qualifying_email += 1
                 target.status = "no_explicit_instructions"
                 if screening_state:
                     screening_state.mark(candidate, "no_explicit_instructions")

@@ -842,7 +842,7 @@ def test_only_explicit_instructions_and_official_domain_contact_create_french_dr
 
     assert report.drafts == 1
     assert report.no_spontaneous_instructions == 1
-    assert report.no_qualifying_email == 1
+    assert report.no_qualifying_email == 2
     assert calls[0][0] == "jobs@eligible.ma"
     assert "Candidature spontanée" in calls[0][1]
     assert "candidature spontanée" in calls[0][2].lower()
