@@ -61,6 +61,7 @@ OVERPASS_CACHE_PATH = ROOT_DIR / "data" / "btp_overpass_cache.json"
 OVERPASS_CACHE_TTL = timedelta(days=7)
 BTPOUTREACH_STATE_PATH = ROOT_DIR / "data" / "btp_outreach_state.json"
 BTPOUTREACH_STATE_MAX_BYTES = 5 * 1024 * 1024
+BTPOUTREACH_SCREENING_POLICY_VERSION = 2
 WIKIDATA_CACHE_PATH = ROOT_DIR / "data" / "btp_wikidata_cache.json"
 WIKIDATA_CACHE_TTL = timedelta(days=30)
 WIKIDATA_SPARQL_URL = "https://query.wikidata.org/sparql"
@@ -186,6 +187,12 @@ class BtpOutreachState:
         status = record.get("status", "")
         if status == "drafted_for_review":
             return True
+        if (
+            status in {"no_explicit_instructions", "no_official_employer_email"}
+            and record.get("policy_version")
+            != str(BTPOUTREACH_SCREENING_POLICY_VERSION)
+        ):
+            return False
         ttl = {
             "no_verified_website": timedelta(days=30),
             "no_explicit_instructions": timedelta(days=30),
@@ -227,6 +234,7 @@ class BtpOutreachState:
             "source": candidate.source[:64],
             "status": status[:64],
             "updated_at": datetime.now(timezone.utc).isoformat(),
+            "policy_version": str(BTPOUTREACH_SCREENING_POLICY_VERSION),
         }
         if gmail_draft_id:
             record["gmail_draft_id"] = gmail_draft_id[:255]
@@ -296,6 +304,7 @@ class BtpOutreachReport:
     search_budget_deferred: int = 0
     processed: int = 0
     researched: int = 0
+    draft_attempts: int = 0
     drafts: int = 0
     existing: int = 0
     no_website: int = 0
@@ -347,6 +356,7 @@ class BtpOutreachReport:
                     "company_pool_candidates": self.company_pool_candidates,
                     "processed": self.processed,
                     "researched": self.researched,
+                    "draft_attempts": self.draft_attempts,
                     "drafts": self.drafts,
                     "sent": 0,
                     "gmail_drafts_confirmed": sum(
@@ -363,6 +373,15 @@ class BtpOutreachReport:
                     "blocked": self.blocked,
                     "search_budget_limited": self.search_budget_limited,
                     "daily_limit_reached": self.daily_limit_reached,
+                    "production_smoke_outcome": (
+                        "draft_created"
+                        if self.drafts
+                        else (
+                            "application_safety_or_transport_blocked"
+                            if self.draft_attempts
+                            else "no eligible production smoke target"
+                        )
+                    ),
                 },
             },
             "followup": {"sent": 0, "blocked": 0, "errors": []},
@@ -1693,6 +1712,7 @@ def run_btp_outreach(
         engine = ApplicationEngine(
             session, config, settings, profile, _FrenchSpontaneousCommunicator()
         )
+        report.draft_attempts += 1
         result = asyncio.run(engine.run(job, decision, "APPLY", address, "fr"))
         job.status = "outreach_only"
         job.opportunity_type = SPONTANEOUS_APPLICATION

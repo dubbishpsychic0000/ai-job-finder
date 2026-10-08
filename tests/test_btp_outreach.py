@@ -278,6 +278,76 @@ def test_btp_screening_state_retries_expired_negatives_but_never_redrafts(tmp_pa
     ] == 1
 
 
+def test_old_negative_screening_is_retried_after_eligibility_policy_change(tmp_path):
+    candidate = _company("Updated policy", "https://updated.ma")
+    path = tmp_path / "screening.json"
+    path.write_text(json.dumps({
+        "schema_version": 1,
+        "companies": {
+            BtpOutreachState.key(candidate): {
+                "name": candidate.name,
+                "city": candidate.city,
+                "source": "company_pool",
+                "status": "no_explicit_instructions",
+                "updated_at": datetime.now(timezone.utc).isoformat(),
+            },
+        },
+    }), encoding="utf-8")
+
+    state = BtpOutreachState(path)
+    assert not state.is_suppressed(candidate)
+
+    state.mark(candidate, "drafted_for_review")
+    assert state.is_suppressed(candidate)
+
+
+def test_previously_screened_negative_can_be_requalified_by_official_recruitment_page(
+    db, config, settings, profile, monkeypatch, tmp_path
+):
+    settings = settings.model_copy(update={
+        "email_mode": "draft", "enable_email": True, "email_provider": "gmail",
+    })
+    candidate = _company("Previously screened", "https://previously-screened.ma")
+    screening_path = tmp_path / "screening.json"
+    screening_path.write_text(json.dumps({
+        "schema_version": 1,
+        "companies": {
+            BtpOutreachState.key(candidate): {
+                "name": candidate.name,
+                "city": candidate.city,
+                "source": "wikidata",
+                "status": "no_explicit_instructions",
+                "updated_at": datetime.now(timezone.utc).isoformat(),
+            },
+        },
+    }), encoding="utf-8")
+    recruitment = EvidenceFact(
+        source_url="https://previously-screened.ma/careers",
+        source_type="recruitment",
+        page_title="Careers",
+        field_name="recruitment_email",
+        extracted_value="recrutement@previously-screened.ma",
+        snippet="Recruitment contact",
+        confidence=100,
+        reason_code="employer_domain",
+    )
+    researcher = _Researcher({"previously-screened.ma": [recruitment]})
+    monkeypatch.setattr(
+        provider, "create_draft", lambda *_args, **_kwargs: (True, "real-draft", "")
+    )
+    monkeypatch.setattr("app.scheduler.control.is_paused", lambda: False)
+
+    report = _run(
+        db, config, settings, profile, [candidate], researcher,
+        screening_state_path=screening_path,
+    )
+
+    assert report.drafts == 1
+    assert report.as_run_report()["action"]["btp"]["production_smoke_outcome"] == (
+        "draft_created"
+    )
+
+
 def test_btp_screening_state_rejects_corrupt_ledger(tmp_path):
     path = tmp_path / "screening.json"
     path.write_text("{broken", encoding="utf-8")
