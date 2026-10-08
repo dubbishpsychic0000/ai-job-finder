@@ -18,6 +18,7 @@ from app import memory as mem
 from app.config import ROOT_DIR, AgentConfig, CandidateProfile, RunnerSettings
 from app.connectors.search_engine import resolve_search_url
 from app.discovery.email_verification import EmailVerificationService
+from app.discovery.employers import classify_result
 from app.discovery.website_researcher import (
     EvidenceFact,
     WebsiteResearcher,
@@ -36,6 +37,25 @@ HARD_MAX_COMPANIES = 50
 MAX_WEBSITE_SEARCH_RESULTS = 8
 CASABLANCA_CENTER = (33.5731, -7.5898)
 SPONTANEOUS_APPLICATION = "SPONTANEOUS_APPLICATION"
+MOROCCO_CITY_CENTERS = {
+    "Casablanca": ("Casablanca-Settat", 33.5731, -7.5898),
+    "Mohammedia": ("Casablanca-Settat", 33.6866, -7.3830),
+    "Settat": ("Casablanca-Settat", 33.0010, -7.6166),
+    "El Jadida": ("Casablanca-Settat", 33.2316, -8.5007),
+    "Rabat": ("Rabat-Salé-Kénitra", 34.0209, -6.8416),
+    "Kenitra": ("Rabat-Salé-Kénitra", 34.2610, -6.5802),
+    "Beni Mellal": ("Béni Mellal-Khénifra", 32.3373, -6.3498),
+    "Meknes": ("Fès-Meknès", 33.8935, -5.5473),
+    "Fes": ("Fès-Meknès", 34.0331, -5.0003),
+    "Safi": ("Marrakech-Safi", 32.2994, -9.2372),
+    "Marrakech": ("Marrakech-Safi", 31.6295, -7.9811),
+    "Tangier": ("Tanger-Tétouan-Al Hoceïma", 35.7595, -5.8340),
+    "Tetouan": ("Tanger-Tétouan-Al Hoceïma", 35.5889, -5.3626),
+    "Oujda": ("Oriental", 34.6814, -1.9086),
+    "Agadir": ("Souss-Massa", 30.4278, -9.5981),
+    "Laayoune": ("Laâyoune-Sakia El Hamra", 27.1536, -13.2033),
+    "Dakhla": ("Dakhla-Oued Ed-Dahab", 23.6848, -15.9582),
+}
 TERMINAL_TARGET_STATUSES = {
     "no_verified_website",
     "no_explicit_instructions",
@@ -78,6 +98,8 @@ class BtpCompany:
 class BtpOutreachReport:
     origin_city: str = "Casablanca"
     candidates: int = 0
+    osm_candidates: int = 0
+    web_candidates: int = 0
     processed: int = 0
     researched: int = 0
     drafts: int = 0
@@ -91,8 +113,8 @@ class BtpOutreachReport:
     errors: list[str] = field(default_factory=list)
     companies: list[dict] = field(default_factory=list)
     limitation: str = (
-        "OpenStreetMap is an incomplete, community-maintained directory, not a canonical "
-        "or exhaustive list of Moroccan BTP employers."
+        "OpenStreetMap and indexed public search results are incomplete; this is not a "
+        "canonical or exhaustive list of Moroccan BTP employers."
     )
 
     def as_run_report(self) -> dict:
@@ -115,6 +137,8 @@ class BtpOutreachReport:
                 "drafts": self.drafts,
                 "btp": {
                     "candidates": self.candidates,
+                    "osm_candidates": self.osm_candidates,
+                    "web_candidates": self.web_candidates,
                     "processed": self.processed,
                     "researched": self.researched,
                     "existing": self.existing,
@@ -200,6 +224,61 @@ class PublicCompanyWebsiteFinder:
                 "snippet": snippet.get_text(" ", strip=True) if snippet else "",
             })
         return results
+
+
+class PublicBtpCompanySearch:
+    """Bounded city-by-city web search that augments incomplete OSM listings."""
+
+    def __init__(self, search=None):
+        self.search = search or PublicCompanyWebsiteFinder._search
+        self.errors: list[str] = []
+
+    def discover(self) -> list[BtpCompany]:
+        cities = sorted(
+            MOROCCO_CITY_CENTERS.items(),
+            key=lambda item: haversine_km(item[1][1], item[1][2]),
+        )
+        found: dict[str, BtpCompany] = {}
+        for city, (region, latitude, longitude) in cities:
+            query = f'entreprise BTP travaux publics génie civil Maroc {city}'
+            try:
+                results = self.search(query)[:MAX_WEBSITE_SEARCH_RESULTS]
+            except Exception as exc:
+                self.errors.append(f"public company search failed for {city}: {exc}")
+                break
+            for item in results:
+                url = _eligible_website(str(item.get("url", "")))
+                if not url or _is_directory_or_job_site(url):
+                    continue
+                text = f"{item.get('title', '')} {item.get('snippet', '')} {host_domain(url)}"
+                if not _mentions_construction(text):
+                    continue
+                candidate = classify_result(
+                    url, str(item.get("title", "")), str(item.get("snippet", "")),
+                    country="Morocco",
+                )
+                if not candidate or candidate.name == "Unknown":
+                    continue
+                key = host_domain(url) or candidate.name.casefold()
+                found.setdefault(key, BtpCompany(
+                    name=candidate.name,
+                    website=url,
+                    city=city,
+                    region=region,
+                    latitude=latitude,
+                    longitude=longitude,
+                    distance_km=haversine_km(latitude, longitude),
+                    source_url=url,
+                ))
+        return sorted(found.values(), key=lambda item: (item.distance_km, item.name.casefold()))
+
+
+def _mentions_construction(text: str) -> bool:
+    value = text.casefold()
+    return any(term in value for term in (
+        "btp", "construction", "travaux publics", "génie civil", "genie civil",
+        "bâtiment", "batiment", "infrastructure",
+    ))
 
 
 def _is_directory_or_job_site(url: str) -> bool:
@@ -430,6 +509,7 @@ def run_btp_outreach(
     origin_city: str = "Casablanca",
     max_companies: int = DEFAULT_MAX_COMPANIES,
     discovery: OverpassBtpDiscovery | None = None,
+    company_search: PublicBtpCompanySearch | None = None,
     researcher: WebsiteResearcher | None = None,
     website_finder: PublicCompanyWebsiteFinder | None = None,
 ) -> BtpOutreachReport:
@@ -460,11 +540,23 @@ def run_btp_outreach(
         return report
     cap = min(requested_cap, remaining_budget)
     directory = discovery or OverpassBtpDiscovery()
+    listed: list[BtpCompany] = []
+    searched: list[BtpCompany] = []
     try:
-        candidates = rank_nearest(directory.discover(), MAX_CANDIDATES)
+        listed = directory.discover()
     except Exception as exc:
         report.errors.append(f"public Overpass discovery failed: {exc}")
+    search = company_search or PublicBtpCompanySearch()
+    try:
+        searched = search.discover()
+        report.errors.extend(getattr(search, "errors", []))
+    except Exception as exc:
+        report.errors.append(f"public company web search failed: {exc}")
+    if not listed and not searched:
         return report
+    report.osm_candidates = len(listed)
+    report.web_candidates = len(searched)
+    candidates = rank_nearest(_merge_candidates(listed, searched), MAX_CANDIDATES)
     report.candidates = len(candidates)
     targets = []
     for candidate in candidates:
@@ -640,3 +732,25 @@ def _company_result(candidate: BtpCompany, status: str) -> dict:
         "distance_km": round(candidate.distance_km, 1),
         "status": status,
     }
+
+
+def _merge_candidates(*groups: list[BtpCompany]) -> list[BtpCompany]:
+    by_name: dict[str, BtpCompany] = {}
+    for group in groups:
+        for candidate in group:
+            key = " ".join(candidate.name.casefold().split())
+            existing = by_name.get(key)
+            if existing is None:
+                by_name[key] = candidate
+            elif not existing.website and candidate.website:
+                by_name[key] = BtpCompany(
+                    name=existing.name,
+                    website=candidate.website,
+                    city=existing.city or candidate.city,
+                    region=existing.region or candidate.region,
+                    latitude=existing.latitude,
+                    longitude=existing.longitude,
+                    distance_km=existing.distance_km,
+                    source_url=candidate.source_url,
+                )
+    return sorted(by_name.values(), key=lambda item: (item.distance_km, item.name.casefold()))

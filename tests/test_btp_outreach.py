@@ -17,6 +17,7 @@ from app.workflows.btp_outreach import (
     BtpCompany,
     BtpOutreachSafetyError,
     OverpassBtpDiscovery,
+    PublicBtpCompanySearch,
     PublicCompanyWebsiteFinder,
     extract_spontaneous_instruction,
     haversine_km,
@@ -83,6 +84,11 @@ class _NoWebsiteFinder:
         return ""
 
 
+class _EmptyCompanySearch:
+    def discover(self):
+        return []
+
+
 def _evidence(domain, *, instruction=True, email="recrutement@build.ma", portal=""):
     url = f"https://{domain}/contact"
     result = []
@@ -129,6 +135,7 @@ def _run(db, config, settings, profile, companies, researcher, **kwargs):
         settings,
         profile,
         discovery=_Discovery(companies),
+        company_search=kwargs.pop("company_search", _EmptyCompanySearch()),
         researcher=researcher,
         website_finder=kwargs.pop("website_finder", _NoWebsiteFinder()),
         **kwargs,
@@ -208,6 +215,27 @@ def test_public_website_search_requires_company_name_and_skips_directories():
         {"url": "https://other.ma", "title": "Other Construction Maroc"},
     ])
     assert unrelated.find("Build SARL", "Casablanca") == ""
+
+
+def test_public_btp_search_queries_cities_from_nearest_outward():
+    def search(query):
+        if query.endswith("Casablanca"):
+            return [{
+                "url": "https://casa-btp.ma",
+                "title": "Casa BTP — travaux publics",
+                "snippet": "Entreprise de construction au Maroc",
+            }]
+        if query.endswith("Rabat"):
+            return [{
+                "url": "https://rabat-btp.ma",
+                "title": "Rabat BTP",
+                "snippet": "Travaux publics et génie civil",
+            }]
+        return []
+
+    results = PublicBtpCompanySearch(search=search).discover()
+    assert [company.city for company in results] == ["Casablanca", "Rabat"]
+    assert results[0].distance_km < results[1].distance_km
 
 
 def test_explicit_instruction_requires_submission_direction():

@@ -60,9 +60,10 @@ wca dashboard                     # web dashboard at http://127.0.0.1:8000
 ### Moroccan BTP spontaneous applications
 
 `wca btp-outreach --origin-city Casablanca --max-companies 20` runs a separate,
-bounded workflow. It considers up to 1,000 public OpenStreetMap BTP listings
-per pass and ranks them from the fixed
-Casablanca city center outward, researches at most 5 pages per official website
+bounded workflow. It combines up to 1,000 public OpenStreetMap and indexed web
+search listings per pass, searches Moroccan cities from Casablanca outward,
+and ranks candidates using public coordinates or coarse city centers. It
+researches at most 5 pages per official website
 with the robots-aware researcher, and prepares French Gmail drafts only when
 the employer's own website gives explicit spontaneous-application instructions
 and shows a safe address on that employer's domain. When an OSM listing lacks a
