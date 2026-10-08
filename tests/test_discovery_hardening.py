@@ -5,6 +5,9 @@ import asyncio
 from app.connectors.linkedin import LinkedInJobsSource
 from app.connectors.search_engine import SearchEngineSource
 from app.connectors.tavily_resilience import (
+    BTP_TAVILY_DAILY_RESERVE,
+    GENERAL_TAVILY_DAILY_LIMIT,
+    TAVILY_DAILY_REQUEST_LIMIT,
     DailyBudget,
     ResilientTavily,
     TavilyCache,
@@ -58,6 +61,32 @@ def test_tavily_negative_results_are_cached_and_charged_once(tmp_path, monkeypat
     assert asyncio.run(source.search("civil", "Morocco")) == []
     assert calls["count"] == 1
     assert budget.remaining() == 19
+
+
+def test_tavily_daily_budget_reserves_three_requests_for_btp(tmp_path):
+    assert TAVILY_DAILY_REQUEST_LIMIT == 20
+    assert BTP_TAVILY_DAILY_RESERVE == 3
+    assert GENERAL_TAVILY_DAILY_LIMIT == 17
+    path = tmp_path / "shared-budget.json"
+    general = DailyBudget(path, limit=GENERAL_TAVILY_DAILY_LIMIT)
+
+    for _ in range(GENERAL_TAVILY_DAILY_LIMIT):
+        general.record()
+
+    btp = DailyBudget(path, limit=TAVILY_DAILY_REQUEST_LIMIT)
+    assert general.remaining() == 0
+    assert btp.remaining() == BTP_TAVILY_DAILY_RESERVE
+
+
+def test_provider_quota_exhaustion_is_shared_across_reserved_budget_views(tmp_path):
+    path = tmp_path / "shared-budget.json"
+    general = DailyBudget(path, limit=GENERAL_TAVILY_DAILY_LIMIT)
+    general.exhaust()
+
+    btp = DailyBudget(path, limit=TAVILY_DAILY_REQUEST_LIMIT)
+
+    assert general.remaining() == 0
+    assert btp.remaining() == 0
 
 
 def test_email_verification_requires_employer_domain():

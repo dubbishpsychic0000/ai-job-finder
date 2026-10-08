@@ -60,11 +60,11 @@ wca dashboard                     # web dashboard at http://127.0.0.1:8000
 ### Moroccan BTP spontaneous applications
 
 `wca btp-outreach --origin-city Casablanca --max-companies 20` runs a separate,
-bounded workflow. It combines up to 1,000 public OpenStreetMap and indexed web
-search listings per pass, searches Moroccan cities from Casablanca outward,
-and ranks candidates using public coordinates or coarse city centers. It
-researches at most 5 pages per official website
-with the robots-aware researcher, and prepares French Gmail drafts only when
+bounded workflow. It combines public OpenStreetMap, monthly cached Wikidata,
+optional audited CSV leads, and capped indexed web-search listings; it ranks
+candidates using public coordinates or coarse city centers from Casablanca
+outward. It researches at most 5 pages per official website with the
+robots-aware researcher, and prepares French Gmail drafts only when
 the employer's own website gives explicit spontaneous-application instructions
 and shows a safe address on that employer's domain. Public directory pages may
 seed company names and coarse locations, but are never treated as official
@@ -75,15 +75,27 @@ email addresses, missing instructions, and missing CVs are skipped or blocked;
 no address is guessed. The hard cap is 50 companies per run. OpenStreetMap is
 community-maintained and incomplete, not a canonical directory; indexed public
 search and directory listings are also incomplete and not an exhaustive source.
+Candidate acquisition is capped at 1,000 companies per run.
 Already-screened targets are recorded so later batches advance to the next
 nearest unprocessed listings instead of repeating the same first batch.
 
 Public discovery rotates through at most two cities per run and persists its
-cursor with the vault state. Tavily-backed BTP lookup is capped at three
-uncached API requests per run, including official-site lookups; cached queries
-do not consume that cap, and each query tries at most one credential. The
-existing shared per-key daily budget remains in force, and the run report marks
-when a search budget defers work.
+cursor with the vault state. Add a private `candidate/btp_company_seeds.csv`
+to the vault to import audited company leads. Its required columns are `name`
+and `source_url`; optional columns are `city`, `region`, `latitude`,
+`longitude`, and `website`. A city from the supported Morocco city list or a
+Morocco coordinate pair is required. Contact/email columns are rejected.
+Directory/source URLs are retained as provenance, not treated as official
+websites or contact evidence; a supplied website is still researched under the
+usual spontaneous-application evidence rules.
+
+Tavily is shared across workflows with a hard budget of 20 requests per key per
+day. General discovery is capped at 17, reserving the remaining three for BTP.
+BTP also caps uncached requests at three per run, including official-site
+lookups; cached queries do not consume that cap, and each query tries at most
+one available credential. A provider quota-exhaustion response blocks further
+calls for that key until the daily reset. The run report marks when a search
+budget defers work.
 
 The command refuses to run unless `EMAIL_MODE=draft`, `ENABLE_EMAIL=true`, and
 `EMAIL_PROVIDER=gmail`; the existing safety gate, cooldowns, duplicate checks,

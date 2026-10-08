@@ -15,7 +15,12 @@ from sqlalchemy.orm import Session
 from app import memory as mem
 from app.config import ROOT_DIR, AgentConfig, CandidateProfile, Preferences, load_yaml
 from app.connectors import registry
-from app.connectors.tavily_resilience import DailyBudget, TavilyKey, key_fingerprint
+from app.connectors.tavily_resilience import (
+    GENERAL_TAVILY_DAILY_LIMIT,
+    DailyBudget,
+    TavilyKey,
+    key_fingerprint,
+)
 from app.deduplication import find_duplicates
 from app.discovery.email_verification import EmailVerificationService
 from app.discovery.opportunity_details import classify_opportunity, detect_application_method
@@ -56,7 +61,7 @@ def _load_source_connectors(path: Path | None = None) -> list[tuple[dict, object
     proxy = os.getenv("HTTP_PROXY") or os.getenv("HTTPS_PROXY") or None
 
     # Build Tavily resilient keys from TAVILY_API_KEYS (comma-separated)
-    tavily_keys_str = os.getenv("TAVILY_API_KEYS", "")
+    tavily_keys_str = os.getenv("TAVILY_API_KEYS") or os.getenv("TAVILY_API_KEY", "")
     tavily_keys = [k.strip() for k in tavily_keys_str.split(",") if k.strip()]
     tavily_resilient_keys = []
     for k in tavily_keys:
@@ -64,7 +69,7 @@ def _load_source_connectors(path: Path | None = None) -> list[tuple[dict, object
         budget_path.parent.mkdir(parents=True, exist_ok=True)
         tavily_resilient_keys.append(TavilyKey(
             api_key=k,
-            budget=DailyBudget(budget_path, limit=20),
+            budget=DailyBudget(budget_path, limit=GENERAL_TAVILY_DAILY_LIMIT),
             fp=key_fingerprint(k),
         ))
 

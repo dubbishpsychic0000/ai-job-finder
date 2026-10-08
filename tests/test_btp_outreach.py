@@ -22,8 +22,10 @@ from app.workflows.btp_outreach import (
     OverpassBtpDiscovery,
     PublicBtpCompanySearch,
     PublicCompanyWebsiteFinder,
+    WikidataBtpDiscovery,
     extract_spontaneous_instruction,
     haversine_km,
+    load_btp_seed_csv,
     parse_overpass_companies,
     rank_nearest,
     run_btp_outreach,
@@ -138,6 +140,7 @@ def _run(db, config, settings, profile, companies, researcher, **kwargs):
         settings,
         profile,
         discovery=_Discovery(companies),
+        wikidata_discovery=_Discovery([]),
         company_search=kwargs.pop("company_search", _EmptyCompanySearch()),
         researcher=researcher,
         website_finder=kwargs.pop("website_finder", _NoWebsiteFinder()),
@@ -150,17 +153,23 @@ def test_overpass_parser_filters_and_extracts_only_city_region_and_coordinates()
         "elements": [
             _osm_element("Casablanca BTP", 33.5731, -7.5898, city="Casablanca"),
             _osm_element("Far BTP", 34.0, -6.8, website="https://far.ma"),
-            _osm_element("Not construction", 34.0, -6.8, craft="bakery"),
+            _osm_element("Bakery", 34.0, -6.8, craft="bakery"),
+            {
+                "type": "node",
+                "lat": 33.58,
+                "lon": -7.6,
+                "tags": {"name": "Casa BTP Travaux", "office": "company"},
+            },
             {"type": "way", "center": {"lat": 34.1, "lon": -6.7},
-             "tags": {"name": "No BTP tag", "office": "accountant"}},
+             "tags": {"name": "Unknown company", "office": "accountant"}},
         ]
     })
-    assert [item.name for item in parsed] == ["Casablanca BTP", "Far BTP"]
+    assert [item.name for item in parsed] == ["Casablanca BTP", "Casa BTP Travaux", "Far BTP"]
     assert parsed[0].city == "Casablanca"
     assert parsed[0].location == "Casablanca, Rabat-Salé-Kénitra, Morocco"
-    assert "street" not in repr(parsed[0]).lower()
+    assert "must never be retained" not in repr(parsed[0]).lower()
     assert parsed[0].distance_km == pytest.approx(0)
-    assert parsed[1].distance_km == pytest.approx(
+    assert parsed[2].distance_km == pytest.approx(
         haversine_km(34.0, -6.8)
     )
 
@@ -294,6 +303,135 @@ def test_public_search_reports_duckduckgo_human_verification(monkeypatch):
         PublicCompanyWebsiteFinder._search("construction companies Casablanca")
 
 
+def test_company_seed_csv_import_requires_public_provenance_and_city_or_coordinates(tmp_path):
+    path = tmp_path / "btp_company_seeds.csv"
+    path.write_text(
+        "name,city,region,latitude,longitude,website,source_url\n"
+        "Atlas BTP,Casablanca,Casablanca-Settat,,,,https://fnbtp.ma/companies/atlas\n"
+        "Nord Routes,,Tanger-Tétouan-Al Hoceïma,35.76,-5.83,https://nordroutes.ma,"
+        "https://public.example.ma/nord-routes\n",
+        encoding="utf-8",
+    )
+
+    companies = load_btp_seed_csv(path)
+
+    assert [company.name for company in companies] == ["Atlas BTP", "Nord Routes"]
+    assert companies[0].source == "curated_seed_csv"
+    assert companies[0].website == ""
+    assert companies[0].city == "Casablanca"
+    assert companies[1].city == "Tangier"
+    assert companies[1].website == "https://nordroutes.ma/"
+
+
+def test_company_seed_csv_rejects_email_data_and_malformed_locations(tmp_path):
+    path = tmp_path / "btp_company_seeds.csv"
+    path.write_text(
+        "name,city,email,source_url\n"
+        "Atlas BTP,Casablanca,jobs@atlas.ma,https://fnbtp.ma/companies/atlas\n",
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="headers"):
+        load_btp_seed_csv(path)
+
+    path.write_text(
+        "name,city,source_url\n"
+        "Atlas BTP,Unknown City,https://fnbtp.ma/companies/atlas\n",
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="needs a known city or coordinates"):
+        load_btp_seed_csv(path)
+
+
+def test_btp_workflow_includes_audited_csv_candidates(db, config, settings, profile, tmp_path):
+    settings = settings.model_copy(update={
+        "email_mode": "draft", "enable_email": True, "email_provider": "gmail",
+    })
+    path = tmp_path / "btp_company_seeds.csv"
+    path.write_text(
+        "name,city,source_url\n"
+        "Atlas BTP,Casablanca,https://fnbtp.ma/companies/atlas\n",
+        encoding="utf-8",
+    )
+
+    report = _run(
+        db,
+        config,
+        settings,
+        profile,
+        [],
+        _Researcher({}),
+        seed_csv_path=path,
+    )
+
+    assert report.seed_candidates == 1
+    assert report.candidates == 1
+    assert report.no_website == 1
+    company = db.query(models.Company).one()
+    assert company.name == "Atlas BTP"
+    discovery = db.query(models.Discovery).one()
+    assert discovery.source == "curated_seed_csv"
+    assert discovery.evidence["discovery_source_url"] == "https://fnbtp.ma/companies/atlas"
+
+
+def test_wikidata_btp_parser_filters_unrelated_industries_and_requires_location():
+    def binding(value):
+        return {"value": value}
+
+    rows = [
+        {
+            "entity": binding("https://www.wikidata.org/entity/Q1"),
+            "entityLabel": binding("Ciments du Maroc"),
+            "industryLabel": binding("construction materials industry"),
+            "website": binding("https://cimentsdumaroc.ma"),
+            "cityLabel": binding("Casablanca"),
+            "coordinates": binding("Point(-7.6 33.57)"),
+        },
+        {
+            "entity": binding("https://www.wikidata.org/entity/Q2"),
+            "entityLabel": binding("Vehicle Works"),
+            "industryLabel": binding("vehicle construction"),
+            "cityLabel": binding("Casablanca"),
+            "coordinates": binding("Point(-7.6 33.57)"),
+        },
+        {
+            "entity": binding("https://www.wikidata.org/entity/Q3"),
+            "entityLabel": binding("Unlocated BTP"),
+            "industryLabel": binding("construction"),
+        },
+    ]
+
+    companies = WikidataBtpDiscovery._parse({"results": {"bindings": rows}})
+
+    assert len(companies) == 1
+    assert companies[0].name == "Ciments du Maroc"
+    assert companies[0].source == "wikidata"
+    assert companies[0].latitude == pytest.approx(33.57)
+
+
+def test_wikidata_discovery_caches_monthly_results(tmp_path):
+    calls = []
+    payload = {"results": {"bindings": [{
+        "entity": {"value": "https://www.wikidata.org/entity/Q1"},
+        "entityLabel": {"value": "Ciments du Maroc"},
+        "industryLabel": {"value": "construction materials industry"},
+        "cityLabel": {"value": "Casablanca"},
+        "coordinates": {"value": "Point(-7.6 33.57)"},
+    }]}}
+
+    def fetch_json(url, *, params):
+        calls.append(url)
+        assert params["format"] == "json"
+        return payload
+
+    discovery = WikidataBtpDiscovery(
+        fetch_json=fetch_json,
+        cache_path=tmp_path / "wikidata-cache.json",
+    )
+    assert len(discovery.discover()) == 1
+    assert len(discovery.discover()) == 1
+    assert len(calls) == 1
+
+
 def test_configured_public_search_uses_tavily_budgeted_keys(monkeypatch, tmp_path):
     monkeypatch.setenv("TAVILY_API_KEYS", "key-one,key-two")
     monkeypatch.setattr(btp_outreach, "ROOT_DIR", tmp_path)
@@ -302,13 +440,12 @@ def test_configured_public_search_uses_tavily_budgeted_keys(monkeypatch, tmp_pat
         def __init__(self, **kwargs):
             self.options = kwargs
 
-    monkeypatch.setattr(
-        "app.connectors.tavily_resilience.ResilientTavily", FakeTavily,
-    )
+    monkeypatch.setattr(btp_outreach, "ResilientTavily", FakeTavily)
     search = btp_outreach._configured_public_search()
     assert isinstance(search, btp_outreach._TavilyCompanySearch)
     assert len(search.connector.options["keys"]) == 2
     assert search.connector.options["query_suffix"] == ""
+    assert search.max_api_calls == 3
 
 
 def test_tavily_company_search_maps_public_results():

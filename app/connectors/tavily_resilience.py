@@ -29,6 +29,10 @@ from app.connectors.base import Opportunity
 
 logger = logging.getLogger(__name__)
 
+TAVILY_DAILY_REQUEST_LIMIT = 20
+BTP_TAVILY_DAILY_RESERVE = 3
+GENERAL_TAVILY_DAILY_LIMIT = TAVILY_DAILY_REQUEST_LIMIT - BTP_TAVILY_DAILY_RESERVE
+
 
 def _cache_key(query: str, location: str) -> str:
     payload = f"tavily\x00{query}\x00{location}".encode("utf-8")
@@ -96,6 +100,7 @@ class DailyBudget:
         self._lock = threading.Lock()
         self._date = ""
         self._count = 0
+        self._exhausted = False
         self._load()
 
     @staticmethod
@@ -111,19 +116,26 @@ class DailyBudget:
             if raw.get("date") == self._today():
                 self._date = raw["date"]
                 self._count = int(raw.get("count", 0))
+                self._exhausted = bool(raw.get("exhausted", False))
         except Exception:
-            self._date, self._count = "", 0
+            self._date, self._count, self._exhausted = "", 0, False
 
     def _save(self) -> None:
         tmp = self.path.with_suffix(".json.tmp")
         try:
             with tmp.open("w", encoding="utf-8") as fh:
-                json.dump({"date": self._date, "count": self._count}, fh)
+                json.dump({
+                    "date": self._date,
+                    "count": self._count,
+                    "exhausted": self._exhausted,
+                }, fh)
             os.replace(tmp, self.path)
         except OSError as exc:
             logger.warning("could not persist Tavily budget: %s", exc)
 
     def remaining(self) -> int:
+        if self._date == self._today() and self._exhausted:
+            return 0
         if self.limit <= 0:
             return 1 << 30  # unlimited
         if self._date != self._today():
@@ -136,16 +148,17 @@ class DailyBudget:
         with self._lock:
             if self._date != self._today():
                 self._date, self._count = self._today(), 0
+                self._exhausted = False
             self._count += 1
             self._save()
 
     def exhaust(self) -> None:
         """Mark the daily budget as spent (e.g. after an API quota error)."""
-        if self.limit <= 0:
-            return
         with self._lock:
             self._date = self._today()
-            self._count = self.limit
+            if self.limit > 0:
+                self._count = self.limit
+            self._exhausted = True
             self._save()
 
 
@@ -189,7 +202,7 @@ class ResilientTavily:
                 raise TypeError("provide keys=[] or set TAVILY_API_KEY")
             budget_path = Path("data/tavily_budget.json")
             budget_path.parent.mkdir(parents=True, exist_ok=True)
-            budget = DailyBudget(budget_path, limit=20)
+            budget = DailyBudget(budget_path, limit=TAVILY_DAILY_REQUEST_LIMIT)
             self.keys = [TavilyKey(
                 api_key=api_key,
                 budget=budget,

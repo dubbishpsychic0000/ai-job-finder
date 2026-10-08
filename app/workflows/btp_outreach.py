@@ -2,7 +2,9 @@
 from __future__ import annotations
 
 import asyncio
+import csv
 import hashlib
+import io
 import ipaddress
 import json
 import math
@@ -10,6 +12,7 @@ import os
 import re
 import unicodedata
 from dataclasses import dataclass, field
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from urllib.parse import urlparse
 
@@ -20,6 +23,15 @@ from sqlalchemy.orm import Session
 from app import memory as mem
 from app.config import ROOT_DIR, AgentConfig, CandidateProfile, RunnerSettings
 from app.connectors.search_engine import resolve_search_url
+from app.connectors.tavily_resilience import (
+    BTP_TAVILY_DAILY_RESERVE,
+    TAVILY_DAILY_REQUEST_LIMIT,
+    DailyBudget,
+    ResilientTavily,
+    TavilyCache,
+    TavilyKey,
+    key_fingerprint,
+)
 from app.discovery.email_verification import EmailVerificationService
 from app.discovery.employers import classify_result
 from app.discovery.website_researcher import (
@@ -38,9 +50,15 @@ MAX_CANDIDATES = 1000
 DEFAULT_MAX_COMPANIES = 20
 HARD_MAX_COMPANIES = 50
 MAX_WEBSITE_SEARCH_RESULTS = 8
-MAX_TAVILY_API_CALLS_PER_RUN = 3
+MAX_TAVILY_API_CALLS_PER_RUN = BTP_TAVILY_DAILY_RESERVE
 MAX_CITY_SEARCHES_PER_RUN = 2
 CITY_SEARCH_STATE_PATH = ROOT_DIR / "data" / "btp_search_state.json"
+WIKIDATA_CACHE_PATH = ROOT_DIR / "data" / "btp_wikidata_cache.json"
+WIKIDATA_CACHE_TTL = timedelta(days=30)
+WIKIDATA_SPARQL_URL = "https://query.wikidata.org/sparql"
+MAX_SEED_FILE_BYTES = 1024 * 1024
+MAX_SEED_COMPANIES = 2000
+SEED_FILE_PATH = ROOT_DIR / "candidate" / "btp_company_seeds.csv"
 CASABLANCA_CENTER = (33.5731, -7.5898)
 SPONTANEOUS_APPLICATION = "SPONTANEOUS_APPLICATION"
 MOROCCO_CITY_CENTERS = {
@@ -78,9 +96,10 @@ class PublicSearchBudgetError(RuntimeError):
 OVERPASS_QUERY = (
     '[out:json][timeout:25][maxsize:5242880];'
     'area["ISO3166-1"="MA"][admin_level=2]->.morocco;('
-    'nwr(area.morocco)["craft"~"construction|builder|civil_engineering|structural_engineering",i];'
+    'nwr(area.morocco)["craft"~"construction|builder|civil_engineering|structural_engineering|building",i];'
     'nwr(area.morocco)["office"="construction"];'
-    'nwr(area.morocco)["office"="company"]["industry"~"construction|building|civil engineering",i];'
+    'nwr(area.morocco)["office"="company"]["industry"~"construction|building|civil engineering|public works|infrastructure",i];'
+    'nwr(area.morocco)["office"="company"]["name"~"BTP|travaux publics|génie civil|construction",i];'
     ');out center;'
 )
 
@@ -99,6 +118,7 @@ class BtpCompany:
     longitude: float
     distance_km: float
     source_url: str = OVERPASS_URL
+    source: str = ""
 
     @property
     def location(self) -> str:
@@ -110,6 +130,8 @@ class BtpOutreachReport:
     origin_city: str = "Casablanca"
     candidates: int = 0
     osm_candidates: int = 0
+    wikidata_candidates: int = 0
+    seed_candidates: int = 0
     web_candidates: int = 0
     processed: int = 0
     researched: int = 0
@@ -150,6 +172,8 @@ class BtpOutreachReport:
                 "btp": {
                     "candidates": self.candidates,
                     "osm_candidates": self.osm_candidates,
+                    "wikidata_candidates": self.wikidata_candidates,
+                    "seed_candidates": self.seed_candidates,
                     "web_candidates": self.web_candidates,
                     "processed": self.processed,
                     "researched": self.researched,
@@ -197,6 +221,198 @@ class OverpassBtpDiscovery:
                     raise ValueError("Overpass response exceeded the 5 MiB safety limit")
                 chunks.append(chunk)
         return json.loads(b"".join(chunks))
+
+
+class WikidataBtpDiscovery:
+    """Monthly cached, quota-free supplemental seeds from Wikidata."""
+
+    QUERY = """
+    PREFIX wd: <http://www.wikidata.org/entity/>
+    PREFIX wdt: <http://www.wikidata.org/prop/direct/>
+    PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>
+    PREFIX bd: <http://www.bigdata.com/rdf#>
+    PREFIX wikibase: <http://wikiba.se/ontology#>
+    SELECT ?entity ?entityLabel ?website ?cityLabel ?coordinates ?industryLabel WHERE {
+      ?entity wdt:P17 wd:Q1028;
+              wdt:P452 ?industry.
+      ?industry rdfs:label ?industryLabel.
+      FILTER(LANG(?industryLabel) = "en" &&
+        REGEX(LCASE(STR(?industryLabel)), "construction|building|civil engineering|public works"))
+      OPTIONAL { ?entity wdt:P856 ?website. }
+      OPTIONAL {
+        ?entity wdt:P131 ?city.
+        ?city wdt:P625 ?coordinates.
+        ?city rdfs:label ?cityLabel.
+        FILTER(LANG(?cityLabel) = "en" || LANG(?cityLabel) = "fr")
+      }
+      SERVICE wikibase:label { bd:serviceParam wikibase:language "fr,en". }
+    }
+    LIMIT 100
+    """
+
+    def __init__(self, fetch_json=None, *, cache_path=None):
+        self.fetch_json = fetch_json or self._fetch_json
+        self.cache_path = cache_path or WIKIDATA_CACHE_PATH
+        self.errors: list[str] = []
+
+    def discover(self) -> list[BtpCompany]:
+        cached = self._load_cache()
+        if cached and cached[0] >= datetime.now(timezone.utc) - WIKIDATA_CACHE_TTL:
+            return cached[1]
+        try:
+            payload = self.fetch_json(WIKIDATA_SPARQL_URL, params={
+                "query": self.QUERY,
+                "format": "json",
+            })
+            companies = self._parse(payload)
+            self._save_cache(companies)
+            return companies
+        except Exception as exc:
+            self.errors.append(f"Wikidata BTP discovery failed: {exc}")
+            return cached[1] if cached else []
+
+    def _load_cache(self) -> tuple[datetime, list[BtpCompany]] | None:
+        if not self.cache_path.exists():
+            return None
+        raw = json.loads(self.cache_path.read_text(encoding="utf-8"))
+        timestamp = datetime.fromisoformat(raw["fetched_at"])
+        companies = [
+            BtpCompany(**item) for item in raw.get("companies", [])
+        ]
+        return timestamp, companies
+
+    def _save_cache(self, companies: list[BtpCompany]) -> None:
+        self.cache_path.parent.mkdir(parents=True, exist_ok=True)
+        temporary = self.cache_path.with_suffix(self.cache_path.suffix + ".tmp")
+        temporary.write_text(json.dumps({
+            "fetched_at": datetime.now(timezone.utc).isoformat(),
+            "companies": [company.__dict__ for company in companies],
+        }, ensure_ascii=False), encoding="utf-8")
+        temporary.replace(self.cache_path)
+
+    @staticmethod
+    def _parse(payload: dict) -> list[BtpCompany]:
+        companies: dict[str, BtpCompany] = {}
+        rows = (payload.get("results") or {}).get("bindings", [])
+        for row in rows:
+            name = _binding(row, "entityLabel")
+            industry = _binding(row, "industryLabel")
+            if not name or not _mentions_construction(industry):
+                continue
+            if any(term in industry.casefold() for term in ("vehicle", "shipbuilding", "naval")):
+                continue
+            source_url = _binding(row, "entity")
+            point = _wikidata_point(_binding(row, "coordinates"))
+            city = _canonical_city(_binding(row, "cityLabel"))
+            if point is None and city:
+                _, latitude, longitude = MOROCCO_CITY_CENTERS[city]
+                point = (latitude, longitude)
+            if point is None:
+                continue
+            latitude, longitude = point
+            if not (20 <= latitude <= 37 and -18 <= longitude <= -0.5):
+                continue
+            if not city:
+                city = min(
+                    MOROCCO_CITY_CENTERS,
+                    key=lambda value: haversine_km(
+                        *MOROCCO_CITY_CENTERS[value][1:],
+                        origin=(latitude, longitude),
+                    ),
+                )
+            region, _, _ = _city_location(city)
+            website = _eligible_website(_binding(row, "website"))
+            companies[name.casefold()] = BtpCompany(
+                name=name,
+                website=website,
+                city=city,
+                region=region,
+                latitude=latitude,
+                longitude=longitude,
+                distance_km=haversine_km(latitude, longitude),
+                source_url=source_url,
+                source="wikidata",
+            )
+        return sorted(companies.values(), key=lambda item: (item.distance_km, item.name.casefold()))
+
+    @staticmethod
+    def _fetch_json(url: str, *, params: dict[str, str]):
+        response = requests.get(
+            url,
+            params=params,
+            headers={
+                "User-Agent": "ai-job-finder/0.1 (monthly public BTP seed refresh)",
+                "Accept": "application/sparql-results+json",
+            },
+            timeout=(5, 20),
+        )
+        response.raise_for_status()
+        return response.json()
+
+
+def load_btp_seed_csv(path: Path | None = None) -> list[BtpCompany]:
+    seed_path = path or SEED_FILE_PATH
+    if not seed_path.exists():
+        return []
+    if seed_path.stat().st_size > MAX_SEED_FILE_BYTES:
+        raise ValueError("BTP company seed CSV exceeds the 1 MiB limit")
+    content = seed_path.read_text(encoding="utf-8-sig")
+    rows = csv.DictReader(io.StringIO(content))
+    allowed = {"name", "city", "region", "latitude", "longitude", "website", "source_url"}
+    required = {"name", "source_url"}
+    headers = set(rows.fieldnames or ())
+    if not required.issubset(headers) or not headers.issubset(allowed):
+        raise ValueError(
+            "BTP seed CSV headers must include name, source_url and only supported location/website fields"
+        )
+    companies = []
+    for line_number, row in enumerate(rows, start=2):
+        if line_number > MAX_SEED_COMPANIES + 1:
+            raise ValueError(f"BTP company seed CSV exceeds {MAX_SEED_COMPANIES} rows")
+        name = (row.get("name") or "").strip()[:255]
+        source_url = _eligible_website((row.get("source_url") or "").strip())
+        if not name or not source_url:
+            raise ValueError(f"BTP seed CSV row {line_number} requires a name and HTTPS source_url")
+        city_value = (row.get("city") or "").strip()
+        city = _canonical_city(city_value)
+        has_latitude = bool((row.get("latitude") or "").strip())
+        has_longitude = bool((row.get("longitude") or "").strip())
+        if has_latitude != has_longitude:
+            raise ValueError(f"BTP seed CSV row {line_number} must provide both coordinates")
+        if has_latitude:
+            try:
+                latitude = float(row["latitude"])
+                longitude = float(row["longitude"])
+            except ValueError as exc:
+                raise ValueError(f"BTP seed CSV row {line_number} has invalid coordinates") from exc
+            if not (20 <= latitude <= 37 and -18 <= longitude <= -0.5):
+                raise ValueError(f"BTP seed CSV row {line_number} coordinates are outside Morocco")
+            if not city:
+                city = min(
+                    MOROCCO_CITY_CENTERS,
+                    key=lambda value: haversine_km(
+                        *MOROCCO_CITY_CENTERS[value][1:],
+                        origin=(latitude, longitude),
+                    ),
+                )
+        elif city:
+            _, latitude, longitude = MOROCCO_CITY_CENTERS[city]
+        else:
+            raise ValueError(f"BTP seed CSV row {line_number} needs a known city or coordinates")
+        default_region, _, _ = _city_location(city)
+        region = (row.get("region") or "").strip()[:120] or default_region
+        companies.append(BtpCompany(
+            name=name,
+            website=_eligible_website((row.get("website") or "").strip()),
+            city=city,
+            region=region,
+            latitude=latitude,
+            longitude=longitude,
+            distance_km=haversine_km(latitude, longitude),
+            source_url=source_url,
+            source="curated_seed_csv",
+        ))
+    return companies
 
 
 class PublicCompanyWebsiteFinder:
@@ -273,29 +489,25 @@ def _configured_public_search():
     from dotenv import load_dotenv
 
     load_dotenv()
-    api_keys = [key.strip() for key in os.getenv("TAVILY_API_KEYS", "").split(",") if key.strip()]
+    configured_keys = os.getenv("TAVILY_API_KEYS") or os.getenv("TAVILY_API_KEY", "")
+    api_keys = [key.strip() for key in configured_keys.split(",") if key.strip()]
     if not api_keys:
         return PublicCompanyWebsiteFinder._search
-
-    from app.connectors.tavily_resilience import (
-        DailyBudget,
-        ResilientTavily,
-        TavilyCache,
-        TavilyKey,
-        key_fingerprint,
-    )
 
     data_dir = ROOT_DIR / "data"
     data_dir.mkdir(parents=True, exist_ok=True)
     keys = [
         TavilyKey(
             api_key=key,
-            budget=DailyBudget(data_dir / f"tavily_budget_{key_fingerprint(key)}.json", limit=20),
+            budget=DailyBudget(
+                data_dir / f"tavily_budget_{key_fingerprint(key)}.json",
+                limit=TAVILY_DAILY_REQUEST_LIMIT,
+            ),
             fp=key_fingerprint(key),
         )
         for key in api_keys
     ]
-    return _TavilyCompanySearch(ResilientTavily(
+    connector = ResilientTavily(
         keys=keys,
         cache=TavilyCache(data_dir / "tavily_cache.json"),
         results_per_query=MAX_WEBSITE_SEARCH_RESULTS,
@@ -303,7 +515,11 @@ def _configured_public_search():
         result_source_type="search_engine",
         query_suffix="",
         max_key_attempts=1,
-    ))
+    )
+    return _TavilyCompanySearch(
+        connector,
+        max_api_calls=BTP_TAVILY_DAILY_RESERVE,
+    )
 
 
 class PublicBtpCompanySearch:
@@ -372,6 +588,7 @@ class PublicBtpCompanySearch:
                     longitude=longitude,
                     distance_km=haversine_km(latitude, longitude),
                     source_url=url,
+                    source="public_company_search",
                 ))
         return sorted(found.values(), key=lambda item: (item.distance_km, item.name.casefold()))
 
@@ -394,6 +611,51 @@ def _save_city_search_cursor(path: Path | None, cursor: int) -> None:
         encoding="utf-8",
     )
     temporary.replace(path)
+
+
+def _binding(row: dict, name: str) -> str:
+    return str((row.get(name) or {}).get("value", "")).strip()
+
+
+def _wikidata_point(value: str) -> tuple[float, float] | None:
+    match = re.fullmatch(r"Point\(\s*(-?\d+(?:\.\d+)?)\s+(-?\d+(?:\.\d+)?)\s*\)", value)
+    if not match:
+        return None
+    try:
+        longitude, latitude = map(float, match.groups())
+    except ValueError:
+        return None
+    return (latitude, longitude) if -90 <= latitude <= 90 and -180 <= longitude <= 180 else None
+
+
+def _normalize_city_name(value: str) -> str:
+    normalized = unicodedata.normalize("NFKD", value.casefold())
+    return " ".join(
+        re.sub(r"[^a-z0-9 ]+", " ", normalized.encode("ascii", "ignore").decode()).split()
+    )
+
+
+def _canonical_city(value: str) -> str:
+    normalized = _normalize_city_name(value)
+    aliases = {
+        "fes": "Fes",
+        "fez": "Fes",
+        "tanger": "Tangier",
+        "tangier": "Tangier",
+        "marrakesh": "Marrakech",
+        "beni mellal": "Beni Mellal",
+        "el jadida": "El Jadida",
+    }
+    if normalized in aliases:
+        return aliases[normalized]
+    return next(
+        (city for city in MOROCCO_CITY_CENTERS if _normalize_city_name(city) == normalized),
+        "",
+    )
+
+
+def _city_location(city: str) -> tuple[str, float, float]:
+    return MOROCCO_CITY_CENTERS[city]
 
 
 def _mentions_construction(text: str) -> bool:
@@ -491,6 +753,7 @@ def parse_overpass_companies(payload: dict, *, source_url: str = OVERPASS_URL,
             longitude=longitude,
             distance_km=haversine_km(latitude, longitude),
             source_url=source_url,
+            source="openstreetmap",
         ))
     companies.sort(key=lambda item: (item.distance_km, item.name.casefold()))
     return companies[: min(MAX_CANDIDATES, max(0, limit))]
@@ -503,9 +766,16 @@ def rank_nearest(companies: list[BtpCompany], max_companies: int = DEFAULT_MAX_C
 
 
 def _is_btp_business(tags: dict) -> bool:
-    values = " ".join(str(tags.get(key, "")) for key in ("craft", "office", "industry")).lower()
-    return any(term in values for term in ("construction", "builder", "civil_engineering",
-                                           "civil engineering", "building"))
+    values = " ".join(
+        str(tags.get(key, "")) for key in ("craft", "office", "industry", "construction")
+    ).casefold()
+    name = str(tags.get("name", "")).casefold()
+    terms = (
+        "btp", "construction", "builder", "civil_engineering", "civil engineering",
+        "building", "travaux publics", "public works", "batiment", "bâtiment",
+        "infrastructure",
+    )
+    return any(term in values or term in name for term in terms)
 
 
 def _element_point(element: dict) -> tuple[float, float] | None:
@@ -651,6 +921,8 @@ def run_btp_outreach(
     origin_city: str = "Casablanca",
     max_companies: int = DEFAULT_MAX_COMPANIES,
     discovery: OverpassBtpDiscovery | None = None,
+    wikidata_discovery: WikidataBtpDiscovery | None = None,
+    seed_csv_path: Path | None = None,
     company_search: PublicBtpCompanySearch | None = None,
     researcher: WebsiteResearcher | None = None,
     website_finder: PublicCompanyWebsiteFinder | None = None,
@@ -688,6 +960,18 @@ def run_btp_outreach(
         listed = directory.discover()
     except Exception as exc:
         report.errors.append(f"public Overpass discovery failed: {exc}")
+    try:
+        seeded = load_btp_seed_csv(seed_csv_path)
+    except Exception as exc:
+        seeded = []
+        report.errors.append(f"curated BTP seed CSV could not be read: {exc}")
+    wikidata = wikidata_discovery or WikidataBtpDiscovery()
+    try:
+        wikidata_companies = wikidata.discover()
+        report.errors.extend(getattr(wikidata, "errors", []))
+    except Exception as exc:
+        wikidata_companies = []
+        report.errors.append(f"Wikidata BTP discovery failed: {exc}")
     search = company_search or PublicBtpCompanySearch()
     try:
         searched = search.discover()
@@ -695,15 +979,20 @@ def run_btp_outreach(
         report.search_budget_limited = getattr(search, "search_budget_limited", False)
     except Exception as exc:
         report.errors.append(f"public company web search failed: {exc}")
-    if not listed and not searched:
+    if not listed and not seeded and not wikidata_companies and not searched:
         return report
     report.osm_candidates = len(listed)
+    report.seed_candidates = len(seeded)
+    report.wikidata_candidates = len(wikidata_companies)
     report.web_candidates = len(searched)
-    candidates = rank_nearest(_merge_candidates(listed, searched), MAX_CANDIDATES)
+    candidates = rank_nearest(
+        _merge_candidates(listed, seeded, wikidata_companies, searched),
+        MAX_CANDIDATES,
+    )
     report.candidates = len(candidates)
     targets = []
     for candidate in candidates:
-        discovery_source = (
+        discovery_source = candidate.source or (
             "openstreetmap" if candidate.source_url == OVERPASS_URL else "public_company_search"
         )
         company = mem.store.get_or_create_company(
@@ -891,6 +1180,7 @@ def _company_result(candidate: BtpCompany, status: str) -> dict:
         "city": candidate.city,
         "region": candidate.region,
         "distance_km": round(candidate.distance_km, 1),
+        "source": candidate.source,
         "status": status,
     }
 
@@ -913,5 +1203,6 @@ def _merge_candidates(*groups: list[BtpCompany]) -> list[BtpCompany]:
                     longitude=existing.longitude,
                     distance_km=existing.distance_km,
                     source_url=candidate.source_url,
+                    source=candidate.source or existing.source,
                 )
     return sorted(by_name.values(), key=lambda item: (item.distance_km, item.name.casefold()))
