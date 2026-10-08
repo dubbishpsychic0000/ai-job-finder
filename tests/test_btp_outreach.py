@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
+import json
 from datetime import timedelta
 
 import pytest
@@ -209,6 +211,16 @@ def test_overpass_adapter_passes_public_query_to_injected_fetcher():
     assert "out center;" in calls[0][1]["data"]
 
 
+def test_overpass_rejects_incomplete_timed_out_responses():
+    discovery = OverpassBtpDiscovery(fetch_json=lambda *_args, **_kwargs: {
+        "elements": [],
+        "remark": 'runtime error: Query timed out in "query"',
+    })
+
+    with pytest.raises(RuntimeError, match="incomplete result"):
+        discovery.discover()
+
+
 def test_nearest_first_and_per_run_cap():
     companies = [_company("Furthest", distance=50), _company("Nearest", distance=1),
                  _company("Middle", distance=10)]
@@ -394,6 +406,13 @@ def test_wikidata_btp_parser_filters_unrelated_industries_and_requires_location(
             "coordinates": binding("Point(-7.6 33.57)"),
         },
         {
+            "entity": binding("https://www.wikidata.org/entity/Q4"),
+            "entityLabel": binding("X Chem Maroc"),
+            "industryLabel": binding("construction materials industry"),
+            "website": binding("https://akfix.co.ma"),
+            "coordinates": binding("Point(-6.816667 34.05)"),
+        },
+        {
             "entity": binding("https://www.wikidata.org/entity/Q3"),
             "entityLabel": binding("Unlocated BTP"),
             "industryLabel": binding("construction"),
@@ -402,10 +421,11 @@ def test_wikidata_btp_parser_filters_unrelated_industries_and_requires_location(
 
     companies = WikidataBtpDiscovery._parse({"results": {"bindings": rows}})
 
-    assert len(companies) == 1
-    assert companies[0].name == "Ciments du Maroc"
+    assert [company.name for company in companies] == ["Ciments du Maroc", "X Chem Maroc"]
     assert companies[0].source == "wikidata"
     assert companies[0].latitude == pytest.approx(33.57)
+    assert companies[1].website == ""
+    assert companies[1].city == "Rabat"
 
 
 def test_wikidata_discovery_caches_monthly_results(tmp_path):
@@ -430,6 +450,25 @@ def test_wikidata_discovery_caches_monthly_results(tmp_path):
     assert len(discovery.discover()) == 1
     assert len(discovery.discover()) == 1
     assert len(calls) == 1
+
+
+def test_wikidata_cache_invalidates_when_query_changes(tmp_path):
+    path = tmp_path / "wikidata-cache.json"
+    path.write_text(json.dumps({
+        "fetched_at": utcnow().isoformat(),
+        "query_hash": hashlib.sha256(b"older query").hexdigest(),
+        "companies": [],
+    }), encoding="utf-8")
+    calls = []
+    discovery = WikidataBtpDiscovery(
+        fetch_json=lambda *_args, **_kwargs: (
+            calls.append("fetch") or {"results": {"bindings": []}}
+        ),
+        cache_path=path,
+    )
+
+    assert discovery.discover() == []
+    assert calls == ["fetch"]
 
 
 def test_configured_public_search_uses_tavily_budgeted_keys(monkeypatch, tmp_path):

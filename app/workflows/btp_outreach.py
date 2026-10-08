@@ -96,10 +96,9 @@ class PublicSearchBudgetError(RuntimeError):
 OVERPASS_QUERY = (
     '[out:json][timeout:25][maxsize:5242880];'
     'area["ISO3166-1"="MA"][admin_level=2]->.morocco;('
-    'nwr(area.morocco)["craft"~"construction|builder|civil_engineering|structural_engineering|building",i];'
+    'nwr(area.morocco)["craft"~"construction|builder|civil_engineering|structural_engineering",i];'
     'nwr(area.morocco)["office"="construction"];'
     'nwr(area.morocco)["office"="company"]["industry"~"construction|building|civil engineering|public works|infrastructure",i];'
-    'nwr(area.morocco)["office"="company"]["name"~"BTP|travaux publics|génie civil|construction",i];'
     ');out center;'
 )
 
@@ -199,6 +198,9 @@ class OverpassBtpDiscovery:
 
     def discover(self) -> list[BtpCompany]:
         payload = self.fetch_json(OVERPASS_URL, params={"data": OVERPASS_QUERY})
+        remark = str(payload.get("remark", "")).strip()
+        if remark:
+            raise RuntimeError(f"Overpass returned an incomplete result: {remark[:300]}")
         return parse_overpass_companies(payload, source_url=OVERPASS_URL)
 
     @staticmethod
@@ -241,9 +243,12 @@ class WikidataBtpDiscovery:
       OPTIONAL { ?entity wdt:P856 ?website. }
       OPTIONAL {
         ?entity wdt:P131 ?city.
-        ?city wdt:P625 ?coordinates.
         ?city rdfs:label ?cityLabel.
         FILTER(LANG(?cityLabel) = "en" || LANG(?cityLabel) = "fr")
+      }
+      OPTIONAL {
+        { ?entity wdt:P159 ?place. } UNION { ?entity wdt:P131 ?place. }
+        ?place wdt:P625 ?coordinates.
       }
       SERVICE wikibase:label { bd:serviceParam wikibase:language "fr,en". }
     }
@@ -275,6 +280,9 @@ class WikidataBtpDiscovery:
         if not self.cache_path.exists():
             return None
         raw = json.loads(self.cache_path.read_text(encoding="utf-8"))
+        query_hash = hashlib.sha256(self.QUERY.encode("utf-8")).hexdigest()
+        if raw.get("query_hash") != query_hash:
+            return None
         timestamp = datetime.fromisoformat(raw["fetched_at"])
         companies = [
             BtpCompany(**item) for item in raw.get("companies", [])
@@ -286,6 +294,7 @@ class WikidataBtpDiscovery:
         temporary = self.cache_path.with_suffix(self.cache_path.suffix + ".tmp")
         temporary.write_text(json.dumps({
             "fetched_at": datetime.now(timezone.utc).isoformat(),
+            "query_hash": hashlib.sha256(self.QUERY.encode("utf-8")).hexdigest(),
             "companies": [company.__dict__ for company in companies],
         }, ensure_ascii=False), encoding="utf-8")
         temporary.replace(self.cache_path)
@@ -322,6 +331,8 @@ class WikidataBtpDiscovery:
                 )
             region, _, _ = _city_location(city)
             website = _eligible_website(_binding(row, "website"))
+            if website and not _company_name_matches(name, website, ""):
+                website = ""
             companies[name.casefold()] = BtpCompany(
                 name=name,
                 website=website,
