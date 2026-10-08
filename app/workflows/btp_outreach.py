@@ -53,6 +53,10 @@ MAX_WEBSITE_SEARCH_RESULTS = 8
 MAX_TAVILY_API_CALLS_PER_RUN = BTP_TAVILY_DAILY_RESERVE
 MAX_CITY_SEARCHES_PER_RUN = 2
 CITY_SEARCH_STATE_PATH = ROOT_DIR / "data" / "btp_search_state.json"
+OVERPASS_CACHE_PATH = ROOT_DIR / "data" / "btp_overpass_cache.json"
+OVERPASS_CACHE_TTL = timedelta(days=7)
+BTPOUTREACH_STATE_PATH = ROOT_DIR / "data" / "btp_outreach_state.json"
+BTPOUTREACH_STATE_MAX_BYTES = 5 * 1024 * 1024
 WIKIDATA_CACHE_PATH = ROOT_DIR / "data" / "btp_wikidata_cache.json"
 WIKIDATA_CACHE_TTL = timedelta(days=30)
 WIKIDATA_SPARQL_URL = "https://query.wikidata.org/sparql"
@@ -91,6 +95,104 @@ TERMINAL_TARGET_STATUSES = {
 
 class PublicSearchBudgetError(RuntimeError):
     """Raised when the BTP workflow reaches its bounded public-search budget."""
+
+
+class BtpOutreachState:
+    """Vault-persisted screening ledger; protects progress when Actions resets SQLite."""
+
+    def __init__(self, path: Path):
+        self.path = path
+        self.records: dict[str, dict[str, str]] = {}
+        if not path.exists():
+            return
+        try:
+            if path.stat().st_size > BTPOUTREACH_STATE_MAX_BYTES:
+                raise BtpOutreachSafetyError(
+                    "BTP screening state exceeds the 5 MiB safety limit"
+                )
+            raw = json.loads(path.read_text(encoding="utf-8"))
+            records = raw.get("companies", {})
+            if raw.get("schema_version") != 1 or not isinstance(records, dict):
+                raise ValueError("unsupported BTP screening-state format")
+            for key, record in records.items():
+                if not isinstance(key, str) or not isinstance(record, dict):
+                    raise ValueError("invalid BTP screening-state record")
+                datetime.fromisoformat(record["updated_at"])
+            self.records = records
+        except BtpOutreachSafetyError:
+            raise
+        except (OSError, ValueError, TypeError, KeyError, AttributeError) as exc:
+            raise BtpOutreachSafetyError(
+                "BTP screening state is unreadable; refusing to risk duplicate drafts"
+            ) from exc
+
+    @staticmethod
+    def key(candidate: BtpCompany) -> str:
+        name = _normalize_city_name(candidate.name)
+        city = _canonical_city(candidate.city) or _nearest_city(candidate.latitude, candidate.longitude)
+        identity = f"{name}\x00{city}"
+        return hashlib.sha256(identity.encode("utf-8")).hexdigest()
+
+    def is_suppressed(self, candidate: BtpCompany, *, now: datetime | None = None) -> bool:
+        record = self.records.get(self.key(candidate))
+        if not record:
+            return False
+        status = record.get("status", "")
+        if status == "drafted_for_review":
+            return True
+        ttl = {
+            "no_verified_website": timedelta(days=30),
+            "no_explicit_instructions": timedelta(days=30),
+            "no_official_employer_email": timedelta(days=30),
+            "portal_or_form": timedelta(days=30),
+            "in_progress": timedelta(days=1),
+            "blocked_by_safety_gate": timedelta(days=1),
+            "research_error": timedelta(hours=6),
+        }.get(status)
+        if ttl is None:
+            return False
+        updated = datetime.fromisoformat(record["updated_at"])
+        current = now or datetime.now(timezone.utc)
+        if updated.tzinfo is None:
+            updated = updated.replace(tzinfo=timezone.utc)
+        if current.tzinfo is None:
+            current = current.replace(tzinfo=timezone.utc)
+        return current - updated < ttl
+
+    def is_expired_negative(self, candidate: BtpCompany, *, now: datetime | None = None) -> bool:
+        record = self.records.get(self.key(candidate))
+        if not record or record.get("status") not in TERMINAL_TARGET_STATUSES - {"drafted_for_review"}:
+            return False
+        if self.is_suppressed(candidate, now=now):
+            return False
+        return record.get("status") not in {"drafted_for_review"}
+
+    def mark(self, candidate: BtpCompany, status: str) -> None:
+        self.records[self.key(candidate)] = {
+            "name": candidate.name[:255],
+            "city": _canonical_city(candidate.city)
+                    or _nearest_city(candidate.latitude, candidate.longitude),
+            "source": candidate.source[:64],
+            "status": status[:64],
+            "updated_at": datetime.now(timezone.utc).isoformat(),
+        }
+        self._save()
+
+    def clear(self, candidate: BtpCompany) -> None:
+        self.records.pop(self.key(candidate), None)
+        self._save()
+
+    def _save(self) -> None:
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        temporary = self.path.with_suffix(self.path.suffix + ".tmp")
+        serialized = json.dumps({
+            "schema_version": 1,
+            "companies": self.records,
+        }, ensure_ascii=False)
+        if len(serialized.encode("utf-8")) > BTPOUTREACH_STATE_MAX_BYTES:
+            raise BtpOutreachSafetyError("BTP screening state exceeds the 5 MiB safety limit")
+        temporary.write_text(serialized, encoding="utf-8")
+        temporary.replace(self.path)
 
 
 OVERPASS_QUERY = (
@@ -193,15 +295,66 @@ class BtpOutreachReport:
 class OverpassBtpDiscovery:
     """Fetch only a size-limited, capped public Overpass result."""
 
-    def __init__(self, fetch_json=None):
+    def __init__(self, fetch_json=None, *, cache_path=None):
         self.fetch_json = fetch_json or self._fetch_json
+        self.cache_path = cache_path or (OVERPASS_CACHE_PATH if fetch_json is None else None)
+        self.errors: list[str] = []
 
     def discover(self) -> list[BtpCompany]:
-        payload = self.fetch_json(OVERPASS_URL, params={"data": OVERPASS_QUERY})
-        remark = str(payload.get("remark", "")).strip()
-        if remark:
-            raise RuntimeError(f"Overpass returned an incomplete result: {remark[:300]}")
-        return parse_overpass_companies(payload, source_url=OVERPASS_URL)
+        try:
+            cached = self._load_cache()
+        except (OSError, ValueError, TypeError, KeyError, AttributeError) as exc:
+            self.errors.append(f"Overpass cache is unreadable and will be refreshed: {exc}")
+            cached = None
+        if cached and cached[0] >= datetime.now(timezone.utc) - OVERPASS_CACHE_TTL:
+            return cached[1]
+        try:
+            payload = self.fetch_json(OVERPASS_URL, params={"data": OVERPASS_QUERY})
+            remark = str(payload.get("remark", "")).strip()
+            if remark:
+                raise RuntimeError(f"Overpass returned an incomplete result: {remark[:300]}")
+            companies = parse_overpass_companies(payload, source_url=OVERPASS_URL)
+            if self.cache_path:
+                try:
+                    self._save_cache(companies)
+                except OSError as exc:
+                    self.errors.append(f"Overpass results could not be cached: {exc}")
+            return companies
+        except Exception as exc:
+            if cached:
+                self.errors.append(
+                    f"Overpass refresh failed; using cached public listings: {exc}"
+                )
+                return cached[1]
+            raise
+
+    def _load_cache(self) -> tuple[datetime, list[BtpCompany]] | None:
+        if not self.cache_path or not self.cache_path.exists():
+            return None
+        try:
+            raw = json.loads(self.cache_path.read_text(encoding="utf-8"))
+            if not isinstance(raw, dict) or not isinstance(raw.get("companies"), list):
+                raise ValueError("invalid Overpass cache format")
+            expected_hash = hashlib.sha256(OVERPASS_QUERY.encode("utf-8")).hexdigest()
+            if raw.get("query_hash") != expected_hash:
+                return None
+            companies = [BtpCompany(**item) for item in raw.get("companies", [])]
+            return datetime.fromisoformat(raw["fetched_at"]), companies
+        except (OSError, ValueError, TypeError, KeyError, AttributeError) as exc:
+            self.errors.append(f"Overpass cache is unreadable and will be refreshed: {exc}")
+            return None
+
+    def _save_cache(self, companies: list[BtpCompany]) -> None:
+        if not self.cache_path:
+            return
+        self.cache_path.parent.mkdir(parents=True, exist_ok=True)
+        temporary = self.cache_path.with_suffix(self.cache_path.suffix + ".tmp")
+        temporary.write_text(json.dumps({
+            "fetched_at": datetime.now(timezone.utc).isoformat(),
+            "query_hash": hashlib.sha256(OVERPASS_QUERY.encode("utf-8")).hexdigest(),
+            "companies": [company.__dict__ for company in companies],
+        }, ensure_ascii=False), encoding="utf-8")
+        temporary.replace(self.cache_path)
 
     @staticmethod
     def _fetch_json(url: str, *, params: dict[str, str]):
@@ -261,7 +414,11 @@ class WikidataBtpDiscovery:
         self.errors: list[str] = []
 
     def discover(self) -> list[BtpCompany]:
-        cached = self._load_cache()
+        try:
+            cached = self._load_cache()
+        except (OSError, ValueError, TypeError, KeyError, AttributeError) as exc:
+            self.errors.append(f"Wikidata cache is unreadable and will be refreshed: {exc}")
+            cached = None
         if cached and cached[0] >= datetime.now(timezone.utc) - WIKIDATA_CACHE_TTL:
             return cached[1]
         try:
@@ -270,7 +427,10 @@ class WikidataBtpDiscovery:
                 "format": "json",
             })
             companies = self._parse(payload)
-            self._save_cache(companies)
+            try:
+                self._save_cache(companies)
+            except OSError as exc:
+                self.errors.append(f"Wikidata results could not be cached: {exc}")
             return companies
         except Exception as exc:
             self.errors.append(f"Wikidata BTP discovery failed: {exc}")
@@ -280,6 +440,8 @@ class WikidataBtpDiscovery:
         if not self.cache_path.exists():
             return None
         raw = json.loads(self.cache_path.read_text(encoding="utf-8"))
+        if not isinstance(raw, dict) or not isinstance(raw.get("companies"), list):
+            raise ValueError("invalid Wikidata cache format")
         query_hash = hashlib.sha256(self.QUERY.encode("utf-8")).hexdigest()
         if raw.get("query_hash") != query_hash:
             return None
@@ -665,6 +827,16 @@ def _canonical_city(value: str) -> str:
     )
 
 
+def _nearest_city(latitude: float, longitude: float) -> str:
+    return min(
+        MOROCCO_CITY_CENTERS,
+        key=lambda city: haversine_km(
+            *MOROCCO_CITY_CENTERS[city][1:],
+            origin=(latitude, longitude),
+        ),
+    )
+
+
 def _city_location(city: str) -> tuple[str, float, float]:
     return MOROCCO_CITY_CENTERS[city]
 
@@ -937,6 +1109,7 @@ def run_btp_outreach(
     company_search: PublicBtpCompanySearch | None = None,
     researcher: WebsiteResearcher | None = None,
     website_finder: PublicCompanyWebsiteFinder | None = None,
+    screening_state_path: Path | None = BTPOUTREACH_STATE_PATH,
 ) -> BtpOutreachReport:
     """Research nearest public BTP companies and prepare only eligible Gmail drafts."""
     if origin_city != "Casablanca":
@@ -964,12 +1137,17 @@ def run_btp_outreach(
         report.daily_limit_reached = True
         return report
     cap = min(requested_cap, remaining_budget)
+    screening_state = (
+        BtpOutreachState(screening_state_path) if screening_state_path else None
+    )
     directory = discovery or OverpassBtpDiscovery()
     listed: list[BtpCompany] = []
     searched: list[BtpCompany] = []
     try:
         listed = directory.discover()
+        report.errors.extend(getattr(directory, "errors", []))
     except Exception as exc:
+        report.errors.extend(getattr(directory, "errors", []))
         report.errors.append(f"public Overpass discovery failed: {exc}")
     try:
         seeded = load_btp_seed_csv(seed_csv_path)
@@ -1003,6 +1181,9 @@ def run_btp_outreach(
     report.candidates = len(candidates)
     targets = []
     for candidate in candidates:
+        if screening_state and screening_state.is_suppressed(candidate):
+            report.existing += 1
+            continue
         discovery_source = candidate.source or (
             "openstreetmap" if candidate.source_url == OVERPASS_URL else "public_company_search"
         )
@@ -1039,8 +1220,13 @@ def run_btp_outreach(
             canonical_key=f"btp-outreach:{company.id}",
         )
         if target.status in TERMINAL_TARGET_STATUSES:
-            report.existing += 1
-            continue
+            if screening_state and screening_state.is_expired_negative(candidate):
+                target.status = "discovered"
+            else:
+                if screening_state:
+                    screening_state.mark(candidate, target.status)
+                report.existing += 1
+                continue
         existing_outreach = next(
             (job for job in session.query(Job).filter_by(
                 source="btp_spontaneous", company_id=company.id
@@ -1051,6 +1237,8 @@ def run_btp_outreach(
             session, existing_outreach.id, statuses=("sent", "drafted", "deferred", "dry_run")
         ):
             target.status = "drafted_for_review"
+            if screening_state:
+                screening_state.mark(candidate, "drafted_for_review")
             report.existing += 1
             continue
         targets.append((candidate, company, target, existing_outreach))
@@ -1072,6 +1260,8 @@ def run_btp_outreach(
             search=search.search if isinstance(search, PublicBtpCompanySearch) else None,
         )
     for candidate, company, target, existing_outreach in targets:
+        if screening_state:
+            screening_state.mark(candidate, "in_progress")
         try:
             website = _eligible_website(candidate.website) or finder.find(
                 candidate.name, candidate.location,
@@ -1080,14 +1270,20 @@ def run_btp_outreach(
             if isinstance(exc, PublicSearchBudgetError):
                 report.search_budget_limited = True
                 target.status = "search_budget_deferred"
+                if screening_state:
+                    screening_state.clear(candidate)
                 break
             report.errors.append(f"official website search failed for a listed company: {exc}")
             target.status = "research_error"
+            if screening_state:
+                screening_state.mark(candidate, "research_error")
             report.companies.append(_company_result(candidate, "research_error"))
             continue
         if not website:
             report.no_website += 1
             target.status = "no_verified_website"
+            if screening_state:
+                screening_state.mark(candidate, "no_verified_website")
             report.companies.append(_company_result(candidate, "no_official_website"))
             continue
         company.website = website
@@ -1119,6 +1315,8 @@ def run_btp_outreach(
         except Exception as exc:
             report.errors.append(f"website research failed for a listed company: {exc}")
             target.status = "research_error"
+            if screening_state:
+                screening_state.mark(candidate, "research_error")
             report.companies.append(_company_result(candidate, "research_error"))
             continue
 
@@ -1130,6 +1328,8 @@ def run_btp_outreach(
         if not instructions:
             report.no_spontaneous_instructions += 1
             target.status = "no_explicit_instructions"
+            if screening_state:
+                screening_state.mark(candidate, "no_explicit_instructions")
             report.companies.append(_company_result(candidate, "no_explicit_instructions"))
             continue
         contact = _qualifying_contact(evidence, domain)
@@ -1137,10 +1337,14 @@ def run_btp_outreach(
             if _application_portal(evidence, domain):
                 report.portal_or_form += 1
                 target.status = "portal_or_form"
+                if screening_state:
+                    screening_state.mark(candidate, "portal_or_form")
                 report.companies.append(_company_result(candidate, "portal_or_form"))
             else:
                 report.no_qualifying_email += 1
                 target.status = "no_official_employer_email"
+                if screening_state:
+                    screening_state.mark(candidate, "no_official_employer_email")
                 report.companies.append(_company_result(candidate, "no_official_employer_email"))
             continue
         address, instruction_fact, email_fact = contact
@@ -1157,6 +1361,8 @@ def run_btp_outreach(
         if not verification.verified:
             report.no_qualifying_email += 1
             target.status = "no_official_employer_email"
+            if screening_state:
+                screening_state.mark(candidate, "no_official_employer_email")
             report.companies.append(_company_result(candidate, "no_official_employer_email"))
             continue
         decision = mem.store.get_last_decision(session, job.id)
@@ -1177,10 +1383,14 @@ def run_btp_outreach(
             report.drafts += 1
             status = "drafted_for_review"
             target.status = status
+            if screening_state:
+                screening_state.mark(candidate, status)
         else:
             report.blocked += 1
             status = "blocked_by_safety_gate"
             target.status = "blocked_by_safety_gate"
+            if screening_state:
+                screening_state.mark(candidate, status)
         report.companies.append(_company_result(candidate, status))
     return report
 

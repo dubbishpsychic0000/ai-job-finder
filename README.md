@@ -76,8 +76,14 @@ no address is guessed. The hard cap is 50 companies per run. OpenStreetMap is
 community-maintained and incomplete, not a canonical directory; indexed public
 search and directory listings are also incomplete and not an exhaustive source.
 Candidate acquisition is capped at 1,000 companies per run.
-Already-screened targets are recorded so later batches advance to the next
-nearest unprocessed listings instead of repeating the same first batch.
+Overpass results are cached for seven days and an older cache is used, with an
+explicit warning in the run report, if the service is unavailable or returns an
+incomplete response. Screening progress is persisted in the vault-backed JSON
+ledger because GitHub Actions recreates the SQLite database for each run.
+Negative findings expire after 30 days, transient research failures after six
+hours, and interrupted reservations after one day; a candidate with a Gmail
+draft is never screened for a second draft. This lets later batches advance to
+the next nearest unprocessed listings without losing progress during outages.
 
 Public discovery rotates through at most two cities per run and persists its
 cursor with the vault state. Add a private `candidate/btp_company_seeds.csv`

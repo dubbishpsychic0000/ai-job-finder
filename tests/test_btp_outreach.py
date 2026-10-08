@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
-from datetime import timedelta
+from datetime import datetime, timedelta, timezone
 
 import pytest
 
@@ -21,6 +21,7 @@ from app.workflows.btp_outreach import (
     MOROCCO_CITY_CENTERS,
     BtpCompany,
     BtpOutreachSafetyError,
+    BtpOutreachState,
     OverpassBtpDiscovery,
     PublicBtpCompanySearch,
     PublicCompanyWebsiteFinder,
@@ -146,6 +147,7 @@ def _run(db, config, settings, profile, companies, researcher, **kwargs):
         company_search=kwargs.pop("company_search", _EmptyCompanySearch()),
         researcher=researcher,
         website_finder=kwargs.pop("website_finder", _NoWebsiteFinder()),
+        screening_state_path=kwargs.pop("screening_state_path", None),
         **kwargs,
     )
 
@@ -219,6 +221,102 @@ def test_overpass_rejects_incomplete_timed_out_responses():
 
     with pytest.raises(RuntimeError, match="incomplete result"):
         discovery.discover()
+
+
+def test_overpass_uses_query_versioned_stale_cache_on_refresh_failure(tmp_path):
+    cache_path = tmp_path / "overpass.json"
+    fresh_discovery = OverpassBtpDiscovery(
+        fetch_json=lambda *_args, **_kwargs: {
+            "elements": [_osm_element("Cached Build", 33.6, -7.5)],
+        },
+        cache_path=cache_path,
+    )
+    assert fresh_discovery.discover()[0].name == "Cached Build"
+    cached = json.loads(cache_path.read_text(encoding="utf-8"))
+    cached["fetched_at"] = (
+        datetime.now(timezone.utc) - timedelta(days=8)
+    ).isoformat()
+    cache_path.write_text(json.dumps(cached), encoding="utf-8")
+
+    stale_discovery = OverpassBtpDiscovery(
+        fetch_json=lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            OSError("Overpass is unreachable")
+        ),
+        cache_path=cache_path,
+    )
+    assert [company.name for company in stale_discovery.discover()] == ["Cached Build"]
+    assert any("using cached public listings" in error for error in stale_discovery.errors)
+
+
+def test_wikidata_corrupt_cache_is_reported_and_refreshed(tmp_path):
+    cache_path = tmp_path / "wikidata.json"
+    cache_path.write_text("[]", encoding="utf-8")
+    discovery = WikidataBtpDiscovery(
+        fetch_json=lambda *_args, **_kwargs: {"results": {"bindings": []}},
+        cache_path=cache_path,
+    )
+
+    assert discovery.discover() == []
+    assert any("cache is unreadable" in error for error in discovery.errors)
+    assert json.loads(cache_path.read_text(encoding="utf-8"))["companies"] == []
+
+
+def test_btp_screening_state_retries_expired_negatives_but_never_redrafts(tmp_path):
+    state = BtpOutreachState(tmp_path / "screening.json")
+    candidate = _company()
+    state.mark(candidate, "no_verified_website")
+    assert state.is_suppressed(candidate)
+    expired = datetime.now(timezone.utc) + timedelta(days=31)
+    assert not state.is_suppressed(candidate, now=expired)
+    assert state.is_expired_negative(candidate, now=expired)
+
+    state.mark(candidate, "drafted_for_review")
+    assert state.is_suppressed(candidate, now=expired)
+    assert not state.is_expired_negative(candidate, now=expired)
+    assert json.loads((tmp_path / "screening.json").read_text(encoding="utf-8"))[
+        "schema_version"
+    ] == 1
+
+
+def test_btp_screening_state_rejects_corrupt_ledger(tmp_path):
+    path = tmp_path / "screening.json"
+    path.write_text("{broken", encoding="utf-8")
+    with pytest.raises(BtpOutreachSafetyError, match="unreadable"):
+        BtpOutreachState(path)
+
+
+def test_btp_run_persists_screening_and_retries_after_negative_ttl(
+    db, config, settings, profile, tmp_path
+):
+    settings = settings.model_copy(update={
+        "email_mode": "draft", "enable_email": True, "email_provider": "gmail",
+    })
+    candidate = _company("No Website", website="")
+    state_path = tmp_path / "screening.json"
+    first = _run(
+        db, config, settings, profile, [candidate], _Researcher({}),
+        screening_state_path=state_path,
+    )
+    second = _run(
+        db, config, settings, profile, [candidate], _Researcher({}),
+        screening_state_path=state_path,
+    )
+    assert first.no_website == 1
+    assert second.existing == 1
+    assert second.processed == 0
+
+    state = json.loads(state_path.read_text(encoding="utf-8"))
+    record = next(iter(state["companies"].values()))
+    record["updated_at"] = (
+        datetime.now(timezone.utc) - timedelta(days=31)
+    ).isoformat()
+    state_path.write_text(json.dumps(state), encoding="utf-8")
+    retried = _run(
+        db, config, settings, profile, [candidate], _Researcher({}),
+        screening_state_path=state_path,
+    )
+    assert retried.no_website == 1
+    assert retried.processed == 1
 
 
 def test_nearest_first_and_per_run_cap():
