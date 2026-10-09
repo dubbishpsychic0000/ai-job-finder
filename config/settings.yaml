@@ -91,22 +91,30 @@ discovery:
         - public works
         - infrastructure
       sparql: |
-        SELECT DISTINCT ?entity ?name ?industryLabel ?website ?cityLabel WHERE {
+        SELECT ?entity
+          (SAMPLE(?nameValue) AS ?name)
+          (SAMPLE(?industryValue) AS ?industryLabel)
+          (SAMPLE(?websiteValue) AS ?website)
+          (SAMPLE(?cityValue) AS ?cityLabel)
+        WHERE {
           ?entity wdt:P17 wd:Q1028;
                   wdt:P452 ?industry;
-                  rdfs:label ?name.
-          ?industry rdfs:label ?industryLabel.
-          FILTER(LANG(?name) IN ("en", "fr"))
-          FILTER(LANG(?industryLabel) IN ("en", "fr"))
-          FILTER(REGEX(LCASE(STR(?industryLabel)),
+                  rdfs:label ?nameValue.
+          ?industry rdfs:label ?industryValue.
+          FILTER(LANG(?nameValue) IN ("en", "fr"))
+          FILTER(LANG(?industryValue) IN ("en", "fr"))
+          FILTER(REGEX(LCASE(STR(?industryValue)),
             "construction|building|civil engineering|public works|infrastructure|travaux publics|génie civil|bâtiment"))
-          OPTIONAL { ?entity wdt:P856 ?website. }
+          FILTER(!REGEX(LCASE(STR(?industryValue)),
+            "automobil|automotive|motor vehicle|car manufacturer|vehicle manufacturing"))
+          OPTIONAL { ?entity wdt:P856 ?websiteValue. }
           OPTIONAL {
             ?entity wdt:P131 ?city.
-            ?city rdfs:label ?cityLabel.
-            FILTER(LANG(?cityLabel) IN ("en", "fr"))
+            ?city rdfs:label ?cityValue.
+            FILTER(LANG(?cityValue) IN ("en", "fr"))
           }
         }
+        GROUP BY ?entity
         LIMIT 100
   company_universe_max_candidates: 100
   company_universe_min_relevance: 0

@@ -1211,6 +1211,11 @@ def _research_is_fresh(company: Company, evidence_rows: list[Evidence]) -> bool:
 
 def _mentions_construction(text: str) -> bool:
     value = text.casefold()
+    if any(term in value for term in (
+        "automobile", "automotive", "motor vehicle", "car manufacturer",
+        "vehicle manufacturing", "construction automobile",
+    )):
+        return False
     direct_terms = (
         "btp", "construction", "builder", "civil_engineering",
         "structural_engineering", "public works", "construction office",
@@ -2056,82 +2061,104 @@ def _company_result(
 
 def _merge_candidates(*groups: list[BtpCompany]) -> list[BtpCompany]:
     by_identity: dict[str, BtpCompany] = {}
-    for group in groups:
-        for candidate in group:
-            domain = (
-                candidate.official_domain.lower().removeprefix("www.").rstrip(".")
-                or host_domain(_eligible_website(candidate.website))
-            )
-            name = " ".join(candidate.name.casefold().split())
-            key = f"domain:{domain}" if domain else f"name:{name}"
+    candidates = [candidate for group in groups for candidate in group]
+    candidates.sort(key=lambda item: (
+        not bool(
+            item.official_domain
+            or _eligible_website(item.website)
+        ),
+        item.distance_km,
+        item.name.casefold(),
+    ))
+    for candidate in candidates:
+        domain = (
+            candidate.official_domain.lower().removeprefix("www.").rstrip(".")
+            or host_domain(_eligible_website(candidate.website))
+        )
+        name = " ".join(candidate.name.casefold().split())
+        key = f"domain:{domain}" if domain else f"name:{name}"
+        if not domain:
+            matching_domain_keys = [
+                existing_key for existing_key, existing_candidate in by_identity.items()
+                if existing_key.startswith("domain:")
+                and " ".join(existing_candidate.name.casefold().split()) == name
+            ]
+            if len(matching_domain_keys) == 1:
+                key = matching_domain_keys[0]
             existing = by_identity.get(key)
-            if existing is None:
-                by_identity[key] = candidate
-            else:
-                website = _eligible_website(existing.website) or _eligible_website(
-                    candidate.website
-                )
-                readiness_order = {
-                    "OUTREACH_ELIGIBLE": 0,
-                    "CONTACT_FOUND": 1,
-                    "RECRUITMENT_CHANNEL_FOUND": 2,
-                    "WEBSITE_VERIFIED": 3,
-                    "WEBSITE_KNOWN": 4,
-                    "DISCOVERED": 5,
-                    "RESEARCH_DUE": 6,
-                }
-                source_priority = {
-                    "company_careers_direct": 0,
-                    "employer_discovery": 1,
-                    "osm": 2,
-                    "wikidata": 2,
-                    "curated_seed_csv": 2,
-                    "openstreetmap": 3,
-                    "company_pool": 4,
-                    "public_company_search": 5,
-                }
-                existing_readiness = readiness_order.get(existing.readiness, 6)
-                candidate_readiness = readiness_order.get(candidate.readiness, 6)
-                selected = existing if (
-                    existing_readiness,
-                    not bool(_eligible_website(existing.website)),
-                    source_priority.get(existing.source, 10),
-                ) <= (
-                    candidate_readiness,
-                    not bool(_eligible_website(candidate.website)),
-                    source_priority.get(candidate.source, 10),
-                ) else candidate
-                other = candidate if selected is existing else existing
-                provenance = min(
-                    (existing, candidate),
-                    key=lambda item: source_priority.get(item.source, 10),
-                )
-                location = selected.city or other.city
-                region = selected.region or other.region
-                latitude = selected.latitude or other.latitude
-                longitude = selected.longitude or other.longitude
-                distance = min(existing.distance_km, candidate.distance_km)
-                by_identity[key] = BtpCompany(
-                    name=selected.name,
-                    website=website,
-                    city=location,
-                    region=region,
-                    latitude=latitude,
-                    longitude=longitude,
-                    distance_km=distance,
-                    source_url=provenance.source_url or selected.source_url or other.source_url,
-                    source=provenance.source or selected.source or other.source,
-                    company_id=selected.company_id or other.company_id,
-                    readiness=selected.readiness,
-                    source_location=selected.source_location or other.source_location,
-                    official_domain=domain,
-                    industry=selected.industry or other.industry,
-                    discovery_reason=selected.discovery_reason or other.discovery_reason,
-                    relevance_score=max(existing.relevance_score, candidate.relevance_score),
-                    country=selected.country or other.country,
-                    careers_url=selected.careers_url or other.careers_url,
-                    recruitment_url=selected.recruitment_url or other.recruitment_url,
-                )
+        else:
+            existing = by_identity.get(key)
+        if existing is None:
+            by_identity[key] = candidate
+        else:
+            website = _eligible_website(existing.website) or _eligible_website(
+                candidate.website
+            )
+            readiness_order = {
+                "OUTREACH_ELIGIBLE": 0,
+                "CONTACT_FOUND": 1,
+                "RECRUITMENT_CHANNEL_FOUND": 2,
+                "WEBSITE_VERIFIED": 3,
+                "WEBSITE_KNOWN": 4,
+                "DISCOVERED": 5,
+                "RESEARCH_DUE": 6,
+            }
+            source_priority = {
+                "company_careers_direct": 0,
+                "employer_discovery": 1,
+                "osm": 2,
+                "wikidata": 2,
+                "curated_seed_csv": 2,
+                "openstreetmap": 3,
+                "company_pool": 4,
+                "public_company_search": 5,
+            }
+            existing_readiness = readiness_order.get(existing.readiness, 6)
+            candidate_readiness = readiness_order.get(candidate.readiness, 6)
+            selected = existing if (
+                existing_readiness,
+                not bool(_eligible_website(existing.website)),
+                source_priority.get(existing.source, 10),
+            ) <= (
+                candidate_readiness,
+                not bool(_eligible_website(candidate.website)),
+                source_priority.get(candidate.source, 10),
+            ) else candidate
+            other = candidate if selected is existing else existing
+            provenance = min(
+                (existing, candidate),
+                key=lambda item: source_priority.get(item.source, 10),
+            )
+            location = selected.city or other.city
+            region = selected.region or other.region
+            latitude = selected.latitude or other.latitude
+            longitude = selected.longitude or other.longitude
+            distance = min(existing.distance_km, candidate.distance_km)
+            resolved_domain = (
+                domain or existing.official_domain or candidate.official_domain
+                or host_domain(website)
+            )
+            by_identity[key] = BtpCompany(
+                name=selected.name,
+                website=website,
+                city=location,
+                region=region,
+                latitude=latitude,
+                longitude=longitude,
+                distance_km=distance,
+                source_url=provenance.source_url or selected.source_url or other.source_url,
+                source=provenance.source or selected.source or other.source,
+                company_id=selected.company_id or other.company_id,
+                readiness=selected.readiness,
+                source_location=selected.source_location or other.source_location,
+                official_domain=resolved_domain,
+                industry=selected.industry or other.industry,
+                discovery_reason=selected.discovery_reason or other.discovery_reason,
+                relevance_score=max(existing.relevance_score, candidate.relevance_score),
+                country=selected.country or other.country,
+                careers_url=selected.careers_url or other.careers_url,
+                recruitment_url=selected.recruitment_url or other.recruitment_url,
+            )
     return sorted(
         by_identity.values(),
         key=lambda item: (

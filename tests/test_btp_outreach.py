@@ -26,6 +26,7 @@ from app.workflows.btp_outreach import (
     PublicBtpCompanySearch,
     PublicCompanyWebsiteFinder,
     WikidataBtpDiscovery,
+    _merge_candidates,
     extract_spontaneous_instruction,
     haversine_km,
     load_btp_seed_csv,
@@ -177,6 +178,33 @@ def test_overpass_parser_filters_and_extracts_only_city_region_and_coordinates()
     assert parsed[2].distance_km == pytest.approx(
         haversine_km(34.0, -6.8)
     )
+
+
+def test_candidate_merge_uses_domain_then_unique_name_fallback():
+    known_domain = _company("Atlas Travaux", website="https://atlas.ma", distance=10)
+    known_domain.official_domain = "atlas.ma"
+    known_domain.source = "wikidata"
+    no_website = _company("Atlas Travaux", website="", distance=5)
+    no_website.source = "openstreetmap"
+
+    merged = _merge_candidates([no_website], [known_domain])
+
+    assert len(merged) == 1
+    assert merged[0].website == "https://atlas.ma/"
+    assert merged[0].official_domain == "atlas.ma"
+    assert merged[0].source == "wikidata"
+
+
+def test_candidate_merge_does_not_guess_between_conflicting_domains():
+    candidates = [
+        _company("Atlas", website="https://atlas-a.ma", distance=1),
+        _company("Atlas", website="https://atlas-b.ma", distance=2),
+        _company("Atlas", website="", distance=3),
+    ]
+
+    merged = _merge_candidates(candidates)
+
+    assert len(merged) == 3
 
 
 def test_overpass_parser_handles_way_centers_and_bounds_candidates():

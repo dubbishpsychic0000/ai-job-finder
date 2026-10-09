@@ -12,6 +12,7 @@ from app.discovery.company_universe import (
 )
 from app.discovery.website_researcher import ResearchResult
 from app.models import Company, Discovery
+from app.workflows import btp_outreach
 from app.workflows.btp_outreach import run_btp_outreach
 from app.workflows.company_universe import (
     _interleave_candidates,
@@ -195,6 +196,8 @@ def test_active_morocco_sources_populate_btp_pool_without_web_search(
     wikidata_source = next(source for source in sources if source["kind"] == "wikidata")
     assert "wd:Q1028" in wikidata_source["sparql"]
     assert "LIMIT 100" in wikidata_source["sparql"]
+    assert "GROUP BY ?entity" in wikidata_source["sparql"]
+    assert "automobil" in wikidata_source["sparql"]
 
     def fetch_json(url, *, params):
         if "overpass-api.de" in url:
@@ -247,6 +250,9 @@ def test_active_morocco_sources_populate_btp_pool_without_web_search(
     company_b = db.query(Company).filter_by(name="Company B").one()
     assert not company_b.website
     assert not company_b.official_domain
+    assert not btp_outreach._mentions_construction(
+        "Société marocaine de construction automobile construction automobile"
+    )
 
     class EmptySource:
         def discover(self):
