@@ -198,6 +198,7 @@ class DiscoveryReport:
     source_errors: list[str] = field(default_factory=list)
     employers_discovered: int = 0
     companies_discovered: int = 0
+    company_universe: dict = field(default_factory=dict)
     immigration_facts: int = 0
     opportunity_sources: int = 0
     social_signals: int = 0
@@ -321,6 +322,7 @@ async def run_discovery(session: Session, config: AgentConfig, prefs: Preference
             session, config, researcher=researcher,
         )
         report.companies_discovered = company_report.stored
+        report.company_universe = company_report.as_dict()
         report.source_errors.extend(company_report.errors)
 
     # Immigration & work-pathway discovery (§11, §13) — opt-in, official web sources.

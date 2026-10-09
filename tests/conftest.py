@@ -66,7 +66,10 @@ def db(session_factory):
 
 @pytest.fixture()
 def config():
-    return get_config()
+    config = get_config()
+    # Live open-company sources are exercised explicitly by their own tests.
+    config.discovery["company_universe_discovery"] = False
+    return config
 
 
 @pytest.fixture()

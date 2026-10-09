@@ -55,6 +55,8 @@ def run_pipeline(session: Session | None = None, *, sources_path: Path | None = 
                 "fetched": discovery.opportunities_fetched,
                 "errors": discovery.source_errors,
                 "employers_discovered": discovery.employers_discovered,
+                "companies_discovered": discovery.companies_discovered,
+                "company_universe": discovery.company_universe,
                 "immigration_facts": discovery.immigration_facts,
                 "opportunity_sources": discovery.opportunity_sources,
                 "social_signals": discovery.social_signals,

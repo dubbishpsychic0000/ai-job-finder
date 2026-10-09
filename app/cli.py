@@ -26,7 +26,7 @@ from rich.table import Table
 from app import memory as mem
 from app.agents.immigration_agent import ImmigrationAgent
 from app.agents.llm import get_llm
-from app.config import get_config, get_preferences, get_profile, get_settings
+from app.config import ROOT_DIR, get_config, get_preferences, get_profile, get_settings
 from app.database import init_db, session_scope
 
 console = Console()
@@ -121,20 +121,48 @@ def cmd_btp_outreach(args) -> None:
     if settings.email_provider != "gmail":
         raise SystemExit("BTP outreach requires EMAIL_PROVIDER=gmail; no email-provider interaction occurred")
     init_db()
+    config = get_config()
+    profile = get_profile()
+    company_universe = None
     try:
         with session_scope() as s:
+            discovery_cfg = config.discovery or {}
+            if discovery_cfg.get("company_universe_discovery", False):
+                from app.workflows.company_universe import run_company_universe_discovery
+
+                researcher = None
+                if discovery_cfg.get("website_research", False):
+                    from app.discovery.website_researcher import WebsiteResearcher
+
+                    researcher = WebsiteResearcher(
+                        max_pages=int(discovery_cfg.get("website_research_max_pages", 12)),
+                        per_host_delay=float(
+                            discovery_cfg.get("website_research_delay_seconds", 0.25)
+                        ),
+                        state_path=ROOT_DIR / "data" / "website_research_state.json",
+                        session=s,
+                        refresh_after_days=int(
+                            discovery_cfg.get("website_research_refresh_days", 7)
+                        ),
+                    )
+                company_universe = asyncio.run(run_company_universe_discovery(
+                    s, config, researcher=researcher,
+                ))
             report = run_btp_outreach(
                 s,
-                get_config(),
+                config,
                 settings,
-                get_profile(),
+                profile,
                 origin_city=args.origin_city,
                 max_companies=args.max_companies,
             )
     except BtpOutreachSafetyError as exc:
         console.print(f"[red]{exc}[/red]")
         raise SystemExit(2) from exc
-    _print_json(report.as_run_report())
+    run_report = report.as_run_report()
+    if company_universe is not None:
+        run_report["company_universe"] = company_universe.as_dict()
+    _print_json(run_report)
 
 
 def cmd_analyze(_args) -> None:

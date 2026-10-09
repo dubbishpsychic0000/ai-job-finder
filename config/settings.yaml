@@ -60,10 +60,57 @@ discovery:
   website_research_max_pages: 12
   website_research_delay_seconds: 0.25
   website_research_refresh_days: 7
-  company_universe_discovery: false
-  company_universe_sources: []       # bounded OSM/Wikidata source configurations; see docs
+  company_universe_discovery: true
+  company_universe_sources:
+    - kind: osm
+      overpass_url: "https://overpass-api.de/api/interpreter"
+      country: "Morocco"
+      target_terms:
+        - construction
+        - building
+        - civil engineering
+        - public works
+        - infrastructure
+      query: |
+        [out:json][timeout:25][maxsize:5242880];
+        area["ISO3166-1"="MA"][admin_level=2]->.morocco;
+        (
+          nwr(area.morocco)["name"]["craft"~"construction|builder|civil_engineering|structural_engineering",i];
+          nwr(area.morocco)["name"]["office"~"construction|architect",i];
+          nwr(area.morocco)["name"]["office"="company"]["industry"~"construction|building|civil engineering|public works|infrastructure",i];
+          nwr(area.morocco)["name"]["industry"~"construction|building|civil engineering|public works|infrastructure",i];
+        );
+        out center 100;
+    - kind: wikidata
+      endpoint: "https://query.wikidata.org/sparql"
+      country: "Morocco"
+      target_terms:
+        - construction
+        - building
+        - civil engineering
+        - public works
+        - infrastructure
+      sparql: |
+        SELECT DISTINCT ?entity ?name ?industryLabel ?website ?cityLabel WHERE {
+          ?entity wdt:P17 wd:Q1028;
+                  wdt:P452 ?industry;
+                  rdfs:label ?name.
+          ?industry rdfs:label ?industryLabel.
+          FILTER(LANG(?name) IN ("en", "fr"))
+          FILTER(LANG(?industryLabel) IN ("en", "fr"))
+          FILTER(REGEX(LCASE(STR(?industryLabel)),
+            "construction|building|civil engineering|public works|infrastructure|travaux publics|génie civil|bâtiment"))
+          OPTIONAL { ?entity wdt:P856 ?website. }
+          OPTIONAL {
+            ?entity wdt:P131 ?city.
+            ?city rdfs:label ?cityLabel.
+            FILTER(LANG(?cityLabel) IN ("en", "fr"))
+          }
+        }
+        LIMIT 100
   company_universe_max_candidates: 100
   company_universe_min_relevance: 0
+  company_universe_research_limit: 5
   social_sources_path: "config/social_sources.yaml"
   country_ranking_weights:          # §12 — relative importance of each scoring dimension
     language: 25

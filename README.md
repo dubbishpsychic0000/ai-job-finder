@@ -115,6 +115,20 @@ one available credential. A provider quota-exhaustion response blocks further
 calls for that key until the daily reset. The run report marks when a search
 budget defers work.
 
+The scheduled discovery configuration also enables a vacancy-independent
+Morocco company universe: a capped Overpass query and a bounded Wikidata SPARQL
+query each return at most 100 construction-related entities. Official HTTPS
+websites, country, coarse location, industry, and source/query provenance are
+stored in the company and discovery records; absent websites remain absent and
+are not inferred from company names. Responses are cached for 30 days, and
+robots-aware official-site research is capped at five company websites per
+company-universe run. BTP outreach
+consumes this shared pool first, ranks companies with known websites ahead of
+search-required candidates, and postpones broad indexed company search while
+unsuppressed known-site companies remain. The company-universe report separates
+new and already-known companies, website/research readiness, recruitment
+evidence, qualifying contacts, and `outreach_ready_companies`.
+
 The command refuses to run unless `EMAIL_MODE=draft`, `ENABLE_EMAIL=true`, and
 `EMAIL_PROVIDER=gmail`; the existing safety gate, cooldowns, duplicate checks,
 claim allowlist, CV requirement, and daily limits still apply. It never sends
