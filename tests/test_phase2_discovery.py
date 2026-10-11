@@ -85,6 +85,9 @@ def test_company_universe_workflow_accepts_no_vacancy_candidate(db, config):
 def test_company_universe_does_not_promote_directory_or_document_urls():
     assert not _trusted_website("https://www.kerix.ma/annuaire/atlas")
     assert not _trusted_website("https://registre.gov.ma/company/atlas")
+    assert not _trusted_website(
+        "https://www.maroc1000.net/Secteur-d'activite_BTP"
+    )
     assert not _trusted_website("https://docs.google.com/document/d/atlas")
     assert _trusted_website("https://atlas.ma/careers") == "https://atlas.ma/careers"
 

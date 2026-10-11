@@ -15,7 +15,7 @@ import unicodedata
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from urllib.parse import urlparse
+from urllib.parse import unquote, urlparse
 
 import requests
 from bs4 import BeautifulSoup
@@ -729,8 +729,13 @@ class PublicCompanyWebsiteFinder:
     def find(self, company_name: str, location: str = "") -> str:
         query = f'"{company_name}" BTP entreprise Maroc site officiel {location}'.strip()
         for item in self.search(query)[:MAX_WEBSITE_SEARCH_RESULTS]:
-            url = _eligible_website(str(item.get("url", "")))
-            if not url or _is_directory_or_job_site(url):
+            raw_url = str(item.get("url", ""))
+            if _is_directory_or_job_site(
+                raw_url, str(item.get("title", "")), str(item.get("snippet", "")),
+            ):
+                continue
+            url = _eligible_website(raw_url)
+            if not url:
                 continue
             if _company_name_matches(company_name, url, str(item.get("title", ""))):
                 return url
@@ -869,22 +874,26 @@ class PublicBtpCompanySearch:
                 parsed_source = urlparse(source_url)
                 if parsed_source.scheme != "https" or not parsed_source.netloc:
                     continue
-                is_source_page = _is_directory_or_job_site(source_url)
+                title = str(item.get("title", ""))
+                snippet = str(item.get("snippet", ""))
+                is_source_page = _is_directory_or_job_site(
+                    source_url, title, snippet,
+                )
                 url = "" if is_source_page else _eligible_website(source_url)
                 if not is_source_page and not url:
                     continue
                 text = (
-                    f"{item.get('title', '')} {item.get('snippet', '')} "
+                    f"{title} {snippet} "
                     f"{host_domain(source_url)}"
                 )
                 if not _mentions_construction(text):
                     continue
                 if is_source_page:
-                    name = _directory_company_name(str(item.get("title", "")), city)
+                    name = _directory_company_name(title, city)
                     website = ""
                 else:
                     candidate = classify_result(
-                        url, str(item.get("title", "")), str(item.get("snippet", "")),
+                        url, title, snippet,
                         country="Morocco",
                     )
                     if not candidate or candidate.name == "Unknown":
@@ -1254,7 +1263,16 @@ def _mentions_construction(text: str) -> bool:
 
 
 def _directory_company_name(title: str, city: str) -> str:
-    value = re.split(r"\s+(?:\||—|–|-|:)\s+", title, maxsplit=1)[0]
+    segments = re.split(r"\s+(?:\||—|–|-|:)\s+", title)
+    publisher_terms = {
+        "annuaire", "directory", "maroc1000", "kerix", "telecontact",
+        "marocannuaire", "kompass", "charika", "goafricaonline",
+    }
+    segments = [
+        segment for segment in segments
+        if not any(term in _normalize_city_name(segment) for term in publisher_terms)
+    ]
+    value = segments[0] if segments else ""
     value = unicodedata.normalize("NFKD", value).encode("ascii", "ignore").decode()
     city = unicodedata.normalize("NFKD", city).encode("ascii", "ignore").decode()
     stop_words = {
@@ -1263,6 +1281,8 @@ def _directory_company_name(title: str, city: str) -> str:
         "btp", "construction", "constructions", "travaux", "publics", "génie",
         "genie", "civil", "bâtiment", "batiment", "maroc", "morocco",
         "annuaire", "directory", "liste", "des", "les", "de", "du", "la", "le",
+        "maroc1000", "kerix", "telecontact", "marocannuaire", "kompass",
+        "charika", "goafricaonline", "secteur", "activite", "activity",
         *re.sub(r"[^a-z0-9]+", " ", city.casefold()).split(),
     }
     tokens = [
@@ -1272,13 +1292,13 @@ def _directory_company_name(title: str, city: str) -> str:
     return " ".join(token.title() for token in tokens)[:255]
 
 
-def _is_directory_or_job_site(url: str) -> bool:
+def _is_directory_or_job_site(url: str, title: str = "", snippet: str = "") -> bool:
     domain = (host_domain(url) or "").lower()
     if not domain:
         return False
     excluded = (
         "annuaire", "telecontact", "kerix", "charika", "kompass",
-        "marocannuaire", "goafricaonline", "linkedin", "indeed",
+        "marocannuaire", "maroc1000", "goafricaonline", "linkedin", "indeed",
         "facebook", "instagram", "youtube", "scribd", "rocketreach",
         "zoominfo", "apollo", "wikipedia", "gov.ma", "gouv.fr",
         "company-profile", "search", "docs.google.",
@@ -1286,14 +1306,18 @@ def _is_directory_or_job_site(url: str) -> bool:
     if any(term in domain for term in excluded):
         return True
     parsed = urlparse(url)
-    path = (parsed.path or "").lower()
-    return (
-        path.endswith(".pdf")
-        or any(token in path for token in (
-            "/directory/", "/annuaire/", "/profile/", "/profiles/",
-            "/document/", "/documents/", "/company-profile/",
-        ))
-    )
+    path = unquote(parsed.path or "").lower()
+    if path.endswith(".pdf") or any(token in path for token in (
+        "/directory/", "/annuaire/", "/profile/", "/profiles/",
+        "/document/", "/documents/", "/company-profile/", "secteur-d",
+        "/listing", "/liste-entreprises",
+    )):
+        return True
+    text = _normalize_city_name(f"{title} {snippet}")
+    return any(term in text for term in (
+        "annuaire", "directory", "liste des entreprises", "company directory",
+        "companies list", "repertoire des entreprises", "secteur d activite",
+    ))
 
 
 def _company_name_matches(company_name: str, url: str, text: str) -> bool:
@@ -1444,7 +1468,7 @@ def _eligible_website(url: str) -> str:
         "youtube.com", "google.com", "maps.google.com", "wikipedia.org",
         "annuaire.com", "telecontact.ma", "kerix.net", "kerix.ma",
         "kompass.com", "marocannuaire.org", "marocannuaire.com",
-        "goafricaonline.com", "scribd.com", "rocketreach.co",
+        "maroc1000.net", "goafricaonline.com", "scribd.com", "rocketreach.co",
         "zoominfo.com", "apollo.io", "crunchbase.com",
         "docs.google.com", "drive.google.com",
         *free_mail_domains,
@@ -1455,9 +1479,11 @@ def _eligible_website(url: str) -> str:
     if domain.endswith((".gov.ma", ".gouv.fr")) or domain == "gov":
         return ""
     path = (parsed.path or "").lower()
+    path = unquote(path)
     if path.endswith(".pdf") or any(token in path for token in (
         "/document/", "/documents/", "/directory/", "/annuaire/",
         "/profile/", "/profiles/", "/company-profile/",
+        "secteur-d", "/listing", "/liste-entreprises",
     )):
         return ""
     return normalized

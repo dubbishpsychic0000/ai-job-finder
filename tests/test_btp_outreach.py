@@ -448,6 +448,9 @@ def test_btp_website_gate_rejects_profiles_documents_and_registries_but_keeps_em
     assert not btp_outreach._eligible_website(
         "https://files.atlas.ma/reports/company.pdf"
     )
+    assert not btp_outreach._eligible_website(
+        "https://www.maroc1000.net/Secteur-d'activit%C3%A9_BATIMENT"
+    )
     assert btp_outreach._eligible_website(
         "https://careers.atlas.ma/jobs"
     ) == "https://careers.atlas.ma/jobs"
@@ -499,6 +502,33 @@ def test_public_btp_search_uses_directory_only_as_a_company_name_seed():
     assert results[0].name == "Atlas"
     assert results[0].website == ""
     assert results[0].city == "Casablanca"
+
+
+def test_public_btp_search_extracts_entity_from_maroc1000_but_not_publisher():
+    def search(query):
+        if not query.endswith("Casablanca"):
+            return []
+        return [
+            {
+                "url": "https://www.maroc1000.net/Secteur-d'activit%C3%A9_BATIMENT",
+                "title": "Atlas BTP - Maroc1000",
+                "snippet": "Annuaire d'entreprises du secteur BTP au Maroc",
+            },
+            {
+                "url": "https://www.maroc1000.net/Secteur-d'activit%C3%A9_BATIMENT",
+                "title": "Maroc1000 - Secteur d'activité BTP",
+                "snippet": "Répertoire des entreprises de construction",
+            },
+        ]
+
+    results = PublicBtpCompanySearch(search=search).discover()
+
+    assert len(results) == 1
+    assert results[0].name == "Atlas"
+    assert not results[0].website
+    assert results[0].source_url == (
+        "https://www.maroc1000.net/Secteur-d'activit%C3%A9_BATIMENT"
+    )
 
 
 def test_public_btp_search_rotates_city_batches_without_repeating_nearby_queries(tmp_path):

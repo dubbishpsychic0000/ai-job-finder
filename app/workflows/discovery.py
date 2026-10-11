@@ -48,7 +48,7 @@ JOB_BOARD_DOMAINS = (
 )
 DIRECTORY_DOMAINS = (
     "annuaire.com", "telecontact.ma", "kerix.net", "kerix.ma", "kompass.com",
-    "marocannuaire.org", "marocannuaire.com", "goafricaonline.com",
+    "marocannuaire.org", "marocannuaire.com", "maroc1000.net", "goafricaonline.com",
 )
 
 
@@ -97,9 +97,16 @@ def classify_url_role(url: str, title: str = "", snippet: str = "", *, source_ty
         for token in ("registre", "societe", "company", "annuaire", "directory")
     ):
         return CompanyUrlKind.GOVERNMENT_COMPANY_REGISTRY.value
-    if any(token in text for token in ("annuaire", "directory", "liste des entreprises", "company directory", "companies list")):
+    if any(token in text for token in (
+        "annuaire", "directory", "liste des entreprises", "company directory",
+        "companies list", "répertoire des entreprises", "repertoire des entreprises",
+        "secteur d'activité", "secteur d activite",
+    )):
         return CompanyUrlKind.COMPANY_DIRECTORY.value
-    if any(token in path for token in ("directory", "annuaire", "liste-entreprises", "company-profile", "profile/")):
+    if any(token in path for token in (
+        "directory", "annuaire", "liste-entreprises", "company-profile",
+        "profile/", "listing", "secteur-d",
+    )):
         return CompanyUrlKind.THIRD_PARTY_COMPANY_PROFILE.value
     if (
         "careers" in path or "career" in path or "recruit" in path

@@ -214,6 +214,10 @@ def test_url_roles_keep_directories_registries_profiles_and_documents_out_of_emp
         "https://www.kerix.ma/annuaire/atlas", "Atlas BTP", "Construction company"
     ) == CompanyUrlKind.COMPANY_DIRECTORY
     assert classify_url_role(
+        "https://www.maroc1000.net/Secteur-d'activite_BTP",
+        "Entreprises BTP au Maroc",
+    ) == CompanyUrlKind.COMPANY_DIRECTORY
+    assert classify_url_role(
         "https://registre.gov.ma/company/atlas", "Company registry"
     ) == CompanyUrlKind.GOVERNMENT_COMPANY_REGISTRY
     assert classify_url_role(

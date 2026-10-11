@@ -289,7 +289,7 @@ def _trusted_website(url: str) -> str:
         "annuaire.com", "telecontact.ma", "kerix.net", "kerix.ma", "kompass.com",
         "marocannuaire.org", "marocannuaire.com", "goafricaonline.com", "scribd.com",
         "rocketreach.co", "zoominfo.com", "apollo.io", "wikipedia.org",
-        "crunchbase.com", "docs.google.com", "drive.google.com",
+        "crunchbase.com", "maroc1000.net", "docs.google.com", "drive.google.com",
         "linkedin.com", "indeed.com", "glassdoor.com", "monster.com",
         "ziprecruiter.com", "naukri.com", "bayt.com", "rekrute.com", "emploi.ma",
         "anapec.org", "welcome-to-the-jungle.com", "greenhouse.io", "lever.co",
