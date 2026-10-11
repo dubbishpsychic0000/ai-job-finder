@@ -285,19 +285,26 @@ def _trusted_website(url: str) -> str:
         return ""
     except ValueError:
         pass
-    if (
-        not domain
-        or domain.endswith((".localhost", ".local", ".internal"))
-        or any(domain == blocked or domain.endswith(f".{blocked}") for blocked in (
-            "linkedin.com", "indeed.com", "glassdoor.com", "monster.com",
-            "ziprecruiter.com", "naukri.com", "bayt.com", "rekrute.com", "emploi.ma",
-            "anapec.org", "welcome-to-the-jungle.com", "greenhouse.io", "lever.co",
-            "myworkdayjobs.com", "smartrecruiters.com", "ashbyhq.com", "personio.com",
-            "workable.com", "facebook.com", "instagram.com", "tiktok.com", "youtube.com",
-            "google.com", "wikipedia.org", "annuaire.com", "telecontact.ma", "kerix.net",
-            "kompass.com", "marocannuaire.org", "goafricaonline.com",
-        ))
-    ):
+    directory_hosts = (
+        "annuaire.com", "telecontact.ma", "kerix.net", "kerix.ma", "kompass.com",
+        "marocannuaire.org", "marocannuaire.com", "goafricaonline.com", "scribd.com",
+        "rocketreach.co", "zoominfo.com", "apollo.io", "wikipedia.org",
+        "crunchbase.com", "docs.google.com", "drive.google.com",
+        "linkedin.com", "indeed.com", "glassdoor.com", "monster.com",
+        "ziprecruiter.com", "naukri.com", "bayt.com", "rekrute.com", "emploi.ma",
+        "anapec.org", "welcome-to-the-jungle.com", "greenhouse.io", "lever.co",
+        "myworkdayjobs.com", "smartrecruiters.com", "ashbyhq.com", "personio.com",
+        "workable.com", "facebook.com", "instagram.com", "tiktok.com", "youtube.com",
+        "google.com",
+    )
+    if not domain or domain.endswith((".localhost", ".local", ".internal")):
+        return ""
+    if any(domain == blocked or domain.endswith(f".{blocked}") for blocked in directory_hosts):
+        return ""
+    if domain.endswith((".gov.ma", ".gouv.fr")) or domain == "gov":
+        return ""
+    path = (parsed.path or "").lower()
+    if any(token in path for token in ("/document/", "/documents/", "pdf", "/profile/", "/profiles/", "/directory/", "/annuaire/")):
         return ""
     return normalized
 

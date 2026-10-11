@@ -865,13 +865,21 @@ class PublicBtpCompanySearch:
                 (cursor + offset + 1) % len(all_cities),
             )
             for item in results:
-                url = _eligible_website(str(item.get("url", "")))
-                if not url:
+                source_url = normalize_url(str(item.get("url", "")))
+                parsed_source = urlparse(source_url)
+                if parsed_source.scheme != "https" or not parsed_source.netloc:
                     continue
-                text = f"{item.get('title', '')} {item.get('snippet', '')} {host_domain(url)}"
+                is_source_page = _is_directory_or_job_site(source_url)
+                url = "" if is_source_page else _eligible_website(source_url)
+                if not is_source_page and not url:
+                    continue
+                text = (
+                    f"{item.get('title', '')} {item.get('snippet', '')} "
+                    f"{host_domain(source_url)}"
+                )
                 if not _mentions_construction(text):
                     continue
-                if _is_directory_or_job_site(url):
+                if is_source_page:
                     name = _directory_company_name(str(item.get("title", "")), city)
                     website = ""
                 else:
@@ -894,7 +902,7 @@ class PublicBtpCompanySearch:
                     latitude=latitude,
                     longitude=longitude,
                     distance_km=haversine_km(latitude, longitude),
-                    source_url=url,
+                    source_url=source_url,
                     source="public_company_search",
                 ))
         return sorted(found.values(), key=lambda item: (item.distance_km, item.name.casefold()))
@@ -1265,13 +1273,27 @@ def _directory_company_name(title: str, city: str) -> str:
 
 
 def _is_directory_or_job_site(url: str) -> bool:
-    domain = host_domain(url)
+    domain = (host_domain(url) or "").lower()
+    if not domain:
+        return False
     excluded = (
         "annuaire", "telecontact", "kerix", "charika", "kompass",
         "marocannuaire", "goafricaonline", "linkedin", "indeed",
-        "facebook", "instagram", "youtube",
+        "facebook", "instagram", "youtube", "scribd", "rocketreach",
+        "zoominfo", "apollo", "wikipedia", "gov.ma", "gouv.fr",
+        "company-profile", "search", "docs.google.",
     )
-    return any(term in domain for term in excluded)
+    if any(term in domain for term in excluded):
+        return True
+    parsed = urlparse(url)
+    path = (parsed.path or "").lower()
+    return (
+        path.endswith(".pdf")
+        or any(token in path for token in (
+            "/directory/", "/annuaire/", "/profile/", "/profiles/",
+            "/document/", "/documents/", "/company-profile/",
+        ))
+    )
 
 
 def _company_name_matches(company_name: str, url: str, text: str) -> bool:
@@ -1420,10 +1442,23 @@ def _eligible_website(url: str) -> str:
     excluded = {
         "facebook.com", "instagram.com", "linkedin.com", "tiktok.com",
         "youtube.com", "google.com", "maps.google.com", "wikipedia.org",
+        "annuaire.com", "telecontact.ma", "kerix.net", "kerix.ma",
+        "kompass.com", "marocannuaire.org", "marocannuaire.com",
+        "goafricaonline.com", "scribd.com", "rocketreach.co",
+        "zoominfo.com", "apollo.io", "crunchbase.com",
+        "docs.google.com", "drive.google.com",
         *free_mail_domains,
     }
     if (not domain or domain.endswith((".localhost", ".local", ".internal"))
             or any(domain == blocked or domain.endswith("." + blocked) for blocked in excluded)):
+        return ""
+    if domain.endswith((".gov.ma", ".gouv.fr")) or domain == "gov":
+        return ""
+    path = (parsed.path or "").lower()
+    if path.endswith(".pdf") or any(token in path for token in (
+        "/document/", "/documents/", "/directory/", "/annuaire/",
+        "/profile/", "/profiles/", "/company-profile/",
+    )):
         return ""
     return normalized
 

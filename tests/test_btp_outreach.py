@@ -438,6 +438,28 @@ def test_public_website_search_requires_company_name_and_skips_directories():
     assert unrelated.find("Build SARL", "Casablanca") == ""
 
 
+def test_btp_website_gate_rejects_profiles_documents_and_registries_but_keeps_employer_careers():
+    assert not btp_outreach._eligible_website(
+        "https://www.kerix.ma/annuaire/atlas"
+    )
+    assert not btp_outreach._eligible_website(
+        "https://registre.gov.ma/company/atlas"
+    )
+    assert not btp_outreach._eligible_website(
+        "https://files.atlas.ma/reports/company.pdf"
+    )
+    assert btp_outreach._eligible_website(
+        "https://careers.atlas.ma/jobs"
+    ) == "https://careers.atlas.ma/jobs"
+
+    finder = PublicCompanyWebsiteFinder(search=lambda query: [
+        {"url": "https://registre.gov.ma/company/atlas", "title": "Atlas Construction"},
+        {"url": "https://docs.google.com/document/d/atlas", "title": "Atlas company"},
+        {"url": "https://careers.atlas.ma/jobs", "title": "Atlas Careers"},
+    ])
+    assert finder.find("Atlas", "Casablanca") == "https://careers.atlas.ma/jobs"
+
+
 def test_public_btp_search_queries_cities_from_nearest_outward():
     def search(query):
         if query.endswith("Casablanca"):

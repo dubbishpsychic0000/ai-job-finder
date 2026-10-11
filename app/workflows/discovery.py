@@ -47,23 +47,72 @@ JOB_BOARD_DOMAINS = (
     "emploi.ma", "anapec.org", "welcome-to-the-jungle.com",
 )
 DIRECTORY_DOMAINS = (
-    "annuaire.com", "telecontact.ma", "kerix.net", "kompass.com",
-    "marocannuaire.org", "goafricaonline.com",
+    "annuaire.com", "telecontact.ma", "kerix.net", "kerix.ma", "kompass.com",
+    "marocannuaire.org", "marocannuaire.com", "goafricaonline.com",
 )
 
 
 class CompanyUrlKind(StrEnum):
     EMPLOYER_OFFICIAL_WEBSITE = "EMPLOYER_OFFICIAL_WEBSITE"
+    EMPLOYER_WEBSITE = "EMPLOYER_WEBSITE"
     EMPLOYER_CAREERS_PAGE = "EMPLOYER_CAREERS_PAGE"
     EMPLOYER_RECRUITMENT_PAGE = "EMPLOYER_RECRUITMENT_PAGE"
+    COMPANY_DIRECTORY = "COMPANY_DIRECTORY"
+    GOVERNMENT_COMPANY_REGISTRY = "GOVERNMENT_COMPANY_REGISTRY"
+    THIRD_PARTY_COMPANY_PROFILE = "THIRD_PARTY_COMPANY_PROFILE"
     ATS = "ATS"
     JOB_BOARD = "JOB_BOARD"
+    DOCUMENT_HOST = "DOCUMENT_HOST"
     DIRECTORY = "DIRECTORY"
     UNKNOWN = "UNKNOWN"
 
 
+def classify_url_role(url: str, title: str = "", snippet: str = "", *, source_type: str = "") -> str:
+    """Classify a discovered URL without promoting third-party discovery pages as employer-owned sites."""
+    candidate = normalize_url(str(url or ""))
+    if not candidate:
+        return CompanyUrlKind.UNKNOWN.value
+    domain = (host_domain(candidate) or "").lower()
+    path = urlparse(candidate).path.lower()
+    text = f"{title or ''} {snippet or ''}".lower()
+    if not domain:
+        return CompanyUrlKind.UNKNOWN.value
+    if any(domain == item or domain.endswith(f".{item}") for item in ATS_DOMAINS):
+        return CompanyUrlKind.ATS.value
+    if any(domain == item or domain.endswith(f".{item}") for item in JOB_BOARD_DOMAINS):
+        return CompanyUrlKind.JOB_BOARD.value
+    if any(domain == item or domain.endswith(f".{item}") for item in DIRECTORY_DOMAINS):
+        return CompanyUrlKind.COMPANY_DIRECTORY.value
+    if any(domain == item or domain.endswith(f".{item}") for item in (
+        "scribd.com", "rocketreach.co", "zoominfo.com", "apollo.io",
+        "wikipedia.org", "crunchbase.com",
+    )):
+        return CompanyUrlKind.THIRD_PARTY_COMPANY_PROFILE.value
+    if any(domain == item or domain.endswith(f".{item}") for item in (
+        "docs.google.com", "drive.google.com",
+    )) or path.endswith(".pdf") or "/document/" in path or "/documents/" in path:
+        return CompanyUrlKind.DOCUMENT_HOST.value
+    if domain.endswith((".gov.ma", ".gov", ".gouv.fr")) and any(
+        token in text or token in path
+        for token in ("registre", "societe", "company", "annuaire", "directory")
+    ):
+        return CompanyUrlKind.GOVERNMENT_COMPANY_REGISTRY.value
+    if any(token in text for token in ("annuaire", "directory", "liste des entreprises", "company directory", "companies list")):
+        return CompanyUrlKind.COMPANY_DIRECTORY.value
+    if any(token in path for token in ("directory", "annuaire", "liste-entreprises", "company-profile", "profile/")):
+        return CompanyUrlKind.THIRD_PARTY_COMPANY_PROFILE.value
+    if (
+        "careers" in path or "career" in path or "recruit" in path
+        or domain.startswith(("careers.", "career.", "jobs.", "recruiting."))
+    ):
+        return CompanyUrlKind.EMPLOYER_CAREERS_PAGE.value
+    if source_type in {"company_career", "company_careers", "company_website", "official_website"}:
+        return CompanyUrlKind.EMPLOYER_OFFICIAL_WEBSITE.value
+    return CompanyUrlKind.UNKNOWN.value
+
+
 def _classify_company_urls(opp, source_type: str) -> dict[str, str]:
-    """Classify employer-related links without promoting job/ATS URLs to official sites."""
+    """Classify employer-related links without promoting job/ATS or directory URLs to official sites."""
     raw = opp.raw or {}
     result = {
         "kind": CompanyUrlKind.UNKNOWN.value,
@@ -72,16 +121,20 @@ def _classify_company_urls(opp, source_type: str) -> dict[str, str]:
         "careers_url": "",
         "recruitment_url": "",
         "profile_url": "",
+        "discovery_source_url": str(getattr(opp, "url", "") or ""),
     }
+    raw_title = str(raw.get("title") or getattr(opp, "title", "") or "")
+    raw_snippet = str(raw.get("snippet") or getattr(opp, "description", "") or "")
     direct_values = (
         ("company_website", CompanyUrlKind.EMPLOYER_OFFICIAL_WEBSITE),
         ("official_website", CompanyUrlKind.EMPLOYER_OFFICIAL_WEBSITE),
         ("careers_url", CompanyUrlKind.EMPLOYER_CAREERS_PAGE),
         ("recruitment_url", CompanyUrlKind.EMPLOYER_RECRUITMENT_PAGE),
-        ("company_profile_url", CompanyUrlKind.EMPLOYER_OFFICIAL_WEBSITE),
     )
     for field_name, kind in direct_values:
-        direct = _trusted_employer_url(raw.get(field_name))
+        direct = _trusted_employer_url(
+            raw.get(field_name), title=raw_title, snippet=raw_snippet,
+        )
         if not direct:
             continue
         result["kind"] = kind.value
@@ -100,11 +153,28 @@ def _classify_company_urls(opp, source_type: str) -> dict[str, str]:
             result["official_domain"] = host_domain(direct)
         return result
 
+    profile_url = normalize_url(str(raw.get("company_profile_url") or ""))
+    if profile_url and classify_url_role(
+        profile_url, raw_title, raw_snippet, source_type=source_type,
+    ) in {
+        CompanyUrlKind.COMPANY_DIRECTORY.value,
+        CompanyUrlKind.GOVERNMENT_COMPANY_REGISTRY.value,
+        CompanyUrlKind.THIRD_PARTY_COMPANY_PROFILE.value,
+        CompanyUrlKind.DOCUMENT_HOST.value,
+    }:
+        result["kind"] = classify_url_role(
+            profile_url, raw_title, raw_snippet, source_type=source_type,
+        )
+        result["profile_url"] = profile_url
+        return result
+
     if source_type == "ats" or raw.get("ats"):
         result["kind"] = CompanyUrlKind.ATS.value
         return result
 
-    page = _trusted_employer_url(raw.get("page"))
+    page = _trusted_employer_url(
+        raw.get("page"), title=raw_title, snippet=raw_snippet,
+    )
     if page and source_type == "company_career":
         result.update(
             kind=CompanyUrlKind.EMPLOYER_CAREERS_PAGE.value,
@@ -114,24 +184,16 @@ def _classify_company_urls(opp, source_type: str) -> dict[str, str]:
         )
         return result
 
-    url = str(getattr(opp, "url", "") or "")
-    domain = host_domain(url)
-    if domain and any(domain == item or domain.endswith(f".{item}") for item in ATS_DOMAINS):
-        result["kind"] = CompanyUrlKind.ATS.value
-    elif domain and any(
-        domain == item or domain.endswith(f".{item}") for item in DIRECTORY_DOMAINS
-    ):
+    result["kind"] = classify_url_role(
+        result["discovery_source_url"], raw_title, raw_snippet,
+        source_type=source_type,
+    )
+    if result["kind"] == CompanyUrlKind.COMPANY_DIRECTORY.value:
         result["kind"] = CompanyUrlKind.DIRECTORY.value
-    elif source_type == "job_board" or (
-        domain and any(
-            domain == item or domain.endswith(f".{item}") for item in JOB_BOARD_DOMAINS
-        )
-    ):
-        result["kind"] = CompanyUrlKind.JOB_BOARD.value
     return result
 
 
-def _trusted_employer_url(value) -> str:
+def _trusted_employer_url(value, *, title: str = "", snippet: str = "") -> str:
     normalized = normalize_url(str(value or ""))
     parsed = urlparse(normalized)
     if parsed.scheme != "https" or parsed.username or parsed.password:
@@ -141,13 +203,15 @@ def _trusted_employer_url(value) -> str:
             return ""
     except ValueError:
         return ""
-    domain = host_domain(normalized)
-    if not domain or any(domain == item or domain.endswith(f".{item}") for item in ATS_DOMAINS):
-        return ""
-    if any(domain == item or domain.endswith(f".{item}") for item in (
-        *JOB_BOARD_DOMAINS,
-        *DIRECTORY_DOMAINS,
-    )):
+    role = classify_url_role(normalized, title, snippet)
+    if role in {
+        CompanyUrlKind.ATS.value,
+        CompanyUrlKind.JOB_BOARD.value,
+        CompanyUrlKind.COMPANY_DIRECTORY.value,
+        CompanyUrlKind.GOVERNMENT_COMPANY_REGISTRY.value,
+        CompanyUrlKind.THIRD_PARTY_COMPANY_PROFILE.value,
+        CompanyUrlKind.DOCUMENT_HOST.value,
+    }:
         return ""
     return normalized
 

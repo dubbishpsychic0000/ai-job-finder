@@ -21,7 +21,9 @@ from app.workflows.discovery import (
     CompanyUrlKind,
     _classify_company_urls,
     _direct_company_career_url,
+    _trusted_employer_url,
     _upsert_opportunity_company,
+    classify_url_role,
 )
 
 
@@ -166,6 +168,14 @@ def test_company_url_classification_never_promotes_job_or_ats_urls():
         url="https://www.instagram.com/company-profile",
         raw={},
     )
+    directory = SimpleNamespace(
+        url="https://www.kerix.ma/annuaire/entreprises",
+        raw={"page": "https://www.kerix.ma/annuaire/entreprises"},
+    )
+    third_party = SimpleNamespace(
+        url="https://www.scribd.com/document/123/build-company-profile",
+        raw={"page": "https://www.scribd.com/document/123/build-company-profile"},
+    )
     untrusted_career_host = SimpleNamespace(
         url="https://www.linkedin.com/jobs/view/123",
         raw={"page": "https://www.linkedin.com/jobs/view/123"},
@@ -187,12 +197,53 @@ def test_company_url_classification_never_promotes_job_or_ats_urls():
         CompanyUrlKind.JOB_BOARD
     )
     assert _classify_company_urls(unrelated_social, "social_signal")["kind"] == (
-        CompanyUrlKind.UNKNOWN
+        CompanyUrlKind.THIRD_PARTY_COMPANY_PROFILE
+    )
+    assert _classify_company_urls(directory, "company_directory")["kind"] == CompanyUrlKind.DIRECTORY
+    assert _classify_company_urls(third_party, "document_host")["kind"] == (
+        CompanyUrlKind.THIRD_PARTY_COMPANY_PROFILE
     )
     assert not _classify_company_urls(untrusted_career_host, "company_career")["website"]
     explicit = _classify_company_urls(explicit_domain_from_ats, "ats")
     assert explicit["website"] == "https://build.example.ma/"
     assert explicit["official_domain"] == "build.example.ma"
+
+
+def test_url_roles_keep_directories_registries_profiles_and_documents_out_of_employer_sites():
+    assert classify_url_role(
+        "https://www.kerix.ma/annuaire/atlas", "Atlas BTP", "Construction company"
+    ) == CompanyUrlKind.COMPANY_DIRECTORY
+    assert classify_url_role(
+        "https://registre.gov.ma/company/atlas", "Company registry"
+    ) == CompanyUrlKind.GOVERNMENT_COMPANY_REGISTRY
+    assert classify_url_role(
+        "https://www.rocketreach.co/atlas-profile", "Atlas profile"
+    ) == CompanyUrlKind.THIRD_PARTY_COMPANY_PROFILE
+    assert classify_url_role(
+        "https://docs.google.com/document/d/123", "Company profile"
+    ) == CompanyUrlKind.DOCUMENT_HOST
+    assert classify_url_role(
+        "https://careers.atlas.ma/jobs", source_type="company_career"
+    ) == CompanyUrlKind.EMPLOYER_CAREERS_PAGE
+    assert _trusted_employer_url("https://www.kerix.ma/annuaire/atlas") == ""
+    assert _trusted_employer_url("https://registre.gov.ma/company/atlas") == ""
+    assert _trusted_employer_url("https://atlas.ma/careers") == "https://atlas.ma/careers"
+
+
+def test_explicit_directory_claim_does_not_promote_or_lose_source_provenance():
+    opportunity = SimpleNamespace(
+        url="https://www.kerix.ma/annuaire/atlas",
+        title="Atlas BTP - Kerix",
+        description="Construction services in Morocco",
+        raw={"company_website": "https://www.kerix.ma/annuaire/atlas"},
+    )
+
+    urls = _classify_company_urls(opportunity, "company_directory")
+
+    assert not urls["website"]
+    assert not urls["official_domain"]
+    assert urls["kind"] == CompanyUrlKind.DIRECTORY
+    assert urls["discovery_source_url"] == "https://www.kerix.ma/annuaire/atlas"
 
 
 def test_company_table_persists_direct_employer_site_but_not_job_or_ats_url(db):

@@ -8,6 +8,7 @@ from app.connectors.linkedin import LinkedInJobsSource
 from app.discovery.company_universe import (
     CompanyCandidate,
     OpenCompanyDiscovery,
+    _trusted_website,
     canonical_company_key,
 )
 from app.discovery.website_researcher import ResearchResult
@@ -79,6 +80,13 @@ def test_company_universe_workflow_accepts_no_vacancy_candidate(db, config):
     report = asyncio.run(run_company_universe_discovery(db, config, candidates=candidates))
     assert report.stored == 1
     assert mem.store.get_discoveries(db, kind="COMPANY")[0].kind == "COMPANY"
+
+
+def test_company_universe_does_not_promote_directory_or_document_urls():
+    assert not _trusted_website("https://www.kerix.ma/annuaire/atlas")
+    assert not _trusted_website("https://registre.gov.ma/company/atlas")
+    assert not _trusted_website("https://docs.google.com/document/d/atlas")
+    assert _trusted_website("https://atlas.ma/careers") == "https://atlas.ma/careers"
 
 
 def test_company_universe_deduplicates_by_domain_not_same_name(db):
