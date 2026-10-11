@@ -218,6 +218,9 @@ def test_url_roles_keep_directories_registries_profiles_and_documents_out_of_emp
         "Entreprises BTP au Maroc",
     ) == CompanyUrlKind.COMPANY_DIRECTORY
     assert classify_url_role(
+        "https://marocproguide.com/btp-agadir.html", "Professionnels du BTP"
+    ) == CompanyUrlKind.COMPANY_DIRECTORY
+    assert classify_url_role(
         "https://registre.gov.ma/company/atlas", "Company registry"
     ) == CompanyUrlKind.GOVERNMENT_COMPANY_REGISTRY
     assert classify_url_role(

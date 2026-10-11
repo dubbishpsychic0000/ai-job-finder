@@ -287,7 +287,8 @@ def _trusted_website(url: str) -> str:
         pass
     directory_hosts = (
         "annuaire.com", "telecontact.ma", "kerix.net", "kerix.ma", "kompass.com",
-        "marocannuaire.org", "marocannuaire.com", "goafricaonline.com", "scribd.com",
+        "marocannuaire.org", "marocannuaire.com", "maroc1000.net",
+        "marocproguide.com", "goafricaonline.com", "scribd.com",
         "rocketreach.co", "zoominfo.com", "apollo.io", "wikipedia.org",
         "crunchbase.com", "maroc1000.net", "docs.google.com", "drive.google.com",
         "linkedin.com", "indeed.com", "glassdoor.com", "monster.com",

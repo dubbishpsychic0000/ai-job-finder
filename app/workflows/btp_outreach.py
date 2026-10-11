@@ -1266,7 +1266,8 @@ def _directory_company_name(title: str, city: str) -> str:
     segments = re.split(r"\s+(?:\||—|–|-|:)\s+", title)
     publisher_terms = {
         "annuaire", "directory", "maroc1000", "kerix", "telecontact",
-        "marocannuaire", "kompass", "charika", "goafricaonline",
+        "marocannuaire", "marocproguide", "kompass", "charika",
+        "goafricaonline",
     }
     segments = [
         segment for segment in segments
@@ -1282,7 +1283,10 @@ def _directory_company_name(title: str, city: str) -> str:
         "genie", "civil", "bâtiment", "batiment", "maroc", "morocco",
         "annuaire", "directory", "liste", "des", "les", "de", "du", "la", "le",
         "maroc1000", "kerix", "telecontact", "marocannuaire", "kompass",
-        "charika", "goafricaonline", "secteur", "activite", "activity",
+        "marocproguide", "charika", "goafricaonline", "secteur", "activite",
+        "activity", "1000", "premiere", "premieres", "premier", "premiers",
+        "par", "professionnel", "professionnels", "related", "information",
+        "finance", "department", "companies",
         *re.sub(r"[^a-z0-9]+", " ", city.casefold()).split(),
     }
     tokens = [
@@ -1298,7 +1302,8 @@ def _is_directory_or_job_site(url: str, title: str = "", snippet: str = "") -> b
         return False
     excluded = (
         "annuaire", "telecontact", "kerix", "charika", "kompass",
-        "marocannuaire", "maroc1000", "goafricaonline", "linkedin", "indeed",
+        "marocannuaire", "maroc1000", "marocproguide", "goafricaonline",
+        "linkedin", "indeed",
         "facebook", "instagram", "youtube", "scribd", "rocketreach",
         "zoominfo", "apollo", "wikipedia", "gov.ma", "gouv.fr",
         "company-profile", "search", "docs.google.",

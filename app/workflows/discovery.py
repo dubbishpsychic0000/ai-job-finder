@@ -48,7 +48,8 @@ JOB_BOARD_DOMAINS = (
 )
 DIRECTORY_DOMAINS = (
     "annuaire.com", "telecontact.ma", "kerix.net", "kerix.ma", "kompass.com",
-    "marocannuaire.org", "marocannuaire.com", "maroc1000.net", "goafricaonline.com",
+    "marocannuaire.org", "marocannuaire.com", "maroc1000.net",
+    "marocproguide.com", "goafricaonline.com",
 )
 
 

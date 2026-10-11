@@ -531,6 +531,21 @@ def test_public_btp_search_extracts_entity_from_maroc1000_but_not_publisher():
     )
 
 
+def test_directory_result_names_discard_publishers_and_profile_department_labels():
+    assert btp_outreach._directory_company_name(
+        "1000 Premières par secteur - Maroc1000", "Casablanca",
+    ) == ""
+    assert btp_outreach._directory_company_name(
+        "Professionnels du BTP - MarocProGuide", "Agadir",
+    ) == ""
+    assert btp_outreach._directory_company_name(
+        "Bouygues Information - RocketReach", "Casablanca",
+    ) == "Bouygues"
+    assert btp_outreach._directory_company_name(
+        "Guicopres Finance Department - RocketReach", "Casablanca",
+    ) == "Guicopres"
+
+
 def test_public_btp_search_rotates_city_batches_without_repeating_nearby_queries(tmp_path):
     calls = []
 
