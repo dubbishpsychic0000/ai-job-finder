@@ -18,6 +18,7 @@ logger = logging.getLogger(__name__)
 
 
 EMAIL_MODES = ("dry_run", "draft", "live")
+GMAIL_REAUTH_REQUIRED = "Gmail authorization was rejected; re-authorize before retrying."
 
 
 class ProviderError(Exception):
@@ -40,6 +41,9 @@ def create_draft(settings, *, to: str, subject: str, body: str,
         if not draft_id:
             return False, "", "Gmail draft creation response did not contain a draft ID"
         return True, draft_id, ""
+    except gmail_oauth.OAuthError:
+        logger.warning("Gmail draft was not attempted because authorization is required")
+        return False, "", GMAIL_REAUTH_REQUIRED
     except Exception as exc:
         logger.exception("Gmail draft creation failed")
         return False, "", str(exc)

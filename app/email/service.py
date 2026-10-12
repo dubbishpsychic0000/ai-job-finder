@@ -247,7 +247,9 @@ class ApplicationEngine:
         else:
             email.status = "failed"
             email.error = error
-            app.status = "deferred"
+            app.status = (
+                "failed" if error == provider.GMAIL_REAUTH_REQUIRED else "deferred"
+            )
             mem.store.record_event(self.session, "action", f"draft creation failed: {error}",
                                    "error", {"job_id": job.id})
         return {"sent": False, "status": app.status, "error": error if not ok else "",

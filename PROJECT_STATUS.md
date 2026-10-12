@@ -1,5 +1,26 @@
 # Project status
 
+## Latest production draft attempt
+
+The draft-only Actions run **38190098129** on commit `c9b454b` selected
+Senan Holding from its official careers page and reached the Gmail provider.
+The pipeline made **1 draft attempt**, confirmed **0 Gmail drafts**, and sent
+**0 emails**. Gmail rejected the stored OAuth refresh token with
+`invalid_grant`; therefore there is no real Gmail draft ID and no production
+duplicate-suppression proof yet. The run persisted application state to the
+private vault as `18c35ec`.
+
+OAuth refresh rejection is now reported as a reauthorization requirement without
+logging the provider exception. An application is retryable only when OAuth
+fails before Gmail's draft-create API call; ambiguous transport failures remain
+deferred and duplicate-protected. The BTP workflow can recover the earlier
+`invalid_grant` deferred application after reauthorization. Scheduled runs
+remain draft-only and no live send has been attempted.
+
+Production is blocked until the Gmail account is re-authorized and its refreshed
+token is updated in the private vault. A repeat against the unchanged token
+cannot create a draft.
+
 ## Recruitment contact qualification fix
 
 Website page classification now uses URL, title, and headings rather than

@@ -17,6 +17,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+from contextlib import suppress
 from pathlib import Path
 
 from app.config import RunnerSettings
@@ -74,10 +75,8 @@ def load_client_config(settings: RunnerSettings) -> dict:
 
 def _restrict_permissions(path: Path) -> None:
     """Best-effort 0o600 on POSIX; no-op on Windows."""
-    try:
+    with suppress(OSError):  # pragma: no cover - Windows / exotic fs
         os.chmod(path, 0o600)
-    except OSError:  # pragma: no cover - Windows / exotic fs
-        pass
 
 
 def required_scopes(settings) -> list[str]:
@@ -129,9 +128,19 @@ def get_credentials(settings: RunnerSettings):
         )
     if not creds.valid:
         if creds.expired and creds.refresh_token:
-            creds.refresh(Request())
+            try:
+                creds.refresh(Request())
+            except Exception as exc:
+                if "invalid_grant" in str(exc).lower():
+                    logger.warning("Gmail refresh token rejected; re-authorization required")
+                    raise OAuthError(
+                        "Gmail refresh token rejected; re-authorize before retrying."
+                    ) from None
+                raise
         else:
-            raise OAuthError("Gmail credentials are invalid and not refreshable — run `wca gmail-auth` again.")
+            raise OAuthError(
+                "Gmail credentials are invalid and not refreshable — run `wca gmail-auth` again."
+            )
     return creds
 
 

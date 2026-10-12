@@ -43,8 +43,9 @@ from app.discovery.website_researcher import (
     host_domain,
     normalize_url,
 )
+from app.email import provider
 from app.email.service import ApplicationEngine
-from app.models import Company, Discovery, Evidence, Job
+from app.models import Company, Discovery, Email, Evidence, Job
 
 OVERPASS_URL = "https://overpass-api.de/api/interpreter"
 MAX_OVERPASS_BYTES = 5 * 1024 * 1024
@@ -1976,6 +1977,11 @@ def run_btp_outreach(
     )
     targets = []
     for candidate in candidates:
+        retryable_auth_failure = _release_retryable_gmail_auth_failure(
+            session, candidate,
+        )
+        if retryable_auth_failure and screening_state:
+            screening_state.clear(candidate)
         if screening_state and screening_state.is_suppressed(candidate):
             report.existing += 1
             record = screening_state.records.get(screening_state.key(candidate), {})
@@ -2462,17 +2468,31 @@ def run_btp_outreach(
         else:
             report.blocked += 1
             status = result.get("status") or "blocked_by_safety_gate"
-            target.status = "blocked_by_safety_gate"
+            reauthorization_required = (
+                result.get("error") == provider.GMAIL_REAUTH_REQUIRED
+            )
+            if reauthorization_required:
+                status = "gmail_reauthorization_required"
+                target.status = status
+            else:
+                target.status = "blocked_by_safety_gate"
             if screening_state:
                 screening_state.mark(candidate, status)
             candidate.readiness = "WEBSITE_VERIFIED"
-            eligibility_reason = str(
-                result.get("reason")
-                or result.get("error")
-                or "; ".join(result.get("report", []))
-                or "ApplicationEngine blocked the configured email action"
+            eligibility_reason = (
+                "Gmail authorization rejected before draft creation; re-authorize "
+                "the Gmail account and retry"
+                if reauthorization_required
+                else str(
+                    result.get("reason")
+                    or result.get("error")
+                    or "; ".join(result.get("report", []))
+                    or "ApplicationEngine blocked the configured email action"
+                )
             )
-            if settings.email_mode == "live" and result.get("error"):
+            if reauthorization_required:
+                delivery_stage = "gmail_reauthorization_required"
+            elif settings.email_mode == "live" and result.get("error"):
                 delivery_stage = "gmail_send_failed"
             elif settings.email_mode == "draft" and result.get("error"):
                 delivery_stage = "gmail_draft_failed"
@@ -2508,6 +2528,48 @@ def run_btp_outreach(
         ))
     report.refresh_readiness_counts()
     return report
+
+
+def _release_retryable_gmail_auth_failure(
+    session: Session, candidate: BtpCompany,
+) -> bool:
+    """Release only BTP drafts known to have failed before Gmail's create call."""
+    company_filters = []
+    if candidate.company_id is not None:
+        company_filters.append(Company.id == candidate.company_id)
+    if candidate.name:
+        company_filters.append(Company.name == candidate.name)
+    domain = host_domain(candidate.website)
+    if domain:
+        company_filters.append(Company.official_domain == domain)
+    if not company_filters:
+        return False
+
+    company = session.query(Company).filter(or_(*company_filters)).first()
+    if company is None:
+        return False
+    jobs = session.query(Job).filter_by(
+        source="btp_spontaneous", company_id=company.id,
+    ).all()
+    for job in jobs:
+        if job.opportunity_type != SPONTANEOUS_APPLICATION:
+            continue
+        applications = mem.store.find_applications(
+            session, job.id, statuses=("deferred",),
+        )
+        for application in applications:
+            emails = session.query(Email).filter_by(
+                application_id=application.id, status="failed", mode="draft",
+            ).all()
+            if any(
+                email.error == provider.GMAIL_REAUTH_REQUIRED
+                or "invalid_grant" in (email.error or "").lower()
+                for email in emails
+            ):
+                application.status = "failed"
+                session.flush()
+                return True
+    return False
 
 
 def _company_result(

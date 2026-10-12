@@ -288,6 +288,89 @@ def test_gmail_draft_transport_requires_api_draft_id(
         assert "did not contain a draft ID" in error
 
 
+def test_gmail_draft_authentication_failure_is_safe_to_retry(settings, monkeypatch, caplog):
+    settings = _settings(settings, email_mode="draft")
+    monkeypatch.setattr(
+        gmail_oauth, "authenticated_service",
+        lambda _settings: (_ for _ in ()).throw(
+            gmail_oauth.OAuthError("refresh token rejected")
+        ),
+    )
+
+    with caplog.at_level(logging.WARNING):
+        ok, draft_id, error = provider_mod.create_draft(
+            settings, to="jobs@employer.example", subject="Application", body="Hello",
+        )
+
+    assert (ok, draft_id, error) == (
+        False, "", provider_mod.GMAIL_REAUTH_REQUIRED,
+    )
+    assert "refresh token rejected" not in caplog.text
+
+
+def test_invalid_grant_refresh_is_reported_without_provider_details(settings, monkeypatch, caplog):
+    settings = _settings(settings, email_mode="draft")
+
+    class _RejectedCredentials:
+        scopes = (gmail_oauth.GMAIL_COMPOSE_SCOPE,)
+        valid = False
+        expired = True
+        refresh_token = "must-not-be-logged"
+
+        def refresh(self, _request):
+            raise RuntimeError("invalid_grant: must-not-be-logged")
+
+    monkeypatch.setattr(
+        gmail_oauth, "_credentials_from_file",
+        lambda _path: _RejectedCredentials(),
+    )
+
+    with caplog.at_level(logging.WARNING), pytest.raises(
+        gmail_oauth.OAuthError, match="re-authorize",
+    ) as error:
+        gmail_oauth.get_credentials(settings)
+
+    assert "must-not-be-logged" not in caplog.text
+    assert "must-not-be-logged" not in str(error.value)
+
+
+def test_rejected_gmail_auth_failure_does_not_block_retry(
+    db, config, profile, settings, monkeypatch,
+):
+    job = _job(db)
+    job.opportunity_type = "SPONTANEOUS_APPLICATION"
+    decision = _decision(db, job)
+    settings = _settings(settings, email_mode="draft")
+    monkeypatch.setattr(
+        "app.email.service.validate",
+        lambda **_kwargs: SimpleNamespace(allowed=True, reasons=[], checks={}),
+    )
+    responses = iter([
+        (False, "", provider_mod.GMAIL_REAUTH_REQUIRED),
+        (True, "real-draft-id", ""),
+    ])
+    monkeypatch.setattr(
+        provider_mod, "create_draft",
+        lambda *_args, **_kwargs: next(responses),
+    )
+    engine = _engine(db, config, profile, settings, _draft_communicator(
+        "Je vous adresse ma candidature pour un poste en ingénierie civile."
+    ))
+
+    first = asyncio.run(engine.run(job, decision, "APPLY", job.contact_email, "fr"))
+    assert first["status"] == "failed"
+    assert db.query(models.Application).one().status == "failed"
+    assert db.query(models.Email).one().status == "failed"
+    assert not db.query(models.Email).one().draft_id
+
+    second = asyncio.run(engine.run(job, decision, "APPLY", job.contact_email, "fr"))
+    assert second["status"] == "drafted"
+    assert second["draft_id"] == "real-draft-id"
+    assert [app.status for app in db.query(models.Application).order_by(
+        models.Application.id
+    )] == ["failed", "drafted"]
+
+
 # ---------------------------------------------------------------------------
 # OAuth hygiene
 # ---------------------------------------------------------------------------

@@ -32,6 +32,7 @@ from app.workflows.btp_outreach import (
     PublicCompanyWebsiteFinder,
     WikidataBtpDiscovery,
     _merge_candidates,
+    _release_retryable_gmail_auth_failure,
     extract_spontaneous_instruction,
     haversine_km,
     load_btp_seed_csv,
@@ -387,6 +388,56 @@ def test_btp_screening_state_rejects_corrupt_ledger(tmp_path):
     path.write_text("{broken", encoding="utf-8")
     with pytest.raises(BtpOutreachSafetyError, match="unreadable"):
         BtpOutreachState(path)
+
+
+@pytest.mark.parametrize(
+    ("error", "expected_retry"),
+    [
+        ("invalid_grant: Bad Request", True),
+        (provider.GMAIL_REAUTH_REQUIRED, True),
+        ("Gmail draft creation timed out", False),
+    ],
+)
+def test_btp_releases_only_known_pre_api_gmail_auth_failures(
+    db, error, expected_retry,
+):
+    company = store.get_or_create_company(
+        db, "Senan Holding", "https://senanholding.com", "Morocco",
+        official_domain="senanholding.com",
+    )
+    job = models.Job(
+        source="btp_spontaneous",
+        external_id="senan-retry",
+        dedup_key="senan-retry",
+        title="Candidature spontanée",
+        company_id=company.id,
+        opportunity_type="SPONTANEOUS_APPLICATION",
+    )
+    db.add(job)
+    db.flush()
+    application = models.Application(
+        job_id=job.id, status="deferred", action="APPLY",
+        contact_email="careers@senanholding.com",
+    )
+    db.add(application)
+    db.flush()
+    db.add(models.Email(
+        application_id=application.id,
+        to_addr=application.contact_email,
+        subject="Application",
+        body="",
+        status="failed",
+        mode="draft",
+        error=error,
+    ))
+    db.flush()
+
+    released = _release_retryable_gmail_auth_failure(
+        db, _company("Senan Holding", "https://senanholding.com"),
+    )
+
+    assert released is expected_retry
+    assert application.status == ("failed" if expected_retry else "deferred")
 
 
 def test_btp_run_persists_screening_and_retries_after_negative_ttl(
