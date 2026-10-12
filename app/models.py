@@ -12,7 +12,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Any
 
-from sqlalchemy import JSON, DateTime, Float, ForeignKey, Integer, String, Text
+from sqlalchemy import JSON, DateTime, Float, ForeignKey, Index, Integer, String, Text
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
 
@@ -237,10 +237,27 @@ class Email(Base):
     status: Mapped[str] = mapped_column(String(32), default="validated")  # draft|validated|dry_run|drafted|sent|blocked|failed
     validation_log: Mapped[list[str]] = mapped_column(JSON, default=list)
     mode: Mapped[str] = mapped_column(String(16), default="")  # dry_run|draft|live
+    draft_attempt_key: Mapped[str] = mapped_column(String(64), default="")
+    delivery_state: Mapped[str] = mapped_column(String(24), default="not_attempted")
     sent_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     message_id: Mapped[str] = mapped_column(String(255), default="")  # Gmail message id (live)
     draft_id: Mapped[str] = mapped_column(String(255), default="")    # Gmail Draft id (draft mode)
     error: Mapped[str] = mapped_column(Text, default="")
+
+
+Index(
+    "uq_emails_draft_attempt_key",
+    Email.draft_attempt_key,
+    unique=True,
+    sqlite_where=(
+        (Email.draft_attempt_key != "")
+        & (Email.delivery_state != "not_attempted")
+    ),
+    postgresql_where=(
+        (Email.draft_attempt_key != "")
+        & (Email.delivery_state != "not_attempted")
+    ),
+)
 
 
 class EmailVerification(Base):

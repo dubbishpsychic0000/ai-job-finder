@@ -997,7 +997,7 @@ def test_only_explicit_instructions_and_official_domain_contact_create_french_dr
     })
     calls = []
 
-    def create_draft(settings_, *, to, subject, body, attachments):
+    def create_draft(settings_, *, to, subject, body, attachments, attempt_key=""):
         calls.append((to, subject, body, attachments))
         return True, "draft-review-only", ""
 
@@ -1018,6 +1018,58 @@ def test_only_explicit_instructions_and_official_domain_contact_create_french_dr
     assert synthetic.status == "outreach_only"
     application = db.query(models.Application).one()
     assert application.follow_up_at is None
+
+
+def test_uncertain_btp_draft_is_reconciled_before_any_new_create(
+    db, config, settings, profile, monkeypatch, tmp_path,
+):
+    settings = settings.model_copy(update={
+        "email_mode": "draft", "enable_email": True, "email_provider": "gmail",
+    })
+    candidate = _company("Recovery BTP", "https://recovery.ma")
+    researcher = _Researcher({
+        "recovery.ma": _evidence("recovery.ma", email="jobs@recovery.ma"),
+    })
+    create_calls = []
+    reconcile_calls = []
+    monkeypatch.setattr(
+        provider, "create_draft",
+        lambda *_args, **_kwargs: (
+            create_calls.append("create")
+            or (False, "", provider.GMAIL_DRAFT_OUTCOME_UNCERTAIN)
+        ),
+    )
+    monkeypatch.setattr(
+        provider, "reconcile_draft",
+        lambda *_args, **_kwargs: (
+            reconcile_calls.append("reconcile")
+            or provider.DraftReconciliation("not_found")
+        ),
+    )
+    monkeypatch.setattr("app.scheduler.control.is_paused", lambda: False)
+    state_path = tmp_path / "recovery-state.json"
+
+    first = _run(
+        db, config, settings, profile, [candidate], researcher,
+        screening_state_path=state_path,
+    )
+    assert first.draft_attempts == 1
+    assert first.companies[0]["status"] == "draft_recovery_required"
+    assert first.companies[0]["delivery_stage"] == "gmail_draft_recovery_required"
+    assert db.query(models.Application).one().status == "deferred"
+    assert db.query(models.Email).one().delivery_state == "uncertain"
+
+    db.commit()
+    db.expire_all()
+    second = _run(
+        db, config, settings, profile, [candidate], researcher,
+        screening_state_path=state_path,
+    )
+    assert second.draft_attempts == 0
+    assert second.existing == 1
+    assert second.companies[0]["status"] == "draft_recovery_required"
+    assert create_calls == ["create"]
+    assert reconcile_calls == ["reconcile"]
 
 
 def test_osm_company_without_website_uses_public_site_lookup_before_research(
@@ -1136,7 +1188,12 @@ def test_search_budget_defers_only_unknown_site_and_known_sites_still_create_dra
     assert serialized["drafts"] == 1
     assert serialized["no_official_website"] == 0
     assert serialized["sent"] == 0
+    persisted_email = db.query(models.Email).one()
+    assert persisted_email.delivery_state == "confirmed"
+    assert persisted_email.draft_attempt_key
 
+    db.commit()
+    db.expire_all()
     next_run = _run(
         db, config, settings, profile,
         [candidate_a, candidate_b, candidate_c],

@@ -44,7 +44,7 @@ from app.discovery.website_researcher import (
     normalize_url,
 )
 from app.email import provider
-from app.email.service import ApplicationEngine
+from app.email.service import ApplicationEngine, reconcile_pending_draft
 from app.models import Company, Discovery, Email, Evidence, Job
 
 OVERPASS_URL = "https://overpass-api.de/api/interpreter"
@@ -2062,6 +2062,24 @@ def run_btp_outreach(
             if existing_outreach else []
         )
         if existing_applications:
+            if settings.email_mode == "draft" and any(
+                application.status == "deferred" for application in existing_applications
+            ):
+                reconcile_pending_draft(session, settings, existing_outreach.id)
+                existing_applications = mem.store.find_applications(
+                    session,
+                    existing_outreach.id,
+                    statuses=("sent", "drafted", "deferred", "dry_run"),
+                )
+            pending_recovery = any(
+                application.status == "deferred"
+                and session.query(Email).filter(
+                    Email.application_id == application.id,
+                    Email.mode == "draft",
+                    Email.delivery_state.in_(("creating", "uncertain")),
+                ).first() is not None
+                for application in existing_applications
+            )
             previous_draft = any(
                 application.status == "drafted" for application in existing_applications
             )
@@ -2075,9 +2093,15 @@ def run_btp_outreach(
             report.existing += 1
             report.companies.append(_company_result(
                 candidate,
-                "existing_application",
+                "draft_recovery_required" if pending_recovery else "existing_application",
                 official_domain=company.official_domain,
-                eligibility_reason="an application record already exists",
+                eligibility_reason=(
+                    "prior Gmail draft outcome is uncertain; no new draft was attempted"
+                    if pending_recovery else "an application record already exists"
+                ),
+                delivery_stage=(
+                    "gmail_draft_recovery_required" if pending_recovery else ""
+                ),
                 previous_application=True,
                 previous_draft=previous_draft,
             ))
@@ -2471,8 +2495,14 @@ def run_btp_outreach(
             reauthorization_required = (
                 result.get("error") == provider.GMAIL_REAUTH_REQUIRED
             )
+            uncertain_draft = (
+                result.get("error") == provider.GMAIL_DRAFT_OUTCOME_UNCERTAIN
+            )
             if reauthorization_required:
                 status = "gmail_reauthorization_required"
+                target.status = status
+            elif uncertain_draft:
+                status = "draft_recovery_required"
                 target.status = status
             else:
                 target.status = "blocked_by_safety_gate"
@@ -2483,15 +2513,22 @@ def run_btp_outreach(
                 "Gmail authorization rejected before draft creation; re-authorize "
                 "the Gmail account and retry"
                 if reauthorization_required
-                else str(
+                else (
+                    "Gmail create outcome uncertain; the attempt is persisted and "
+                    "will be reconciled before another draft can be created"
+                    if uncertain_draft
+                    else str(
                     result.get("reason")
                     or result.get("error")
                     or "; ".join(result.get("report", []))
                     or "ApplicationEngine blocked the configured email action"
+                    )
                 )
             )
             if reauthorization_required:
                 delivery_stage = "gmail_reauthorization_required"
+            elif uncertain_draft:
+                delivery_stage = "gmail_draft_recovery_required"
             elif settings.email_mode == "live" and result.get("error"):
                 delivery_stage = "gmail_send_failed"
             elif settings.email_mode == "draft" and result.get("error"):

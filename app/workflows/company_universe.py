@@ -157,17 +157,6 @@ async def run_company_universe_discovery(
     except (TypeError, ValueError) as exc:
         report.errors.append(f"invalid company-universe research limit: {exc}")
         research_limit = 0
-    research_queue = sorted(
-        companies_by_id.values(),
-        key=lambda company: (
-            not bool(_trusted_website(company.website)),
-            -company.relevance_score,
-            company.name.casefold(),
-        ),
-    )
-    research_ids = {
-        company.id for company in research_queue[:research_limit]
-    }
     evidence_by_company: dict[int, list[Evidence]] = {}
     if companies_by_id:
         for row in (
@@ -179,6 +168,26 @@ async def run_company_universe_discovery(
             evidence_by_company.setdefault(row.company_id, []).append(row)
 
     now = datetime.now(timezone.utc)
+    research_queue = sorted(
+        (
+            company for company in companies_by_id.values()
+            if _trusted_website(company.website)
+            and _research_is_due(
+                company, evidence_by_company.get(company.id, []), now,
+            )
+        ),
+        key=lambda company: (
+            bool(_contact_readiness(
+                company, evidence_by_company.get(company.id, []),
+            )[0]),
+            company.last_researched_at is not None,
+            _research_timestamp(company),
+            -company.relevance_score,
+            company.name.casefold(),
+        ),
+    )
+    research_ids = {company.id for company in research_queue[:research_limit]}
+
     for company in companies_by_id.values():
         website = _trusted_website(company.website)
         evidence = evidence_by_company.get(company.id, [])
@@ -186,7 +195,7 @@ async def run_company_universe_discovery(
             website
             and researcher is not None
             and company.id in research_ids
-            and not _research_is_fresh(company, evidence, now)
+            and _research_is_due(company, evidence, now)
         ):
             try:
                 result = researcher.research_and_apply(
@@ -208,7 +217,7 @@ async def run_company_universe_discovery(
             report.companies_with_official_websites += 1
         else:
             report.companies_without_websites += 1
-        if not website or not _research_is_fresh(company, evidence, now):
+        if not website or _research_is_due(company, evidence, now):
             report.companies_requiring_research += 1
         if any(row.field_name in {
             "relevant_page", "recruitment_email", "spontaneous_application"
@@ -229,6 +238,22 @@ def _research_is_fresh(company: Company, rows: list[Evidence], now: datetime) ->
     if researched_at.tzinfo is None:
         researched_at = researched_at.replace(tzinfo=timezone.utc)
     return now - researched_at <= timedelta(days=30)
+
+
+def _research_is_due(company: Company, rows: list[Evidence], now: datetime) -> bool:
+    if not _research_is_fresh(company, rows, now):
+        return True
+    has_contact, _ = _contact_readiness(company, rows)
+    return not has_contact
+
+
+def _research_timestamp(company: Company) -> float:
+    if company.last_researched_at is None:
+        return 0
+    researched_at = company.last_researched_at
+    if researched_at.tzinfo is None:
+        researched_at = researched_at.replace(tzinfo=timezone.utc)
+    return researched_at.timestamp()
 
 
 def _contact_readiness(company: Company, rows: list[Evidence]) -> tuple[bool, bool]:

@@ -1,30 +1,95 @@
 # Project status
 
-## Latest production draft attempt
+## Production Gmail draft validation
 
-The draft-only Actions run **38190098129** on commit `c9b454b` selected
-Senan Holding from its official careers page and reached the Gmail provider.
-The pipeline made **1 draft attempt**, confirmed **0 Gmail drafts**, and sent
-**0 emails**. Gmail rejected the stored OAuth refresh token with
-`invalid_grant`; therefore there is no real Gmail draft ID and no production
-duplicate-suppression proof yet. The run persisted application state to the
-private vault as `18c35ec`.
+The saved Gmail token at the private vault's `secrets/gmail_token.json` passed
+a forced in-memory refresh and includes the Gmail compose scope. The Actions
+workflow restores `candidate/` and `secrets/` from that same vault before
+running the selected task. The candidate profile and French CV were present at
+their expected vault paths. The manual run used `task=btp_outreach`,
+`email_mode=draft`, `authorize_live_btp=false`, and `max_companies=1`;
+scheduled runs remain draft-only.
 
-OAuth refresh rejection is now reported as a reauthorization requirement without
-logging the provider exception. An application is retryable only when OAuth
-fails before Gmail's draft-create API call; ambiguous transport failures remain
-deferred and duplicate-protected. The BTP workflow can recover the earlier
-`invalid_grant` deferred application after reauthorization. Scheduled runs
-remain draft-only and no live send has been attempted.
+Actions run **38207900891** on public-repository commit `cb34fa5` selected
+Senan Holding. Its official careers page publishes
+`careers@senanholding.com` and spontaneous-application instructions; persisted
+verification and evidence records passed the recruitment-contact checks. The
+application safety gate passed, and the French CV was attached. Gmail returned
+a real draft ID, which was persisted in the application database and matched
+the draft fetched from Gmail. The live draft was inspected: one draft exists for
+the intended recipient and subject, the message is the expected generic French
+spontaneous-application text, and exactly one non-empty
+French CV attachment is present. Actions state persistence completed
+successfully.
 
-After the user reported updating the vault token, draft-only run
-**38192852330** on commit `623820c` again selected Senan Holding and reached
-Gmail, but the refresh endpoint still returned `invalid_grant`. The report now
-labels the company `gmail_reauthorization_required`; totals were **1 draft
-attempt, 0 confirmed Gmail drafts, 0 sends**, and state persistence back to the
-vault completed successfully. The refreshed credential available to the runner
-is still rejected. Do not repeat production against it; no real draft ID exists
-and duplicate suppression for a confirmed production draft remains unproven.
+Measured result: **1 draft attempt, 1 confirmed Gmail draft, 0 sends**. No
+second production run was made, so duplicate suppression after a real draft has
+not yet been production-tested; avoiding an accidental second draft took
+priority here. No live-send path was enabled or attempted. Earlier runs
+**38190098129** and **38192852330** failed with OAuth refresh errors before
+Gmail draft creation; the latter's failed attempt remained retryable without
+weakening duplicate protection.
+
+## Draft duplicate-suppression and recovery audit
+
+The application workflow already blocks a second action for a job with a
+persisted `drafted`, `sent`, or `deferred` application; the BTP company workflow
+also recognizes existing applications and its persisted screening record.
+Regression tests now reload the DB in a separate SQLAlchemy session and confirm
+the same job is suppressed while a different employer can still receive its
+own draft.
+
+Gmail draft creation now uses a durable recovery intent. Before calling Gmail,
+the workflow commits the application/email attempt and a job-scoped
+`draft_attempt_key`; that opaque key is also placed in an
+`X-WCA-Draft-Attempt` MIME header. A partial unique DB index reserves that key
+for creating, uncertain, and confirmed attempts, preventing competing workers
+from committing separate active intents for the same job. Known pre-create
+failures move to `not_attempted`, allowing a safe later retry. A successful
+Gmail response and persisted ID are recorded as `confirmed`; timeouts, missing
+IDs, and other uncertain create outcomes remain `uncertain`/`deferred`.
+
+The custom MIME header is an app-defined reconciliation hint, not a Gmail
+idempotency feature, and its preservation by real Gmail has **not** been
+verified. Recovery scans a bounded, paginated set of drafts and adopts exactly
+one full-response match. Multiple matches, scan limits, malformed/partial
+responses, API failures, and no marker match all remain
+`recovery_required`; importantly, `not_found` means only “no matching marker in
+a complete scan,” not proof that Gmail did not create the draft. No such result
+permits automatic recreation. The BTP report likewise surfaces
+`draft_recovery_required`.
+
+Hermetic regression coverage exercises confirmed-draft suppression after DB
+reload, repeat BTP execution, API ambiguity, marker-based recovery after a
+simulated persistence failure, no-match fail-closed behavior, distinct
+employers, pagination, multiple matches, incomplete scans, partial responses,
+missing markers, initial-intent commit failure, a competing worker rejected by
+the database uniqueness guard, and the existing dry-run/draft/live
+authorization gates.
+Company-universe research now spends its bounded per-run company budget on due
+companies first, prioritizing companies without a qualifying contact and
+rotating toward never-researched or older candidates rather than repeatedly
+selecting only the highest-relevance company. Tests compare the previous
+relevance-first selection with the updated policy on the same synthetic
+fixture: the previous policy used **0 research requests**, found **0 new
+companies**, and qualified **0 contacts**; the updated policy used **1
+request**, researched **1 company for the first time**, qualified **1
+contact**, and repeated **0 companies**. A four-run budget-one fixture
+researched **3 unique companies**, all **3 for the first time**, then revisited
+the oldest candidate once; total requests were **4** (never more than the
+per-run budget). A separate quality fixture retained **2 qualifying contacts
+and 1 outreach-ready company**, prioritized a no-contact candidate over a
+higher-relevance stale-contact candidate, and excluded a below-threshold
+candidate.
+
+No production workflow or Gmail mutation was run for these measurements; they
+are deterministic fixture results, not expected production outcomes.
+Final safety-review validation: targeted recovery/discovery tests **142 passed,
+1 skipped**; full suite **348 passed, 1 skipped**; changed-file Ruff and
+`git diff --check` passed. Gmail custom-header preservation and duplicate
+suppression remain unverified against production; if the API does not preserve
+the marker, recovery fails closed for manual reconciliation rather than
+blindly retrying.
 
 ## Recruitment contact qualification fix
 

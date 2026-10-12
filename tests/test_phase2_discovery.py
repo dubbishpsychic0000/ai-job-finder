@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from datetime import datetime, timedelta, timezone
 
 from app import memory as mem
 from app.config import ROOT_DIR, AgentConfig, load_yaml
@@ -12,11 +13,12 @@ from app.discovery.company_universe import (
     canonical_company_key,
 )
 from app.discovery.website_researcher import ResearchResult
-from app.models import Company, Discovery
+from app.models import Company, Discovery, Evidence
 from app.workflows import btp_outreach
 from app.workflows.btp_outreach import run_btp_outreach
 from app.workflows.company_universe import (
     _interleave_candidates,
+    _research_is_fresh,
     run_company_universe_discovery,
 )
 
@@ -80,6 +82,218 @@ def test_company_universe_workflow_accepts_no_vacancy_candidate(db, config):
     report = asyncio.run(run_company_universe_discovery(db, config, candidates=candidates))
     assert report.stored == 1
     assert mem.store.get_discoveries(db, kind="COMPANY")[0].kind == "COMPANY"
+
+
+def _seed_researched_company(
+    db, candidate, *, days_ago: int, recruitment_email: str = "",
+):
+    OpenCompanyDiscovery(fetch_json=lambda *_args, **_kwargs: {}).persist(
+        db, [candidate],
+    )
+    company = db.query(Company).filter_by(
+        official_domain=candidate.website.removeprefix("https://"),
+    ).one()
+    company.last_researched_at = datetime.now(timezone.utc) - timedelta(
+        days=days_ago,
+    )
+    source_url = f"{candidate.website}/careers"
+    db.add(Evidence(
+        company_id=company.id,
+        source_url=source_url,
+        source_type="careers" if recruitment_email else "website",
+        page_title="Careers",
+        field_name="recruitment_email" if recruitment_email else "relevant_page",
+        extracted_value=recruitment_email or source_url,
+        snippet="Recruitment contact published on official company website.",
+    ))
+    db.flush()
+    return company
+
+
+def test_company_universe_improves_over_previous_research_selection(db, config):
+    config.discovery["company_universe_research_limit"] = 1
+    previously_researched = CompanyCandidate(
+        name="High Relevance", industry="construction", website="https://high.ma",
+        source="fixture", reason="construction employer", relevance_score=100,
+    )
+    never_researched = CompanyCandidate(
+        name="New Candidate", industry="construction", website="https://new.ma",
+        source="fixture", reason="construction employer", relevance_score=50,
+    )
+    incumbent = _seed_researched_company(
+        db, previously_researched, days_ago=1,
+    )
+    candidates = [previously_researched, never_researched]
+
+    # The previous relevance-first queue spent its only slot on the fresh
+    # incumbent, then skipped it without considering the new candidate.
+    legacy_ranked = sorted(
+        candidates,
+        key=lambda candidate: (
+            not bool(candidate.website),
+            -candidate.relevance_score,
+            candidate.name.casefold(),
+        ),
+    )
+    incumbent_evidence = db.query(Evidence).filter_by(
+        company_id=incumbent.id,
+    ).all()
+    legacy_calls = [] if _research_is_fresh(
+        incumbent, incumbent_evidence, datetime.now(timezone.utc),
+    ) else legacy_ranked[:1]
+    assert legacy_ranked[0] is previously_researched
+    assert legacy_calls == []
+
+    researched = []
+
+    class FakeResearcher:
+        def research_and_apply(self, _website, *, company_id, official_domain):
+            researched.append(official_domain)
+            db.add(Evidence(
+                company_id=company_id,
+                source_url=f"https://{official_domain}/careers",
+                source_type="careers",
+                field_name="recruitment_email",
+                extracted_value=f"careers@{official_domain}",
+                snippet="Recruitment contact published on official careers page.",
+            ))
+            db.flush()
+            return ResearchResult(
+                official_domain=official_domain,
+                visited=[f"https://{official_domain}/"],
+            )
+
+    researcher = FakeResearcher()
+    report = asyncio.run(run_company_universe_discovery(
+        db, config, candidates=candidates, researcher=researcher,
+    ))
+
+    assert researched == ["new.ma"]
+    assert report.researched == 1
+    assert report.companies_with_qualifying_contacts == 1
+    assert report.outreach_ready_companies == 1
+    assert len(set(researched)) == 1
+
+
+def test_company_universe_rotates_within_budget_without_starving_candidates(
+    db, config,
+):
+    config.discovery["company_universe_research_limit"] = 1
+    candidates = [
+        CompanyCandidate(
+            name=name,
+            industry="construction",
+            website=f"https://{domain}.ma",
+            source="fixture",
+            reason="construction employer",
+            relevance_score=score,
+        )
+        for name, domain, score in (
+            ("Alpha", "alpha", 100),
+            ("Bravo", "bravo", 90),
+            ("Charlie", "charlie", 80),
+        )
+    ]
+    researched = []
+
+    class FakeResearcher:
+        def research_and_apply(self, _website, *, company_id, official_domain):
+            researched.append(official_domain)
+            source_url = f"https://{official_domain}/about"
+            db.add(Evidence(
+                company_id=company_id,
+                source_url=source_url,
+                source_type="website",
+                field_name="relevant_page",
+                extracted_value=source_url,
+            ))
+            db.flush()
+            return ResearchResult(
+                official_domain=official_domain, visited=[source_url],
+            )
+
+    researcher = FakeResearcher()
+    per_run_counts = []
+    for _ in range(4):
+        before = len(researched)
+        report = asyncio.run(run_company_universe_discovery(
+            db, config, candidates=candidates, researcher=researcher,
+        ))
+        per_run_counts.append(len(researched) - before)
+        assert report.researched <= 1
+
+    assert researched == ["alpha.ma", "bravo.ma", "charlie.ma", "alpha.ma"]
+    assert per_run_counts == [1, 1, 1, 1]
+    assert len(set(researched[:3])) == 3
+    assert researched[3] in researched[:3]
+
+
+def test_company_universe_prioritizes_missing_contacts_and_preserves_qualification(
+    db, config,
+):
+    config.discovery.update({
+        "company_universe_research_limit": 1,
+        "company_universe_min_relevance": 50,
+    })
+    no_contact = CompanyCandidate(
+        name="No Contact", industry="construction", website="https://no-contact.ma",
+        source="fixture", reason="construction employer", relevance_score=60,
+    )
+    stale_contact = CompanyCandidate(
+        name="Stale Contact", industry="construction",
+        website="https://stale-contact.ma", source="fixture",
+        reason="construction employer", relevance_score=100,
+    )
+    fresh_contact = CompanyCandidate(
+        name="Fresh Contact", industry="construction",
+        website="https://fresh-contact.ma", source="fixture",
+        reason="construction employer", relevance_score=90,
+    )
+    below_relevance = CompanyCandidate(
+        name="Below Relevance", industry="construction",
+        website="https://below-relevance.ma", source="fixture",
+        reason="construction employer", relevance_score=10,
+    )
+    _seed_researched_company(db, no_contact, days_ago=5)
+    _seed_researched_company(
+        db, stale_contact, days_ago=35,
+        recruitment_email="careers@stale-contact.ma",
+    )
+    _seed_researched_company(
+        db, fresh_contact, days_ago=5,
+        recruitment_email="careers@fresh-contact.ma",
+    )
+    researched = []
+
+    class FakeResearcher:
+        def research_and_apply(self, _website, *, company_id, official_domain):
+            researched.append(official_domain)
+            source_url = f"https://{official_domain}/about"
+            db.add(Evidence(
+                company_id=company_id,
+                source_url=source_url,
+                source_type="website",
+                field_name="relevant_page",
+                extracted_value=source_url,
+            ))
+            db.flush()
+            return ResearchResult(
+                official_domain=official_domain, visited=[source_url],
+            )
+
+    report = asyncio.run(run_company_universe_discovery(
+        db, config,
+        candidates=[
+            no_contact, stale_contact, fresh_contact, below_relevance,
+        ],
+        researcher=FakeResearcher(),
+    ))
+
+    assert researched == ["no-contact.ma"]
+    assert report.researched == 1
+    assert report.companies_discovered == 3
+    assert report.companies_with_qualifying_contacts == 2
+    assert report.outreach_ready_companies == 1
 
 
 def test_company_universe_does_not_promote_directory_or_document_urls():

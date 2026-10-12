@@ -14,6 +14,7 @@ Nothing is ever silently dropped: every communication and its outcome is stored.
 """
 from __future__ import annotations
 
+import hashlib
 import logging
 from datetime import timedelta
 from pathlib import Path
@@ -25,7 +26,7 @@ from app.agents.communication_agent import CommunicationAgent
 from app.config import AgentConfig, CandidateProfile, RunnerSettings
 from app.email import provider
 from app.email.safety_gate import validate
-from app.models import utcnow
+from app.models import Application, Email, utcnow
 
 logger = logging.getLogger(__name__)
 
@@ -101,6 +102,13 @@ class ApplicationEngine:
             return self._record_disabled(
                 job, decision, action, score, contact_email,
                 reason="global emergency pause is ON — outbound halted")
+
+        if mode == "draft" and self.settings.email_provider == "gmail":
+            recovery = reconcile_pending_draft(
+                self.session, self.settings, job.id,
+            )
+            if recovery is not None:
+                return recovery
 
         # dry_run mode is fully local and safe even with ENABLE_EMAIL=false;
         # any Gmail interaction (draft/live) requires the master switch.
@@ -226,11 +234,36 @@ class ApplicationEngine:
     def _finalize_draft(self, job, app, email, contact_email, subject, body,
                         attachment, score) -> dict:
         """Create a Gmail Draft. Never sends — a human reviews and Sends it."""
+        email.draft_attempt_key = hashlib.sha256(
+            f"wca-gmail-draft-job:{job.id}".encode()
+        ).hexdigest()
+        email.delivery_state = "creating"
+        email.status = "creating"
+        app.status = "deferred"
+        mem.store.record_event(
+            self.session, "action", "Gmail draft intent persisted",
+            "info", {"job_id": job.id, "application_id": app.id, "email_id": email.id},
+        )
+        # Commit the recovery marker before the external API call. If the Gmail
+        # result or the subsequent DB commit is lost, the next run can reconcile
+        # by the marker and must not issue another create request blindly.
+        try:
+            self.session.commit()
+        except Exception as exc:
+            self.session.rollback()
+            logger.error(
+                "Gmail draft intent persistence failed; Gmail was not called (%s)",
+                type(exc).__name__,
+            )
+            raise RuntimeError(
+                "Gmail draft intent could not be persisted; no draft was attempted"
+            ) from None
         ok, draft_id, error = provider.create_draft(
             self.settings, to=contact_email, subject=subject, body=body,
-            attachments=[attachment])
+            attachments=[attachment], attempt_key=email.draft_attempt_key)
         if ok:
             email.status = "drafted"
+            email.delivery_state = "confirmed"
             email.draft_id = draft_id or ""
             email.sent_at = utcnow()
             app.status = "drafted"
@@ -242,15 +275,26 @@ class ApplicationEngine:
             mem.store.upsert_contact(self.session, contact_email, source="gmail_draft",
                                      company_id=job.company_id)
             mem.store.record_event(self.session, "action",
-                                   f"draft created for {contact_email}", "info",
+                                   "Gmail draft created", "info",
                                    {"job_id": job.id, "email_id": email.id, "draft_id": draft_id})
         else:
-            email.status = "failed"
-            email.error = error
-            app.status = (
-                "failed" if error == provider.GMAIL_REAUTH_REQUIRED else "deferred"
+            uncertain = error == provider.GMAIL_DRAFT_OUTCOME_UNCERTAIN
+            not_attempted = (
+                error == provider.GMAIL_REAUTH_REQUIRED
+                or error.startswith(provider.GMAIL_DRAFT_NOT_ATTEMPTED)
             )
-            mem.store.record_event(self.session, "action", f"draft creation failed: {error}",
+            email.status = "uncertain" if uncertain else "failed"
+            email.delivery_state = (
+                "uncertain" if uncertain else ("not_attempted" if not_attempted else "uncertain")
+            )
+            email.error = error
+            app.status = "failed" if not_attempted else "deferred"
+            event_text = (
+                "Gmail draft outcome uncertain; recovery required"
+                if uncertain or not not_attempted
+                else "Gmail draft not attempted"
+            )
+            mem.store.record_event(self.session, "action", event_text,
                                    "error", {"job_id": job.id})
         return {"sent": False, "status": app.status, "error": error if not ok else "",
                 "application_id": app.id, "email_id": email.id, "draft_id": email.draft_id}
@@ -300,3 +344,65 @@ class ApplicationEngine:
         mem.store.record_event(self.session, "action", reason, "info", {"job_id": job.id})
         return {"sent": False, "status": "blocked", "reason": reason,
                 "application_id": app.id}
+
+
+def reconcile_pending_draft(session: Session, settings: RunnerSettings, job_id: int) -> dict | None:
+    """Recover or fail closed on a draft create whose result was not persisted."""
+    pending = session.query(Application, Email).join(
+        Email, Email.application_id == Application.id,
+    ).filter(
+        Application.job_id == job_id,
+        Application.status == "deferred",
+        Email.mode == "draft",
+        Email.delivery_state.in_(("creating", "uncertain")),
+    ).order_by(Email.id).all()
+    if not pending:
+        return None
+    if len(pending) != 1 or not pending[0][1].draft_attempt_key:
+        return {
+            "sent": False,
+            "status": "recovery_required",
+            "reason": "multiple or unmarked Gmail draft attempts require manual reconciliation",
+        }
+
+    app, email = pending[0]
+    result = provider.reconcile_draft(settings, email.draft_attempt_key)
+    if result.status != "found":
+        logger.warning(
+            "Gmail draft recovery requires follow-up (%s); no create retry will run",
+            result.status,
+        )
+        return {
+            "sent": False,
+            "status": "recovery_required",
+            "reason": f"Gmail draft reconciliation: {result.status}",
+            "application_id": app.id,
+            "email_id": email.id,
+        }
+
+    email.status = "drafted"
+    email.delivery_state = "confirmed"
+    email.draft_id = result.draft_id
+    email.sent_at = utcnow()
+    app.status = "drafted"
+    app.sent_at = email.sent_at
+    job = app.job
+    if job is not None:
+        job.status = "acted"
+        mem.store.upsert_contact(
+            session, email.to_addr, source="gmail_draft_reconciled",
+            company_id=job.company_id,
+        )
+    mem.store.record_event(
+        session, "action", "Gmail draft recovered by attempt marker", "info",
+        {"job_id": job_id, "application_id": app.id, "email_id": email.id},
+    )
+    session.commit()
+    return {
+        "sent": False,
+        "status": "drafted",
+        "draft_id": email.draft_id,
+        "application_id": app.id,
+        "email_id": email.id,
+        "recovered": True,
+    }

@@ -7,13 +7,19 @@ the transport, duplicates are rejected, and OAuth secrets never leak into logs.
 from __future__ import annotations
 
 import asyncio
+import base64
+import hashlib
 import json
 import logging
 import sys
 from datetime import datetime, timedelta, timezone
+from email import policy
+from email.parser import BytesParser
 from types import SimpleNamespace
 
 import pytest
+from sqlalchemy.exc import IntegrityError
+from sqlalchemy.orm import sessionmaker
 
 from app import models
 from app.agents.communication_agent import CommunicationAgent
@@ -252,7 +258,12 @@ def test_gmail_transport_returns_message_id_on_success(settings, monkeypatch):
 
 @pytest.mark.parametrize(
     ("draft_response", "expected_ok", "expected_id"),
-    [({"id": "draft-api-123"}, True, "draft-api-123"), ({}, False, "")],
+    [
+        ({"id": "draft-api-123"}, True, "draft-api-123"),
+        ({}, False, ""),
+        (None, False, ""),
+        ([], False, ""),
+    ],
 )
 def test_gmail_draft_transport_requires_api_draft_id(
     settings, monkeypatch, draft_response, expected_ok, expected_id
@@ -276,7 +287,10 @@ def test_gmail_draft_transport_requires_api_draft_id(
             return _FakeUsers()
 
     monkeypatch.setattr(gmail_oauth, "authenticated_service", lambda _settings: _FakeService())
-    monkeypatch.setattr(provider_mod, "_build_mime", lambda *_args: "encoded-message")
+    monkeypatch.setattr(
+        provider_mod, "_build_mime",
+        lambda *_args, **_kwargs: "encoded-message",
+    )
 
     ok, draft_id, error = provider_mod.create_draft(
         settings, to="jobs@employer.example", subject="Application", body="Hello",
@@ -285,7 +299,201 @@ def test_gmail_draft_transport_requires_api_draft_id(
     assert ok is expected_ok
     assert draft_id == expected_id
     if not expected_ok:
-        assert "did not contain a draft ID" in error
+        assert error == provider_mod.GMAIL_DRAFT_OUTCOME_UNCERTAIN
+
+
+def test_draft_mime_contains_reconciliation_marker():
+    encoded = provider_mod._build_mime(
+        "jobs@employer.example", "Application", "Hello", [],
+        draft_attempt_key="stable-attempt-key",
+    )
+    message = BytesParser(policy=policy.default).parsebytes(
+        base64.urlsafe_b64decode(encoded + "===")
+    )
+
+    assert message["X-WCA-Draft-Attempt"] == "stable-attempt-key"
+
+
+def test_gmail_draft_reconciliation_matches_only_exact_attempt_marker(
+    settings, monkeypatch,
+):
+    settings = _settings(settings, email_mode="draft")
+
+    class _Drafts:
+        def list(self, **_kwargs):
+            return SimpleNamespace(execute=lambda: {"drafts": [{"id": "gmail-id"}]})
+
+        def get(self, **_kwargs):
+            return SimpleNamespace(execute=lambda: {
+                "id": "gmail-id",
+                "message": {
+                    "payload": {
+                        "headers": [
+                            {"name": "X-WCA-Draft-Attempt", "value": "expected-key"},
+                        ],
+                    },
+                },
+            })
+
+    class _Users:
+        def drafts(self):
+            return _Drafts()
+
+    monkeypatch.setattr(
+        gmail_oauth, "authenticated_service",
+        lambda _settings: SimpleNamespace(users=lambda: _Users()),
+    )
+
+    result = provider_mod.reconcile_draft(settings, "expected-key")
+
+    assert result == provider_mod.DraftReconciliation(
+        "found", draft_id="gmail-id", matches=1,
+    )
+
+
+def _mock_reconciliation_service(monkeypatch, settings, pages, messages):
+    class _Request:
+        def __init__(self, response):
+            self.response = response
+
+        def execute(self):
+            if isinstance(self.response, Exception):
+                raise self.response
+            return self.response
+
+    class _Drafts:
+        def list(self, *, pageToken=None, **_kwargs):
+            response = pages.get(pageToken, {})
+            return _Request(response)
+
+        def get(self, *, id, **_kwargs):
+            return _Request(messages.get(id, {}))
+
+    class _Users:
+        def drafts(self):
+            return _Drafts()
+
+    monkeypatch.setattr(
+        gmail_oauth, "authenticated_service",
+        lambda _settings: SimpleNamespace(users=lambda: _Users()),
+    )
+
+
+def _draft_message(marker=None, *, draft_id="gmail-id"):
+    headers = [] if marker is None else [
+        {"name": "X-WCA-Draft-Attempt", "value": marker},
+    ]
+    return {
+        "id": draft_id,
+        "message": {"payload": {"headers": headers}},
+    }
+
+
+def test_reconciliation_paginates_before_confirming_a_marker(settings, monkeypatch):
+    settings = _settings(settings, email_mode="draft")
+    pages = {
+        None: {"drafts": [{"id": "first"}], "nextPageToken": "page-2"},
+        "page-2": {"drafts": [{"id": "matching"}]},
+    }
+    messages = {
+        "first": _draft_message("other-attempt", draft_id="first"),
+        "matching": _draft_message("expected-key", draft_id="matching"),
+    }
+    _mock_reconciliation_service(monkeypatch, settings, pages, messages)
+
+    result = provider_mod.reconcile_draft(settings, "expected-key")
+
+    assert result == provider_mod.DraftReconciliation(
+        "found", draft_id="matching", matches=1,
+    )
+
+
+def test_reconciliation_multiple_matches_remains_ambiguous(settings, monkeypatch):
+    settings = _settings(settings, email_mode="draft")
+    pages = {None: {"drafts": [{"id": "one"}, {"id": "two"}]}}
+    messages = {
+        "one": _draft_message("expected-key", draft_id="one"),
+        "two": _draft_message("expected-key", draft_id="two"),
+    }
+    _mock_reconciliation_service(monkeypatch, settings, pages, messages)
+
+    result = provider_mod.reconcile_draft(settings, "expected-key")
+
+    assert result == provider_mod.DraftReconciliation("multiple", matches=2)
+
+
+def test_reconciliation_limit_with_more_pages_is_incomplete(settings, monkeypatch):
+    settings = _settings(settings, email_mode="draft")
+    pages = {
+        None: {"drafts": [{"id": "one"}], "nextPageToken": "page-2"},
+    }
+    messages = {"one": _draft_message("other-attempt", draft_id="one")}
+    _mock_reconciliation_service(monkeypatch, settings, pages, messages)
+
+    result = provider_mod.reconcile_draft(
+        settings, "expected-key", max_drafts=1,
+    )
+
+    assert result == provider_mod.DraftReconciliation("incomplete")
+
+
+@pytest.mark.parametrize(
+    ("pages", "messages"),
+    [
+        ({None: RuntimeError("timeout")}, {}),
+        ({None: []}, {}),
+        ({None: {"nextPageToken": "page-2"}}, {}),
+        ({None: {"drafts": [], "nextPageToken": 123}}, {}),
+        ({None: {"drafts": [{"id": ""}]}}, {}),
+        ({None: {"drafts": [{"id": "one"}]}}, {"one": {"id": "one"}}),
+        (
+            {None: {"drafts": [{"id": "one"}]}},
+            {"one": {"id": "one", "message": {"payload": {}}}},
+        ),
+    ],
+)
+def test_reconciliation_partial_or_unavailable_response_is_inconclusive(
+    settings, monkeypatch, pages, messages,
+):
+    settings = _settings(settings, email_mode="draft")
+    _mock_reconciliation_service(monkeypatch, settings, pages, messages)
+
+    result = provider_mod.reconcile_draft(settings, "expected-key")
+
+    assert result.status == "unavailable"
+
+
+def test_missing_custom_marker_is_not_treated_as_proof_of_no_draft(
+    settings, monkeypatch,
+):
+    settings = _settings(settings, email_mode="draft")
+    pages = {None: {"drafts": [{"id": "draft-without-marker"}]}}
+    messages = {
+        "draft-without-marker": _draft_message(
+            draft_id="draft-without-marker",
+        ),
+    }
+    _mock_reconciliation_service(monkeypatch, settings, pages, messages)
+
+    result = provider_mod.reconcile_draft(settings, "expected-key")
+
+    # Gmail's retention of app-defined headers is not established here.
+    # A complete scan without one is only "no marker match"; service recovery
+    # must still fail closed instead of interpreting it as permission to retry.
+    assert result == provider_mod.DraftReconciliation("not_found")
+
+
+def test_reconciliation_repeated_page_token_is_incomplete(settings, monkeypatch):
+    settings = _settings(settings, email_mode="draft")
+    pages = {
+        None: {"drafts": [], "nextPageToken": "repeat"},
+        "repeat": {"drafts": [], "nextPageToken": "repeat"},
+    }
+    _mock_reconciliation_service(monkeypatch, settings, pages, {})
+
+    result = provider_mod.reconcile_draft(settings, "expected-key")
+
+    assert result == provider_mod.DraftReconciliation("incomplete")
 
 
 def test_gmail_draft_authentication_failure_is_safe_to_retry(settings, monkeypatch, caplog):
@@ -369,6 +577,312 @@ def test_rejected_gmail_auth_failure_does_not_block_retry(
     assert [app.status for app in db.query(models.Application).order_by(
         models.Application.id
     )] == ["failed", "drafted"]
+
+
+def test_confirmed_draft_blocks_second_process_after_persisted_reload(
+    db, config, profile, settings, monkeypatch,
+):
+    settings = _settings(settings, email_mode="draft")
+    created = []
+
+    def create_draft(_settings, *, attempt_key, **_kwargs):
+        created.append(attempt_key)
+        return True, "gmail-draft-opaque-123", ""
+
+    monkeypatch.setattr(provider_mod, "create_draft", create_draft)
+    monkeypatch.setattr("app.scheduler.control.is_paused", lambda: False)
+    job = _job(db)
+    decision = _decision(db, job)
+    first = asyncio.run(_engine(
+        db, config, profile, settings,
+        _draft_communicator("Bonjour, je souhaite soumettre ma candidature."),
+    ).run(job, decision, "APPLY", job.contact_email, "fr"))
+    assert first["status"] == "drafted"
+    db.commit()
+
+    reloaded = sessionmaker(bind=db.get_bind(), expire_on_commit=False)()
+    try:
+        persisted_job = reloaded.get(models.Job, job.id)
+        persisted_decision = reloaded.get(models.Decision, decision.id)
+        second = asyncio.run(_engine(
+            reloaded, config, profile, settings,
+            _draft_communicator("Bonjour, je souhaite soumettre ma candidature."),
+        ).run(
+            persisted_job, persisted_decision, "APPLY",
+            persisted_job.contact_email, "fr",
+        ))
+        assert second["status"] == "blocked"
+        assert any("already applied" in reason for reason in second["report"])
+        assert len(created) == 1
+        assert created[0]
+        assert reloaded.query(models.Email).filter(
+            models.Email.draft_id == "gmail-draft-opaque-123"
+        ).count() == 1
+    finally:
+        reloaded.close()
+
+
+def test_distinct_companies_can_each_receive_a_draft(
+    db, config, profile, settings, monkeypatch,
+):
+    settings = _settings(settings, email_mode="draft")
+    monkeypatch.setattr(
+        "app.email.service.validate",
+        lambda **_kwargs: SimpleNamespace(allowed=True, reasons=[], checks={}),
+    )
+    create_calls = []
+    monkeypatch.setattr(
+        provider_mod, "create_draft",
+        lambda _settings, *, to, **_kwargs: (
+            create_calls.append(to) or (True, f"draft-{len(create_calls)}", "")
+        ),
+    )
+    monkeypatch.setattr("app.scheduler.control.is_paused", lambda: False)
+    first_job = _job(db, email="jobs@colas.example")
+    first_decision = _decision(db, first_job)
+    other_company = get_or_create_company(db, "Other Employer")
+    second_job = models.Job(
+        source="static_files",
+        external_id="other-job",
+        dedup_key="hash:other-job",
+        title="Project Engineer",
+        company_id=other_company.id,
+        location="Lyon, France",
+        country="France",
+        description="civil engineering",
+        url="https://other.example/jobs/1",
+        posted_at=datetime.now(timezone.utc) - timedelta(days=2),
+        contact_email="jobs@other.example",
+        status="analyzed",
+    )
+    db.add(second_job)
+    db.flush()
+    second_decision = _decision(db, second_job)
+    communicator = _draft_communicator("Je vous adresse ma candidature.")
+
+    first = asyncio.run(_engine(
+        db, config, profile, settings, communicator,
+    ).run(first_job, first_decision, "APPLY", first_job.contact_email, "fr"))
+    second = asyncio.run(_engine(
+        db, config, profile, settings, communicator,
+    ).run(second_job, second_decision, "APPLY", second_job.contact_email, "fr"))
+
+    assert first["status"] == second["status"] == "drafted"
+    assert create_calls == ["jobs@colas.example", "jobs@other.example"]
+
+
+@pytest.mark.parametrize(
+    "reconciliation_status",
+    ["not_found", "multiple", "incomplete", "unavailable"],
+)
+def test_uncertain_gmail_outcome_is_reconciled_not_recreated(
+    db, config, profile, settings, monkeypatch, reconciliation_status,
+):
+    settings = _settings(settings, email_mode="draft")
+    monkeypatch.setattr(
+        "app.email.service.validate",
+        lambda **_kwargs: SimpleNamespace(allowed=True, reasons=[], checks={}),
+    )
+    create_calls = []
+    monkeypatch.setattr(
+        provider_mod, "create_draft",
+        lambda *_args, **_kwargs: (
+            create_calls.append("attempt")
+            or (False, "", provider_mod.GMAIL_DRAFT_OUTCOME_UNCERTAIN)
+        ),
+    )
+    job = _job(db)
+    decision = _decision(db, job)
+    first = asyncio.run(_engine(
+        db, config, profile, settings,
+        _draft_communicator("Je vous adresse ma candidature."),
+    ).run(job, decision, "APPLY", job.contact_email, "fr"))
+    assert first["status"] == "deferred"
+    assert db.query(models.Email).one().delivery_state == "uncertain"
+    db.commit()
+
+    reloaded = sessionmaker(bind=db.get_bind(), expire_on_commit=False)()
+    try:
+        monkeypatch.setattr(
+            provider_mod, "reconcile_draft",
+            lambda *_args, **_kwargs: provider_mod.DraftReconciliation(
+                reconciliation_status,
+            ),
+        )
+        persisted_job = reloaded.get(models.Job, job.id)
+        persisted_decision = reloaded.get(models.Decision, decision.id)
+        retry = asyncio.run(_engine(
+            reloaded, config, profile, settings,
+            _draft_communicator("Je vous adresse ma candidature."),
+        ).run(
+            persisted_job, persisted_decision, "APPLY",
+            persisted_job.contact_email, "fr",
+        ))
+        assert retry["status"] == "recovery_required"
+        assert create_calls == ["attempt"]
+        assert reloaded.query(models.Application).filter_by(
+            status="deferred"
+        ).count() == 1
+    finally:
+        reloaded.close()
+
+
+def test_initial_intent_commit_failure_never_calls_gmail(
+    db, config, profile, settings, monkeypatch,
+):
+    settings = _settings(settings, email_mode="draft")
+    monkeypatch.setattr(
+        "app.email.service.validate",
+        lambda **_kwargs: SimpleNamespace(allowed=True, reasons=[], checks={}),
+    )
+    job = _job(db)
+    decision = _decision(db, job)
+    create_calls = []
+    monkeypatch.setattr(
+        provider_mod, "create_draft",
+        lambda *_args, **_kwargs: create_calls.append("called"),
+    )
+    monkeypatch.setattr(
+        db, "commit", lambda: (_ for _ in ()).throw(
+            RuntimeError("intent persistence failed"),
+        ),
+    )
+
+    with pytest.raises(
+        RuntimeError,
+        match="intent could not be persisted; no draft was attempted",
+    ):
+        asyncio.run(_engine(
+            db, config, profile, settings,
+            _draft_communicator("Je vous adresse ma candidature."),
+        ).run(job, decision, "APPLY", job.contact_email, "fr"))
+
+    assert create_calls == []
+    db.rollback()
+    assert db.query(models.Email).count() == 0
+
+
+def test_job_scoped_unique_intent_blocks_competing_worker_before_create(
+    db, config, profile, settings, monkeypatch,
+):
+    settings = _settings(settings, email_mode="draft")
+    monkeypatch.setattr(
+        "app.email.service.validate",
+        lambda **_kwargs: SimpleNamespace(allowed=True, reasons=[], checks={}),
+    )
+    monkeypatch.setattr("app.scheduler.control.is_paused", lambda: False)
+    job = _job(db)
+    decision = _decision(db, job)
+    create_calls = []
+    monkeypatch.setattr(
+        provider_mod, "create_draft",
+        lambda *_args, **_kwargs: (
+            create_calls.append("create") or (True, "draft-one", "")
+        ),
+    )
+    result = asyncio.run(_engine(
+        db, config, profile, settings,
+        _draft_communicator("Je vous adresse ma candidature."),
+    ).run(job, decision, "APPLY", job.contact_email, "fr"))
+    assert result["status"] == "drafted"
+    db.commit()
+
+    competing = sessionmaker(bind=db.get_bind(), expire_on_commit=False)()
+    try:
+        competing_job = competing.get(models.Job, job.id)
+        competing_decision = competing.get(models.Decision, decision.id)
+        with pytest.raises(IntegrityError):
+            asyncio.run(_engine(
+                competing, config, profile, settings,
+                _draft_communicator("Je vous adresse ma candidature."),
+            ).run(
+                competing_job, competing_decision, "APPLY",
+                competing_job.contact_email, "fr",
+            ))
+        competing.rollback()
+
+        expected_key = hashlib.sha256(
+            f"wca-gmail-draft-job:{job.id}".encode()
+        ).hexdigest()
+        assert db.query(models.Email).filter_by(
+            draft_attempt_key=expected_key,
+        ).count() == 1
+        assert create_calls == ["create"]
+    finally:
+        competing.close()
+
+
+def test_gmail_created_draft_is_recovered_if_final_database_commit_fails(
+    db, config, profile, settings, monkeypatch,
+):
+    settings = _settings(settings, email_mode="draft")
+    monkeypatch.setattr(
+        "app.email.service.validate",
+        lambda **_kwargs: SimpleNamespace(allowed=True, reasons=[], checks={}),
+    )
+    create_calls = []
+    monkeypatch.setattr(
+        provider_mod, "create_draft",
+        lambda *_args, **_kwargs: (
+            create_calls.append("created")
+            or (True, "gmail-draft-after-db-error", "")
+        ),
+    )
+    job = _job(db)
+    decision = _decision(db, job)
+    original_commit = db.commit
+    commit_calls = 0
+
+    def fail_after_intent_commit():
+        nonlocal commit_calls
+        commit_calls += 1
+        if commit_calls == 1:
+            original_commit()
+            return
+        raise RuntimeError("simulated final persistence failure")
+
+    monkeypatch.setattr(db, "commit", fail_after_intent_commit)
+    first = asyncio.run(_engine(
+        db, config, profile, settings,
+        _draft_communicator("Je vous adresse ma candidature."),
+    ).run(job, decision, "APPLY", job.contact_email, "fr"))
+    assert first["draft_id"] == "gmail-draft-after-db-error"
+    with pytest.raises(RuntimeError, match="simulated final persistence failure"):
+        db.commit()
+    db.rollback()
+
+    reloaded = sessionmaker(bind=db.get_bind(), expire_on_commit=False)()
+    try:
+        monkeypatch.setattr(
+            provider_mod, "create_draft",
+            lambda *_args, **_kwargs: pytest.fail("must reconcile, not create again"),
+        )
+        monkeypatch.setattr(
+            provider_mod, "reconcile_draft",
+            lambda _settings, key: (
+                provider_mod.DraftReconciliation("found", "gmail-draft-after-db-error")
+                if key else provider_mod.DraftReconciliation("not_found")
+            ),
+        )
+        persisted_job = reloaded.get(models.Job, job.id)
+        persisted_decision = reloaded.get(models.Decision, decision.id)
+        recovered = asyncio.run(_engine(
+            reloaded, config, profile, settings,
+            _draft_communicator("Je vous adresse ma candidature."),
+        ).run(
+            persisted_job, persisted_decision, "APPLY",
+            persisted_job.contact_email, "fr",
+        ))
+        assert recovered["status"] == "drafted"
+        assert recovered["recovered"] is True
+        assert recovered["draft_id"] == "gmail-draft-after-db-error"
+        assert create_calls == ["created"]
+        assert reloaded.query(models.Email).filter_by(
+            delivery_state="confirmed",
+            draft_id="gmail-draft-after-db-error",
+        ).count() == 1
+    finally:
+        reloaded.close()
 
 
 # ---------------------------------------------------------------------------
@@ -486,7 +1000,7 @@ def test_draft_mode_creates_gmail_draft_and_records_id(db, config, profile, sett
     decision = _decision(db, job)
     settings = settings.model_copy(update={"enable_email": True, "email_mode": "draft"})
 
-    def fake_draft(settings_, *, to, subject, body, attachments):
+    def fake_draft(settings_, *, to, subject, body, attachments, attempt_key=""):
         return True, "draft-xyz-99", ""
 
     monkeypatch.setattr(provider_mod, "create_draft", fake_draft)
@@ -499,6 +1013,8 @@ def test_draft_mode_creates_gmail_draft_and_records_id(db, config, profile, sett
     assert email.status == "drafted"
     assert email.mode == "draft"
     assert email.draft_id == "draft-xyz-99"
+    assert email.delivery_state == "confirmed"
+    assert email.draft_attempt_key
     app = db.query(models.Application).one()
     assert app.status == "drafted"
     assert job.status == "acted"
@@ -563,7 +1079,7 @@ def test_live_mode_cap_overflow_keeps_gmail_draft(db, config, profile, settings,
 
     drafts = []
 
-    def fake_draft(settings_, *, to, subject, body, attachments):
+    def fake_draft(settings_, *, to, subject, body, attachments, attempt_key=""):
         drafts.append(to)
         return True, "draft-cap-1", ""
 

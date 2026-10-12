@@ -62,6 +62,17 @@ def _upgrade_schema() -> None:
             conn.execute(text("ALTER TABLE emails ADD COLUMN draft_id VARCHAR(255) DEFAULT ''"))
         if "mode" not in email_columns:
             conn.execute(text("ALTER TABLE emails ADD COLUMN mode VARCHAR(16) DEFAULT ''"))
+        if "draft_attempt_key" not in email_columns:
+            conn.execute(text("ALTER TABLE emails ADD COLUMN draft_attempt_key VARCHAR(64) DEFAULT ''"))
+        if "delivery_state" not in email_columns:
+            conn.execute(text(
+                "ALTER TABLE emails ADD COLUMN delivery_state VARCHAR(24) DEFAULT 'not_attempted'"
+            ))
+        conn.execute(text(
+            "CREATE UNIQUE INDEX IF NOT EXISTS uq_emails_draft_attempt_key "
+            "ON emails (draft_attempt_key) "
+            "WHERE draft_attempt_key <> '' AND delivery_state <> 'not_attempted'"
+        ))
 
     _add_missing_columns(insp, "jobs", {
         "source_type": "VARCHAR(32) DEFAULT ''",
