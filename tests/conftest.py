@@ -101,3 +101,10 @@ def _fake_cv(tmp_path, monkeypatch):
     monkeypatch.setattr(_email_service, "resolve_attachment", lambda cv_dir, lang: str(cv))
     fixture_profile = get_profile(ROOT / "tests" / "fixtures" / "profile.yaml")
     monkeypatch.setattr(_config, "get_profile", lambda: fixture_profile)
+    from app.workflows import btp_outreach
+
+    monkeypatch.setattr(
+        btp_outreach,
+        "SEED_FILE_PATH",
+        tmp_path / "no-default-company-seeds.csv",
+    )

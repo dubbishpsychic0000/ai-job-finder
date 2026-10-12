@@ -86,15 +86,15 @@ jobs:
           VAULT_URL: https://github.com/dubbishpsychic0000/ai-job-finder-vault.git
         run: |
           # The private vault intentionally contains personal candidate data.
-          # Preserve public, versioned V3 defaults when an older vault lacks them.
+          # Preserve public discovery defaults when an older vault lacks them.
           mkdir -p /tmp/candidate-defaults
-          cp candidate/search_vocabulary.yaml candidate/notification_config.yaml /tmp/candidate-defaults/
+          cp candidate/search_vocabulary.yaml candidate/notification_config.yaml candidate/btp_company_seeds.csv /tmp/candidate-defaults/
           rm -rf /tmp/vault
           git clone --depth 1 "https://x-access-token:${VAULT_TOKEN}@${VAULT_URL#https://}" /tmp/vault
           rm -rf candidate secrets
           mkdir -p candidate secrets data
           cp -a /tmp/vault/candidate/. ./candidate/
-          for file in search_vocabulary.yaml notification_config.yaml; do
+          for file in search_vocabulary.yaml notification_config.yaml btp_company_seeds.csv; do
             test -f "candidate/$file" || cp "/tmp/candidate-defaults/$file" "candidate/$file"
           done
           cp -a /tmp/vault/secrets/. ./secrets/

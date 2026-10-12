@@ -27,11 +27,13 @@ logger = logging.getLogger(__name__)
 USER_AGENT = "WorldwideCareerAgent/0.1 (+public website research; respects robots.txt)"
 PAGE_TERMS = {
     "careers": 100, "career": 100, "jobs": 95, "job": 90, "recruit": 95,
-    "recruitment": 100, "hr": 80, "human-resources": 80, "join-us": 95,
+    "recruitment": 100, "human-resources": 80, "join-us": 95,
     "join": 65, "contact": 75, "about": 45, "spontaneous": 100,
-    "candidature-spontanee": 100, "application": 90, "emploi": 95,
+    "candidature": 100, "postuler": 95,
+    "contactez": 85, "application": 90, "emploi": 95, "talent": 85,
 }
 EMAIL_LOCAL_TERMS = ("recruit", "recrut", "career", "emploi", "talent", "hr", "rh", "hiring", "jobs")
+MAX_SITEMAP_SEEDS = 40
 
 
 def extract_spontaneous_instruction(text: str) -> str:
@@ -64,6 +66,25 @@ def extract_spontaneous_instruction(text: str) -> str:
         match = pattern.search(text or "")
         if match:
             return re.sub(r"\s+", " ", match.group(0)).strip()[:500]
+    return ""
+
+
+def extract_application_instructions(text: str) -> str:
+    """Return an explicit CV/application submission instruction, not incidental prose."""
+    action = re.compile(
+        r"\b(?:send|submit|email|e-mail|apply|transmit|envoyez|adressez|"
+        r"transmettez|soumettez|veuillez envoyer|veuillez adresser)\b",
+        re.IGNORECASE,
+    )
+    application_subject = re.compile(
+        r"\b(?:cv|resume|résumé|curriculum vitae|application|candidature|"
+        r"poste souhaité|desired position|position of interest)\b",
+        re.IGNORECASE,
+    )
+    sentences = re.split(r"(?<=[.!?])\s+", re.sub(r"\s+", " ", text or ""))
+    for sentence in sentences:
+        if action.search(sentence) and application_subject.search(sentence):
+            return sentence.strip()[:800]
     return ""
 
 
@@ -165,11 +186,17 @@ class WebsiteResearcher:
         result = ResearchResult(official_domain=domain)
         if not start or not domain:
             return result
-        queue: list[tuple[int, str]] = [(self._priority(start), start)]
+        queue: list[tuple[int, str]] = [(130, start)]
         if discover_sitemaps:
-            for sitemap_url in self.discover_sitemap(start):
-                if same_site(sitemap_url, domain):
-                    queue.append((self._priority(sitemap_url), sitemap_url))
+            sitemap_urls = self.discover_sitemap(start)
+            sitemap_urls.sort(
+                key=lambda url: (self._priority(url), url.casefold()),
+                reverse=True,
+            )
+            for sitemap_url in sitemap_urls[:MAX_SITEMAP_SEEDS]:
+                priority = self._priority(sitemap_url)
+                if same_site(sitemap_url, domain) and priority >= 45:
+                    queue.append((priority, sitemap_url))
         now = datetime.now(timezone.utc)
         refresh_before = now.timestamp() - self.refresh_after_days * 86400
         saved = self._state.get(domain, {})
@@ -253,7 +280,17 @@ class WebsiteResearcher:
                     continue
                 if fact.source_type in {"careers", "recruitment", "spontaneous"} and not company.careers_url:
                     company.careers_url = fact.extracted_value
-                if fact.source_type in {"recruitment", "spontaneous"} and not company.recruitment_url:
+                has_submission_instruction = any(
+                    evidence.field_name in {
+                        "application_instructions", "spontaneous_application",
+                    }
+                    and evidence.source_url == fact.source_url
+                    for evidence in result.evidence
+                )
+                if (
+                    has_submission_instruction
+                    and not company.recruitment_url
+                ):
                     company.recruitment_url = fact.extracted_value
             company.last_checked_at = datetime.now(timezone.utc)
         if job:
@@ -277,15 +314,23 @@ class WebsiteResearcher:
     def _extract_page(self, result, soup, url, title, domain, company_id, job_id):
         self._current_title = title
         text = re.sub(r"\s+", " ", soup.get_text(" ", strip=True))
-        page_kind = self._page_type(url, text)
+        headings = soup.find_all(["h2", "h3"])
+        primary_heading = soup.find("h1") or (headings[0] if headings else None)
+        page_kind = self._page_type(
+            url,
+            title,
+            primary_heading.get_text(" ", strip=True) if primary_heading else "",
+        )
         site_name = soup.find("meta", attrs={"property": "og:site_name"})
         if site_name and site_name.get("content"):
             self._add(result, url, page_kind, "company_name", site_name["content"],
                       str(site_name["content"]), 85, "og_site_name", company_id, job_id)
-        heading = soup.find(["h1", "h2"])
-        if heading and heading.get_text(" ", strip=True):
-            self._add(result, url, page_kind, "job_title", heading.get_text(" ", strip=True)[:255],
-                      heading.get_text(" ", strip=True), 70, "page_heading", company_id, job_id)
+        job_headings = headings or ([primary_heading] if primary_heading else [])
+        for heading in job_headings:
+            value = heading.get_text(" ", strip=True)
+            if value:
+                self._add(result, url, page_kind, "job_title", value[:255],
+                          value, 70, "page_heading", company_id, job_id)
         for label, field_name in (("location", "location"), ("deadline", "deadline"),
                                   ("closing date", "deadline"), ("date limite", "deadline")):
             match = re.search(rf"{label}\s*[:\-]\s*([^|.;]{{2,120}})", text, re.I)
@@ -293,22 +338,57 @@ class WebsiteResearcher:
                 value = match.group(1).strip()
                 self._add(result, url, page_kind, field_name, value, self._snippet(text, value),
                           75, "labeled_page_field", company_id, job_id)
-        for email in dict.fromkeys(EMAIL_RE.findall(text)):
-            relationship, reason, confidence = classify_email(email, domain, host_domain(url))
+        instruction = extract_application_instructions(text)
+        spontaneous_instruction = extract_spontaneous_instruction(text)
+        if instruction:
+            self._add(
+                result, url, page_kind, "application_instructions", instruction,
+                instruction, 95, "explicit_application_submission_instruction",
+                company_id, job_id,
+            )
+        mailto_emails = [
+            email
+            for link in soup.select("a[href^='mailto:']")
+            for email in EMAIL_RE.findall(link.get("href", ""))
+        ]
+        for email in dict.fromkeys((*EMAIL_RE.findall(text), *mailto_emails)):
+            snippet = self._snippet(text, email)
+            relationship, reason, confidence = classify_email(
+                email, domain, host_domain(url),
+            )
+            if (
+                relationship == "third_party"
+                and instruction
+                and email.casefold() in instruction.casefold()
+                and urlparse(url).scheme == "https"
+                and same_site(url, domain)
+                and email.rsplit("@", 1)[-1] not in FREE_EMAIL_DOMAINS
+                and email.rsplit("@", 1)[-1] not in ATS_VENDOR_DOMAINS
+            ):
+                relationship = "official_alternate_recruitment_domain"
+                reason = "official_page_explicitly_publishes_alternate_recruitment_domain"
+                confidence = 95
             if relationship in {"company_recruitment", "company_general", "free_mail", "ats_vendor", "third_party"}:
                 field = "recruitment_email" if relationship == "company_recruitment" else "general_email"
-                self._add(result, url, page_kind, field, email, self._snippet(text, email),
+                self._add(result, url, page_kind, field, email, snippet,
                           confidence, reason, company_id, job_id, relationship)
+            elif relationship == "official_alternate_recruitment_domain":
+                self._add(
+                    result, url, page_kind, "recruitment_email", email, snippet,
+                    confidence, reason, company_id, job_id, relationship,
+                )
         canonical = soup.find("link", rel=lambda value: value and "canonical" in value)
         if canonical and canonical.get("href"):
             self._add(result, url, page_kind, "canonical_url", normalize_url(urljoin(url, canonical["href"])),
                       title or url, 80, "page_canonical", company_id, job_id)
         if page_kind in {"careers", "recruitment", "contact", "spontaneous"}:
             self._add(result, url, page_kind, "relevant_page", url, title or url, 90, "keyword_page", company_id, job_id)
-        instruction = extract_spontaneous_instruction(text)
-        if instruction:
-            self._add(result, url, page_kind, "spontaneous_application", instruction,
-                      instruction, 90, "explicit_spontaneous_instruction", company_id, job_id)
+        if spontaneous_instruction:
+            self._add(
+                result, url, page_kind, "spontaneous_application",
+                spontaneous_instruction, spontaneous_instruction, 90,
+                "explicit_spontaneous_instruction", company_id, job_id,
+            )
         for phrase, field in (("apply online", "application_method"), ("postuler en ligne", "application_method"),
                               ("submit your cv", "application_method"), ("submit application", "application_method")):
             if phrase in text.lower():
@@ -334,19 +414,31 @@ class WebsiteResearcher:
 
     @staticmethod
     def _priority(url: str, anchor: str = "") -> int:
-        value = f"{url} {anchor}".lower()
-        return max((score for term, score in PAGE_TERMS.items() if term in value), default=10)
+        value = f"{urlparse(url).path} {anchor}".casefold().replace("_", "-")
+        scores = []
+        for term, score in PAGE_TERMS.items():
+            if term == "hr":
+                if re.search(r"(?<![a-z])hr(?![a-z])", value):
+                    scores.append(score)
+            elif term in value:
+                scores.append(score)
+        return max(scores, default=10)
 
     @staticmethod
-    def _page_type(url: str, text: str) -> str:
-        value = f"{url} {text[:500]}".lower()
-        if "spontaneous" in value or "candidature spontan" in value:
+    def _page_type(url: str, title: str, heading: str = "") -> str:
+        value = f"{urlparse(url).path} {title} {heading}".casefold()
+        if any(term in value for term in (
+            "spontaneous", "candidature spontan", "unsolicited application",
+        )):
             return "spontaneous"
-        if any(term in value for term in ("recruit", "join us", "emploi")):
+        if any(term in value for term in (
+            "recruit", "recrut", "human resources", "talent acquisition",
+            "join us", "emploi",
+        )):
             return "recruitment"
         if any(term in value for term in ("career", "careers", "jobs", "vacancies")):
             return "careers"
-        if "contact" in value:
+        if any(term in value for term in ("contact", "contactez", "get in touch")):
             return "contact"
         return "website"
 

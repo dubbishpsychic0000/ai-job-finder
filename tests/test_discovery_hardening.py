@@ -133,6 +133,114 @@ def test_email_verification_requires_employer_domain():
     assert not unrelated_domain.verified
 
 
+def test_email_extraction_accepts_sentence_punctuation_after_public_address():
+    from app.discovery.email_verification import EMAIL_RE
+
+    assert EMAIL_RE.findall("Envoyez le CV à drh-contact@cimar.co.ma.") == [
+        "drh-contact@cimar.co.ma",
+    ]
+
+
+def test_alternate_employer_email_requires_same_page_instruction_evidence():
+    from app.discovery.website_researcher import EvidenceFact
+
+    service = EmailVerificationService()
+    address = "drh-contact@cimar.co.ma"
+    source_url = "https://www.cimentsdumaroc.com/fr/contacteznous"
+    publication = EvidenceFact(
+        source_url=source_url,
+        source_type="contact",
+        page_title="Contact",
+        field_name="recruitment_email",
+        extracted_value=address,
+        snippet=f"Envoyez votre CV pour le poste souhaité à {address}.",
+        domain_relationship="official_alternate_recruitment_domain",
+        confidence=95,
+        reason_code="official_page_explicitly_publishes_alternate_recruitment_domain",
+    )
+    instruction = EvidenceFact(
+        source_url=source_url,
+        source_type="contact",
+        page_title="Contact",
+        field_name="application_instructions",
+        extracted_value=f"Envoyez votre CV pour le poste souhaité à {address}.",
+        snippet=f"Envoyez votre CV pour le poste souhaité à {address}.",
+        confidence=95,
+    )
+
+    verified = service.verify(
+        address,
+        source_url=source_url,
+        source_type="company_career",
+        official=True,
+        employer_domain="cimentsdumaroc.com",
+        publication_evidence=publication,
+        application_instruction=instruction,
+    )
+    assert verified.verified
+    assert verified.verification_method == (
+        "official_page_published_alternate_recruitment_domain"
+    )
+
+    assert not service.verify(
+        address,
+        source_url=source_url,
+        source_type="company_career",
+        official=True,
+        employer_domain="cimentsdumaroc.com",
+    ).verified
+    mismatched_instruction = SimpleNamespace(
+        source_url="https://other.example/apply",
+        field_name="application_instructions",
+        extracted_value=instruction.extracted_value,
+        snippet=instruction.snippet,
+    )
+    assert not service.verify(
+        address,
+        source_url=source_url,
+        source_type="company_career",
+        official=True,
+        employer_domain="cimentsdumaroc.com",
+        publication_evidence=publication,
+        application_instruction=mismatched_instruction,
+    ).verified
+
+
+def test_alternate_domain_evidence_does_not_authorize_free_mail_or_ats():
+    from app.discovery.website_researcher import EvidenceFact
+
+    service = EmailVerificationService()
+    source_url = "https://acme.ma/careers"
+    instruction_text = "Send your CV to "
+    instruction = SimpleNamespace(
+        source_url=source_url,
+        field_name="application_instructions",
+        extracted_value="Send your CV and application to contact@greenhouse.io.",
+        snippet="Send your CV and application to contact@greenhouse.io.",
+    )
+    for address in ("person@gmail.com", "jobs@greenhouse.io"):
+        publication = EvidenceFact(
+            source_url=source_url,
+            source_type="careers",
+            page_title="Careers",
+            field_name="recruitment_email",
+            extracted_value=address,
+            snippet=instruction_text + address,
+            domain_relationship="official_alternate_recruitment_domain",
+        )
+        instruction.extracted_value = f"Send your CV to {address}."
+        instruction.snippet = instruction.extracted_value
+        assert not service.verify(
+            address,
+            source_url=source_url,
+            source_type="company_career",
+            official=True,
+            employer_domain="acme.ma",
+            publication_evidence=publication,
+            application_instruction=instruction,
+        ).verified
+
+
 def test_company_website_provenance_excludes_ats_and_requires_employer_https_page():
     direct = SimpleNamespace(raw={"page": "https://build.example.ma/careers"})
     ats_flagged = SimpleNamespace(raw={

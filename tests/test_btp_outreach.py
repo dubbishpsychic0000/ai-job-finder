@@ -11,7 +11,11 @@ import pytest
 import app.workflows.btp_outreach as btp_outreach
 from app import models
 from app.connectors.tavily_resilience import DailyBudget, ResilientTavily, TavilyCache, TavilyKey
-from app.discovery.website_researcher import EvidenceFact, ResearchResult
+from app.discovery.website_researcher import (
+    EvidenceFact,
+    ResearchResult,
+    WebsiteResearcher,
+)
 from app.email import provider
 from app.memory import store
 from app.memory.store import applications_due_for_followup
@@ -598,6 +602,19 @@ def test_company_seed_csv_import_requires_public_provenance_and_city_or_coordina
     assert companies[0].city == "Casablanca"
     assert companies[1].city == "Tangier"
     assert companies[1].website == "https://nordroutes.ma/"
+
+
+def test_curated_senan_holding_seed_uses_official_careers_provenance():
+    seed_path = btp_outreach.ROOT_DIR / "candidate" / "btp_company_seeds.csv"
+
+    companies = load_btp_seed_csv(seed_path)
+
+    assert len(companies) == 1
+    assert companies[0].name == "Senan Holding"
+    assert companies[0].city == "Rabat"
+    assert companies[0].website == "https://senanholding.com/careers"
+    assert companies[0].source_url == "https://senanholding.com/careers"
+    assert companies[0].source == "curated_seed_csv"
 
 
 def test_company_seed_csv_rejects_email_data_and_malformed_locations(tmp_path):
@@ -1299,6 +1316,174 @@ def test_official_recruitment_page_email_can_qualify_without_spontaneous_wording
     assert report.drafts == 1
     assert report.no_explicit_instructions == 1
     assert report.companies[0]["status"] == "drafted_for_review"
+
+
+@pytest.mark.parametrize(
+    (
+        "company_name",
+        "website",
+        "start_url",
+        "pages",
+        "email",
+        "contact_source",
+        "relationship",
+        "verification_method",
+    ),
+    [
+        (
+            "Ciments du Maroc",
+            "https://www.cimentsdumaroc.com/fr",
+            "https://www.cimentsdumaroc.com/fr",
+            {
+                "https://www.cimentsdumaroc.com/sitemap.xml": (
+                    "<urlset><url><loc>"
+                    "https://www.cimentsdumaroc.com/fr/contacteznous"
+                    "</loc></url>"
+                    "<url><loc>https://www.cimentsdumaroc.com/fr/award"
+                    "</loc></url></urlset>"
+                ),
+                "https://www.cimentsdumaroc.com/fr": (
+                    '<title>Ciments du Maroc</title>'
+                    '<nav><a href="/fr/contacteznous">Contact</a>'
+                    '<a href="/fr/award">Quarry Life Award</a></nav>'
+                    "<p>Construction materials and quarry projects.</p>"
+                ),
+                "https://www.cimentsdumaroc.com/fr/contacteznous": (
+                    "<title>Contact</title><h1>Contactez-nous</h1>"
+                    "Envoyez votre CV en précisant le poste souhaité à "
+                    "drh-contact@cimar.co.ma."
+                ),
+                "https://www.cimentsdumaroc.com/fr/award": (
+                    "<title>Quarry Life Award</title><h1>Quarry Life Award</h1>"
+                    "The award supports biodiversity. Recruitment is mentioned "
+                    "in a partner description."
+                ),
+            },
+            "drh-contact@cimar.co.ma",
+            "https://www.cimentsdumaroc.com/fr/contacteznous",
+            "official_alternate_recruitment_domain",
+            "official_page_published_alternate_recruitment_domain",
+        ),
+        (
+            "Senan Holding",
+            "https://senanholding.com/careers",
+            "https://senanholding.com/careers",
+            {
+                "https://senanholding.com/sitemap.xml": None,
+                "https://senanholding.com/careers": (
+                    "<title>Senan Holding Careers</title><h1>Build with Senan</h1>"
+                    "<h2>Civil Engineer</h2><p>Engineering &amp; Contracting</p>"
+                    "<p>Don't see your role? Send a spontaneous application to "
+                    "<a href='mailto:careers@senanholding.com'>"
+                    "careers@senanholding.com</a>.</p>"
+                ),
+            },
+            "careers@senanholding.com",
+            "https://senanholding.com/careers",
+            "company_recruitment",
+            "official_employer_posting",
+        ),
+    ],
+)
+def test_named_employer_pages_extract_and_qualify_published_recruitment_route(
+    db, config, settings, profile, monkeypatch, tmp_path,
+    company_name, website, start_url, pages, email, contact_source,
+    relationship, verification_method,
+):
+    class PageResponse:
+        def __init__(self, text):
+            self.headers = {"Content-Type": "text/html"}
+            self.text = text
+
+    responses = {
+        url: PageResponse(body) if body is not None else None
+        for url, body in pages.items()
+    }
+
+    fetched_urls = []
+
+    def fetch(url):
+        fetched_urls.append(url)
+        return responses.get(url)
+
+    crawler = WebsiteResearcher(
+        max_pages=4,
+        per_host_delay=0,
+        state_path=tmp_path / f"{company_name.split()[0]}-research.json",
+        session=db,
+        fetcher=fetch,
+        robots_fetcher=lambda _domain: None,
+        allow_redirects=False,
+    )
+    settings = settings.model_copy(update={
+        "email_mode": "draft", "enable_email": True, "email_provider": "gmail",
+    })
+    monkeypatch.setattr(
+        provider,
+        "create_draft",
+        lambda *_args, **_kwargs: (True, "fixture-draft-id", ""),
+    )
+    monkeypatch.setattr("app.scheduler.control.is_paused", lambda: False)
+
+    report = run_btp_outreach(
+        db,
+        config,
+        settings,
+        profile,
+        discovery=_Discovery([
+            BtpCompany(
+                name=company_name,
+                website=website,
+                city="Casablanca",
+                region="Casablanca-Settat",
+                latitude=33.5731,
+                longitude=-7.5898,
+                distance_km=0,
+                source="fixture",
+            )
+        ]),
+        wikidata_discovery=_Discovery([]),
+        company_search=_EmptyCompanySearch(),
+        researcher=crawler,
+        website_finder=_NoWebsiteFinder(),
+        screening_state_path=tmp_path / f"{company_name.split()[0]}-screening.json",
+        max_companies=1,
+    )
+
+    assert report.draft_attempts == 1, [
+        (
+            item["status"],
+            item["eligibility_reason"],
+            item["contact_email"],
+            item["contact_email_relationship"],
+            item["application_instructions"],
+        )
+        for item in report.companies
+    ] + fetched_urls
+    assert report.drafts == 1
+    outcome = report.companies[0]
+    assert outcome["company"] == company_name
+    assert outcome["website"] == website
+    assert outcome["contact_email"] == email
+    assert outcome["contact_email_relationship"] == relationship
+    assert outcome["contact_verification_method"] == verification_method
+    assert outcome["contact_email_source"] == contact_source
+    assert outcome["application_instructions"]
+    assert outcome["gmail_draft_confirmed"]
+    assert db.query(models.EmailVerification).one().verified
+    assert db.query(models.EmailVerification).one().verification_method == verification_method
+    if company_name == "Ciments du Maroc":
+        assert outcome["contact_email"].endswith("@cimar.co.ma")
+        assert outcome["contact_email_source"].endswith("/fr/contacteznous")
+        assert "Quarry Life Award" not in outcome["application_instructions"]
+    else:
+        assert outcome["readiness"] == "OUTREACH_ELIGIBLE"
+        company = db.query(models.Company).filter_by(name=company_name).one()
+        assert db.query(models.Evidence).filter_by(
+            company_id=company.id,
+            field_name="job_title",
+            extracted_value="Civil Engineer",
+        ).one()
 
 
 def test_recruitment_evidence_from_third_party_domain_is_not_qualifying():

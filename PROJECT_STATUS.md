@@ -1,5 +1,30 @@
 # Project status
 
+## Recruitment contact qualification fix
+
+Website page classification now uses URL, title, and headings rather than
+incidental keywords in page body text. The crawler prioritizes direct
+careers/contact navigation, filters and bounds sitemap seeds, and records
+explicit application instructions separately from page type. Career-position
+headings and email addresses followed by sentence punctuation are extracted.
+
+An alternate recruitment email domain is accepted only when the address,
+application instruction, and HTTPS page all come from the same established
+employer domain and the instruction directly names that address. ATS and
+free-mail domains remain rejected. The evidence ledger records the
+`official_alternate_recruitment_domain` relationship and the verifier records
+`official_page_published_alternate_recruitment_domain`; both the source URL and
+instruction excerpt are included in per-company results. Ciments du Maroc and
+Senan Holding have page-level regression fixtures. A bounded public
+Senan Holding careers seed is preserved when Actions restores an older private
+vault candidate directory, and screening policy version 4 permits old negative
+screenings to be re-evaluated without overriding existing applications/drafts.
+
+Measured validation before production dispatch: **313 passed, 1 skipped**;
+changed-file Ruff and `git diff --check` passed. Fixture tests do not establish
+production Gmail delivery; that result is recorded below after the real
+draft-only run.
+
 ## Current delivery and persistence hardening
 
 The BTP path now keeps the configured `dry_run`, `draft`, and `live` modes

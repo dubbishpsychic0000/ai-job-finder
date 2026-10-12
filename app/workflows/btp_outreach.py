@@ -61,7 +61,7 @@ OVERPASS_CACHE_PATH = ROOT_DIR / "data" / "btp_overpass_cache.json"
 OVERPASS_CACHE_TTL = timedelta(days=7)
 BTPOUTREACH_STATE_PATH = ROOT_DIR / "data" / "btp_outreach_state.json"
 BTPOUTREACH_STATE_MAX_BYTES = 5 * 1024 * 1024
-BTPOUTREACH_SCREENING_POLICY_VERSION = 3
+BTPOUTREACH_SCREENING_POLICY_VERSION = 4
 WIKIDATA_CACHE_PATH = ROOT_DIR / "data" / "btp_wikidata_cache.json"
 WIKIDATA_CACHE_TTL = timedelta(days=30)
 COMPANY_EVIDENCE_TTL = timedelta(days=30)
@@ -1638,13 +1638,13 @@ def _qualifying_contact(
     *,
     allow_general_contact: bool = False,
 ) -> tuple[str, EvidenceFact, EvidenceFact] | None:
-    instructions = [
+    spontaneous_instructions = [
         fact for fact in evidence
         if fact.field_name == "spontaneous_application"
         and _evidence_is_on_official_domain(fact, official_domain)
         and extract_spontaneous_instruction(fact.extracted_value or fact.snippet)
     ]
-    for instruction in instructions:
+    for instruction in spontaneous_instructions:
         for fact in evidence:
             if fact.source_url != instruction.source_url:
                 continue
@@ -1659,6 +1659,35 @@ def _qualifying_contact(
                 source_type="company_career",
                 official=True,
                 employer_domain=official_domain,
+            )
+            if verified.verified:
+                return address, instruction, fact
+    application_instructions = [
+        fact for fact in evidence
+        if fact.field_name in {
+            "application_instructions", "spontaneous_application",
+        }
+        and _evidence_is_on_official_domain(fact, official_domain)
+        and (fact.extracted_value or fact.snippet)
+    ]
+    for instruction in application_instructions:
+        for fact in evidence:
+            if (
+                fact.source_url != instruction.source_url
+                or fact.field_name != "recruitment_email"
+                or fact.domain_relationship
+                != "official_alternate_recruitment_domain"
+            ):
+                continue
+            address = fact.extracted_value.strip().lower()
+            verified = EmailVerificationService().verify(
+                address,
+                source_url=fact.source_url,
+                source_type="company_career",
+                official=True,
+                employer_domain=official_domain,
+                publication_evidence=fact,
+                application_instruction=instruction,
             )
             if verified.verified:
                 return address, instruction, fact
@@ -1738,6 +1767,14 @@ def _contact_rejection_reason(
         if _evidence_is_on_official_domain(fact, official_domain)
     ]
     if not official_facts:
+        if any(
+            fact.domain_relationship == "official_alternate_recruitment_domain"
+            for fact in email_facts
+        ):
+            return (
+                "alternate recruitment domain was published but lacks a matching "
+                "same-page application instruction"
+            )
         return "unverified or unrelated contact: email evidence is not on the employer domain"
     if (
         any(fact.field_name == "general_email" for fact in official_facts)
@@ -2201,7 +2238,14 @@ def run_btp_outreach(
                         continue
                     if fact.source_type in {"careers", "recruitment", "spontaneous"}:
                         company.careers_url = company.careers_url or fact.extracted_value
-                    if fact.source_type in {"recruitment", "spontaneous"}:
+                    has_submission_instruction = any(
+                        instruction.field_name in {
+                            "application_instructions", "spontaneous_application",
+                        }
+                        and instruction.source_url == fact.source_url
+                        for instruction in evidence
+                    )
+                    if has_submission_instruction:
                         company.recruitment_url = (
                             company.recruitment_url or fact.extracted_value
                         )
@@ -2311,6 +2355,18 @@ def run_btp_outreach(
             official=True,
             employer_domain=domain,
             job_id=job.id,
+            publication_evidence=(
+                email_fact
+                if email_fact.domain_relationship
+                == "official_alternate_recruitment_domain"
+                else None
+            ),
+            application_instruction=(
+                instruction_fact
+                if email_fact.domain_relationship
+                == "official_alternate_recruitment_domain"
+                else None
+            ),
         )
         if not verification.verified:
             report.no_qualifying_email += 1
@@ -2439,6 +2495,9 @@ def run_btp_outreach(
             contact_email_source=email_fact.source_url,
             contact_email=address,
             contact_confidence=email_fact.confidence,
+            contact_email_relationship=email_fact.domain_relationship,
+            application_instructions=instruction_fact.extracted_value,
+            contact_verification_method=verification.verification_method,
             application_url="",
             eligibility_reason=eligibility_reason,
             delivery_stage=delivery_stage,
@@ -2461,6 +2520,9 @@ def _company_result(
     contact_email_source: str = "",
     contact_email: str = "",
     contact_confidence: int = 0,
+    contact_email_relationship: str = "",
+    application_instructions: str = "",
+    contact_verification_method: str = "",
     application_url: str = "",
     website_rejection_reason: str = "",
     rejected_website: str = "",
@@ -2500,6 +2562,9 @@ def _company_result(
         "contact_email_source": contact_email_source,
         "contact_email": contact_email,
         "contact_confidence": contact_confidence,
+        "contact_email_relationship": contact_email_relationship,
+        "application_instructions": application_instructions,
+        "contact_verification_method": contact_verification_method,
         "application_url": application_url,
         "eligibility_reason": eligibility_reason,
         "delivery_stage": delivery_stage,

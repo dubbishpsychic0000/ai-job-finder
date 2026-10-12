@@ -10,11 +10,25 @@ from sqlalchemy.orm import Session
 
 from app import memory as mem
 
-EMAIL_RE = re.compile(r"(?<![\w.+-])([A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,})(?![\w.+-])", re.I)
+EMAIL_RE = re.compile(
+    r"(?<![\w.+-])([A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,})(?![\w+-])",
+    re.I,
+)
 PLACEHOLDER_DOMAINS = {"example.com", "example.org", "example.net", "test.com", "test.org", "placeholder.com", "fake.com", "noreply.com", "no-reply.com"}
 PLACEHOLDER_MARKERS = ("example", "placeholder", "fake", "your-email", "email@")
-FREE_EMAIL_DOMAINS = {"gmail.com", "outlook.com", "hotmail.com", "yahoo.com", "proton.me", "protonmail.com"}
-ATS_VENDOR_DOMAINS = {"greenhouse.io", "lever.co", "smartrecruiters.com", "workday.com", "icims.com"}
+FREE_EMAIL_DOMAINS = {
+    "gmail.com", "googlemail.com", "outlook.com", "hotmail.com", "live.com",
+    "msn.com", "yahoo.com", "yahoo.fr", "proton.me", "protonmail.com",
+    "icloud.com", "aol.com", "gmx.com", "gmx.net", "mail.com",
+    "yandex.com", "yandex.ru",
+}
+ATS_VENDOR_DOMAINS = {
+    "greenhouse.io", "lever.co", "smartrecruiters.com", "workday.com",
+    "icims.com", "ashbyhq.com", "breezy.hr", "personio.com", "workable.com",
+    "jobvite.com", "taleo.net", "successfactors.com", "recruitee.com",
+    "teamtailor.com", "pinpointhq.com", "applytojob.com", "bamboohr.com",
+    "rippling.com",
+}
 
 
 @dataclass(frozen=True)
@@ -47,9 +61,12 @@ class EmailVerificationService:
 
     def verify(self, email: str, *, source_url: str = "", source_type: str = "",
                official: bool = False, employer_domain: str = "",
-               job_id: int | None = None) -> Verification:
+               job_id: int | None = None,
+               publication_evidence=None,
+               application_instruction=None) -> Verification:
         email = (email or "").strip().lower()
         domain = urlparse(source_url).netloc.lower().split(":")[0]
+        source_scheme = urlparse(source_url).scheme.lower()
         email_domain = email.rsplit("@", 1)[-1] if "@" in email else ""
         trusted_domain = (employer_domain or "").strip().lower().removeprefix("www.").rstrip(".")
         if not is_safe_email(email):
@@ -62,17 +79,42 @@ class EmailVerificationService:
             same_domain = bool(trusted_domain) and (
                 email_domain == trusted_domain or email_domain.endswith("." + trusted_domain)
             )
+            alternate_domain_published = self._alternate_domain_is_evidence_backed(
+                email=email,
+                source_url=source_url,
+                source_domain=domain,
+                source_scheme=source_scheme,
+                trusted_domain=trusted_domain,
+                publication_evidence=publication_evidence,
+                application_instruction=application_instruction,
+            )
             vendor_domain = email_domain in ATS_VENDOR_DOMAINS or any(
                 email_domain.endswith("." + vendor) for vendor in ATS_VENDOR_DOMAINS
             )
-            if not same_domain or vendor_domain or email_domain in FREE_EMAIL_DOMAINS:
+            if vendor_domain or email_domain in FREE_EMAIL_DOMAINS:
                 result = Verification(
                     email, source_url, domain, False, "domain_mismatch", 20,
-                    "address is not on the employer's domain",
+                    "ATS-vendor and free-mail addresses are not accepted",
+                )
+            elif same_domain:
+                method = (
+                    "official_employer_posting"
+                    if source_type in {"ats", "company_career"}
+                    else "official_company_page"
+                )
+                result = Verification(email, source_url, domain, True, method, 100)
+            elif alternate_domain_published:
+                result = Verification(
+                    email, source_url, domain, True,
+                    "official_page_published_alternate_recruitment_domain",
+                    95,
                 )
             else:
-                method = "official_employer_posting" if source_type in {"ats", "company_career"} else "official_company_page"
-                result = Verification(email, source_url, domain, True, method, 100)
+                result = Verification(
+                    email, source_url, domain, False, "domain_mismatch", 20,
+                    "address is not on the employer's domain and no same-page "
+                    "application instruction establishes the alternate domain",
+                )
         elif source_type == "recruitment":
             result = Verification(email, source_url, domain, True, "trusted_recruitment_agency", 70)
         else:
@@ -84,6 +126,48 @@ class EmailVerificationService:
                                              verified=result.verified, verification_method=result.verification_method,
                                              confidence=result.confidence)
         return result
+
+    @staticmethod
+    def _alternate_domain_is_evidence_backed(
+        *,
+        email: str,
+        source_url: str,
+        source_domain: str,
+        source_scheme: str,
+        trusted_domain: str,
+        publication_evidence,
+        application_instruction,
+    ) -> bool:
+        if not trusted_domain or source_scheme != "https":
+            return False
+        page_domain = source_domain.removeprefix("www.").rstrip(".")
+        if not (
+            page_domain == trusted_domain
+            or page_domain.endswith("." + trusted_domain)
+        ):
+            return False
+        if (
+            not publication_evidence
+            or getattr(publication_evidence, "field_name", "") != "recruitment_email"
+            or getattr(publication_evidence, "domain_relationship", "")
+            != "official_alternate_recruitment_domain"
+            or getattr(publication_evidence, "source_url", "") != source_url
+            or getattr(publication_evidence, "extracted_value", "").strip().lower()
+            != email
+        ):
+            return False
+        if (
+            not application_instruction
+            or getattr(application_instruction, "field_name", "")
+            not in {"application_instructions", "spontaneous_application"}
+            or getattr(application_instruction, "source_url", "") != source_url
+        ):
+            return False
+        instruction = " ".join((
+            getattr(application_instruction, "extracted_value", ""),
+            getattr(application_instruction, "snippet", ""),
+        )).casefold()
+        return email in instruction
 
     def verify_job(self, job, *, source_type: str = "") -> Verification:
         source_type = source_type or getattr(job, "source_type", "")

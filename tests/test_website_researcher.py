@@ -9,6 +9,7 @@ from app.discovery.website_researcher import (
     WebsiteResearcher,
     classify_email,
     evidence_backed_fields,
+    extract_application_instructions,
     normalize_url,
 )
 
@@ -57,6 +58,61 @@ def test_sitemap_discovery_and_internal_priority():
     assert "https://acme.ma/careers" in result.pages
     assert result.pages.index("https://acme.ma/careers") < result.pages.index("https://acme.ma/about")
     assert result.facts("recruitment_email")[0].extracted_value == "recruitment@acme.ma"
+
+
+def test_sitemap_long_tail_does_not_crowd_out_linked_contact_and_careers_pages():
+    long_tail = "".join(
+        f"<url><loc>https://acme.ma/projects/archive-{index}</loc></url>"
+        for index in range(60)
+    )
+    pages = {
+        "https://acme.ma/sitemap.xml": Response(
+            "<urlset>"
+            + long_tail
+            + "<url><loc>https://acme.ma/fr/contacteznous</loc></url>"
+            + "<url><loc>https://acme.ma/careers</loc></url>"
+            + "</urlset>",
+            "application/xml",
+        ),
+        "https://acme.ma/sitemap_index.xml": None,
+        "https://acme.ma/": Response(
+            '<nav><a href="/fr/contacteznous">Contact</a>'
+            '<a href="/careers">Careers</a></nav>'
+            '<a href="/projects/archive">Old projects</a>'
+        ),
+        "https://acme.ma/fr/contacteznous": Response(
+            "<title>Contact</title><h1>Contactez-nous</h1>"
+            "Envoyez votre CV en précisant le poste souhaité à rh@acme.ma."
+        ),
+        "https://acme.ma/careers": Response(
+            "<title>Careers</title><h1>Careers</h1>"
+            "Open positions and spontaneous applications."
+        ),
+        "https://acme.ma/projects/archive": Response(
+            "<title>Projects</title><h1>Projects</h1>"
+            "Our historical construction projects mention recruitment."
+        ),
+    }
+    result = researcher(pages, max_pages=3).research("https://acme.ma/")
+
+    assert result.pages == [
+        "https://acme.ma/",
+        "https://acme.ma/careers",
+        "https://acme.ma/fr/contacteznous",
+    ]
+    contact_relevant = [
+        fact for fact in result.facts("relevant_page")
+        if fact.source_url.endswith("/fr/contacteznous")
+    ]
+    assert contact_relevant[0].source_type == "contact"
+    assert not any(
+        fact.field_name == "relevant_page"
+        and fact.source_url.endswith("/projects/archive")
+        for fact in result.evidence
+    )
+    assert extract_application_instructions(
+        "Envoyez votre CV en précisant le poste souhaité à rh@acme.ma."
+    )
 
 
 def test_url_deduplication_and_crawl_limit():
