@@ -17,9 +17,14 @@ deferred and duplicate-protected. The BTP workflow can recover the earlier
 `invalid_grant` deferred application after reauthorization. Scheduled runs
 remain draft-only and no live send has been attempted.
 
-Production is blocked until the Gmail account is re-authorized and its refreshed
-token is updated in the private vault. A repeat against the unchanged token
-cannot create a draft.
+After the user reported updating the vault token, draft-only run
+**38192852330** on commit `623820c` again selected Senan Holding and reached
+Gmail, but the refresh endpoint still returned `invalid_grant`. The report now
+labels the company `gmail_reauthorization_required`; totals were **1 draft
+attempt, 0 confirmed Gmail drafts, 0 sends**, and state persistence back to the
+vault completed successfully. The refreshed credential available to the runner
+is still rejected. Do not repeat production against it; no real draft ID exists
+and duplicate suppression for a confirmed production draft remains unproven.
 
 ## Recruitment contact qualification fix
 
