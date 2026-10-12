@@ -27,10 +27,25 @@ company-name overlap; unrelated third-party URLs remain provenance only.
 Measured validation after these changes: **306 passed, 1 skipped** in the full
 suite; focused BTP/email/research/discovery coverage passed
 (**102 passed, 1 skipped**);
-changed-file Ruff and `git diff --check` passed. No production Gmail workflow
-was dispatched for this validation. Therefore real Gmail draft delivery,
-vault restoration on a subsequent hosted run, and live delivery remain
-unverified; no email was sent.
+changed-file Ruff and `git diff --check` passed.
+
+Two production draft-only Actions runs completed successfully on commit
+`adb6cf6` (`38188088929`, then `38188250611`). The first found 17 candidates,
+2 known website candidates, and researched 2; 8 had no verified official
+website, 1 had no explicit spontaneous instructions, and 1 had no qualifying
+email. It recorded 1 crawl failure, 4 rejected third-party/mismatched website
+URLs, and no search-budget deferrals. It attempted **0** drafts and **0** sends
+because no target qualified. The state snapshot was pushed to the private
+vault as `1bf8ab2`.
+
+The second run restored state from that vault, reported 17 company-pool
+candidates and 4 existing/screened companies, and again made **0** draft or
+send attempts; it reported no eligible production smoke target. Its updated
+state snapshot was also pushed to the vault. This confirms cross-run state
+restoration and screening, but not duplicate suppression of a real Gmail
+draft: no legitimate draft was created. Gmail draft transport and live
+delivery therefore remain unverified. Live authorization was false in both
+runs, and **no email was sent**.
 
 ## Current state
 
