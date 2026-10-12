@@ -61,7 +61,7 @@ OVERPASS_CACHE_PATH = ROOT_DIR / "data" / "btp_overpass_cache.json"
 OVERPASS_CACHE_TTL = timedelta(days=7)
 BTPOUTREACH_STATE_PATH = ROOT_DIR / "data" / "btp_outreach_state.json"
 BTPOUTREACH_STATE_MAX_BYTES = 5 * 1024 * 1024
-BTPOUTREACH_SCREENING_POLICY_VERSION = 2
+BTPOUTREACH_SCREENING_POLICY_VERSION = 3
 WIKIDATA_CACHE_PATH = ROOT_DIR / "data" / "btp_wikidata_cache.json"
 WIKIDATA_CACHE_TTL = timedelta(days=30)
 COMPANY_EVIDENCE_TTL = timedelta(days=30)
@@ -96,6 +96,9 @@ TERMINAL_TARGET_STATUSES = {
     "no_explicit_instructions",
     "no_official_employer_email",
     "portal_or_form",
+    "invalid_employer_website",
+    "crawl_failed",
+    "no_recruitment_contact",
     "drafted_for_review",
 }
 
@@ -187,10 +190,14 @@ class BtpOutreachState:
         if not record:
             return False
         status = record.get("status", "")
-        if status == "drafted_for_review":
+        if status in {"drafted_for_review", "sent"}:
             return True
         if (
-            status in {"no_explicit_instructions", "no_official_employer_email"}
+            status in {
+                "no_verified_website", "no_explicit_instructions",
+                "no_official_employer_email", "no_recruitment_contact",
+                "invalid_employer_website", "crawl_failed",
+            }
             and record.get("policy_version")
             != str(BTPOUTREACH_SCREENING_POLICY_VERSION)
         ):
@@ -228,6 +235,7 @@ class BtpOutreachState:
         status: str,
         *,
         gmail_draft_id: str = "",
+        gmail_message_id: str = "",
     ) -> None:
         record = {
             "name": candidate.name[:255],
@@ -240,6 +248,8 @@ class BtpOutreachState:
         }
         if gmail_draft_id:
             record["gmail_draft_id"] = gmail_draft_id[:255]
+        if gmail_message_id:
+            record["gmail_message_id"] = gmail_message_id[:255]
         self.records[self.key(candidate)] = record
         self._save()
 
@@ -295,6 +305,8 @@ class BtpCompany:
     country: str = "Morocco"
     careers_url: str = ""
     recruitment_url: str = ""
+    rejected_website: str = ""
+    website_rejection_reason: str = ""
 
     @property
     def location(self) -> str:
@@ -317,8 +329,12 @@ class BtpOutreachReport:
     search_budget_deferred: int = 0
     processed: int = 0
     researched: int = 0
+    crawl_failed: int = 0
     draft_attempts: int = 0
     drafts: int = 0
+    validation_attempts: int = 0
+    send_attempts: int = 0
+    sent: int = 0
     existing: int = 0
     no_website: int = 0
     no_spontaneous_instructions: int = 0
@@ -331,6 +347,7 @@ class BtpOutreachReport:
     readiness_counts: dict[str, int] = field(default_factory=dict)
     errors: list[str] = field(default_factory=list)
     companies: list[dict] = field(default_factory=list)
+    rejected_sources: list[dict] = field(default_factory=list)
     limitation: str = (
         "OpenStreetMap and indexed public search results are incomplete; this is not a "
         "canonical or exhaustive list of Moroccan BTP employers."
@@ -370,8 +387,8 @@ class BtpOutreachReport:
             },
             "analysis": {"analyzed": 0, "decisions": {}, "errors": []},
             "action": {
-                "applied": 0,
-                "sent": 0,
+                "applied": self.sent,
+                "sent": self.sent,
                 "asked": 0,
                 "investigated": 0,
                 "blocked": self.blocked,
@@ -380,7 +397,9 @@ class BtpOutreachReport:
                 "btp": {
                     "candidates": self.candidates,
                     "known_website_candidates": self.known_website_candidates,
+                    "official_website_candidates": self.known_website_candidates,
                     "website_search_required": self.website_search_required,
+                    "website_resolution_required": self.website_search_required,
                     "search_budget_deferred": self.search_budget_deferred,
                     "osm_candidates": self.osm_candidates,
                     "wikidata_candidates": self.wikidata_candidates,
@@ -389,9 +408,23 @@ class BtpOutreachReport:
                     "company_pool_candidates": self.company_pool_candidates,
                     "processed": self.processed,
                     "researched": self.researched,
+                    "official_websites_verified": self.researched,
+                    "crawl_failed": self.crawl_failed,
+                    "third_party_urls_rejected": sum(
+                        bool(company.get("rejected_website"))
+                        for company in self.companies
+                    ),
+                    "website_identity_mismatches": sum(
+                        "does not match" in str(
+                            company.get("website_rejection_reason", "")
+                        )
+                        for company in self.companies
+                    ),
                     "draft_attempts": self.draft_attempts,
+                    "validation_attempts": self.validation_attempts,
                     "drafts": self.drafts,
-                    "sent": 0,
+                    "send_attempts": self.send_attempts,
+                    "sent": self.sent,
                     "gmail_drafts_confirmed": sum(
                         company.get("gmail_draft_confirmed", False)
                         for company in self.companies
@@ -404,16 +437,21 @@ class BtpOutreachReport:
                     "no_qualifying_email": self.no_qualifying_email,
                     "portal_or_form": self.portal_or_form,
                     "blocked": self.blocked,
+                    "rejected_sources": self.rejected_sources,
                     "search_budget_limited": self.search_budget_limited,
                     "daily_limit_reached": self.daily_limit_reached,
                     "external_company_search_skipped": self.external_company_search_skipped,
                     "production_smoke_outcome": (
-                        "draft_created"
+                        "gmail_draft_confirmed"
                         if self.drafts
                         else (
-                            "application_safety_or_transport_blocked"
-                            if self.draft_attempts
-                            else "no eligible production smoke target"
+                            "gmail_send_confirmed"
+                            if self.sent
+                            else (
+                                "application_safety_or_transport_blocked"
+                                if self.draft_attempts or self.send_attempts
+                                else "no eligible production smoke target"
+                            )
                         )
                     ),
                     "readiness": self.readiness_counts,
@@ -844,6 +882,7 @@ class PublicBtpCompanySearch:
         self.max_city_searches = max(1, int(max_city_searches))
         self.errors: list[str] = []
         self.search_budget_limited = False
+        self.rejected_sources: list[dict[str, str]] = []
 
     def discover(self) -> list[BtpCompany]:
         all_cities = sorted(
@@ -891,12 +930,24 @@ class PublicBtpCompanySearch:
                 if is_source_page:
                     name = _directory_company_name(title, city)
                     website = ""
+                    if not name:
+                        self.rejected_sources.append({
+                            "url": source_url,
+                            "title": title[:255],
+                            "reason": "directory/article publisher result contains no identifiable employer name",
+                        })
+                        continue
                 else:
                     candidate = classify_result(
                         url, title, snippet,
                         country="Morocco",
                     )
                     if not candidate or candidate.name == "Unknown":
+                        self.rejected_sources.append({
+                            "url": source_url,
+                            "title": title[:255],
+                            "reason": "search result did not establish a company identity",
+                        })
                         continue
                     name = candidate.name
                     website = url
@@ -992,7 +1043,9 @@ def _city_location(city: str) -> tuple[str, float, float]:
     return MOROCCO_CITY_CENTERS[city]
 
 
-def _company_pool_candidates(session: Session) -> list[BtpCompany]:
+def _company_pool_candidates(
+    session: Session, config: AgentConfig | None = None,
+) -> list[BtpCompany]:
     """Reuse relevant Moroccan companies, including those still needing a website."""
     companies: dict[int, Company] = {}
     job_facts: dict[int, list[str]] = {}
@@ -1073,14 +1126,50 @@ def _company_pool_candidates(session: Session) -> list[BtpCompany]:
             (company.official_domain or "").strip().lower()
             .removeprefix("www.").rstrip(".")
         )
-        website = _eligible_website(company.website)
-        if not website or not official_domain or host_domain(website) != official_domain:
+        raw_website = company.website
+        website = _eligible_website(raw_website)
+        rejected_website = ""
+        website_rejection_reason = ""
+        if raw_website and not website:
+            rejected_website = raw_website
+            website_rejection_reason = (
+                "stored URL is a third-party source, directory, document, or non-homepage path"
+            )
+        if website and official_domain and host_domain(website) != official_domain:
+            rejected_website = raw_website
+            website_rejection_reason = (
+                "stored official domain does not match the stored website host"
+            )
             website = ""
+            official_domain = ""
+        if website and not official_domain:
+            if _candidate_domain_matches(company.name, website):
+                official_domain = host_domain(website)
+            else:
+                rejected_website = raw_website
+                website_rejection_reason = (
+                    "company name does not match the candidate website host"
+                )
+                website = ""
+        if not website:
             careers_url = _eligible_website(company.careers_url)
-            if careers_url and official_domain and host_domain(careers_url) == official_domain:
+            if (
+                careers_url
+                and official_domain
+                and host_domain(careers_url) == official_domain
+            ):
                 website = careers_url
-        if website and host_domain(website) != official_domain:
+                rejected_website = ""
+                website_rejection_reason = ""
+        if not website and rejected_website:
+            official_domain = ""
+        if website and not _candidate_domain_matches(company.name, website):
+            rejected_website = website
+            website_rejection_reason = (
+                "stored company name does not match the stored website host"
+            )
             website = ""
+            official_domain = ""
         job_text = " ".join(job_facts.get(company.id, []))
         employer_text = " ".join((
             company.name,
@@ -1145,7 +1234,18 @@ def _company_pool_candidates(session: Session) -> list[BtpCompany]:
             for fact in facts
         ) or company.careers_url or company.recruitment_url:
             readiness = "RECRUITMENT_CHANNEL_FOUND"
-        if official_domain and fresh_evidence and _qualifying_contact(facts, official_domain):
+        if (
+            official_domain and fresh_evidence
+            and _qualifying_contact(
+                facts,
+                official_domain,
+                allow_general_contact=bool(
+                    config and config.email.get(
+                        "btp_allow_official_general_contact", False
+                    )
+                ),
+            )
+        ):
             readiness = "OUTREACH_ELIGIBLE"
         elif any(fact.field_name in {"general_email", "recruitment_email"} for fact in facts):
             readiness = "CONTACT_FOUND"
@@ -1180,6 +1280,8 @@ def _company_pool_candidates(session: Session) -> list[BtpCompany]:
             country=company.country or "Morocco",
             careers_url=company.careers_url,
             recruitment_url=company.recruitment_url,
+            rejected_website=rejected_website,
+            website_rejection_reason=website_rejection_reason,
         ))
     readiness_priority = {
         "OUTREACH_ELIGIBLE": 0,
@@ -1286,7 +1388,7 @@ def _directory_company_name(title: str, city: str) -> str:
         "marocproguide", "charika", "goafricaonline", "secteur", "activite",
         "activity", "1000", "premiere", "premieres", "premier", "premiers",
         "par", "professionnel", "professionnels", "related", "information",
-        "finance", "department", "companies",
+        "finance", "department", "companies", "top", "recrutent", "recruiting",
         *re.sub(r"[^a-z0-9]+", " ", city.casefold()).split(),
     }
     tokens = [
@@ -1316,12 +1418,16 @@ def _is_directory_or_job_site(url: str, title: str = "", snippet: str = "") -> b
         "/directory/", "/annuaire/", "/profile/", "/profiles/",
         "/document/", "/documents/", "/company-profile/", "secteur-d",
         "/listing", "/liste-entreprises",
+        "/blog/", "/news/", "/actualite/", "/actualites/", "/article/",
+        "top-entreprises", "entreprises-qui-recrutent",
     )):
         return True
     text = _normalize_city_name(f"{title} {snippet}")
     return any(term in text for term in (
         "annuaire", "directory", "liste des entreprises", "company directory",
         "companies list", "repertoire des entreprises", "secteur d activite",
+        "top entreprises", "les entreprises qui recrutent",
+        "companies that are hiring", "construction companies in morocco",
     ))
 
 
@@ -1488,14 +1594,50 @@ def _eligible_website(url: str) -> str:
     if path.endswith(".pdf") or any(token in path for token in (
         "/document/", "/documents/", "/directory/", "/annuaire/",
         "/profile/", "/profiles/", "/company-profile/",
-        "secteur-d", "/listing", "/liste-entreprises",
+        "secteur-d", "/listing", "/liste-entreprises", "/blog/",
+        "/news/", "/actualite/", "/actualites/", "/article/",
+        "top-entreprises", "entreprises-qui-recrutent",
     )):
         return ""
     return normalized
 
 
-def _qualifying_contact(evidence: list[EvidenceFact], official_domain: str
-                        ) -> tuple[str, EvidenceFact, EvidenceFact] | None:
+def _candidate_domain_matches(company_name: str, website: str) -> bool:
+    raw_domain = host_domain(website).replace(".", " ").replace("-", " ")
+    domain_tokens = _normalize_city_name(raw_domain).split()
+    name_tokens = _normalize_city_name(company_name).split()
+    hostname_label = host_domain(website).split(".", 1)[0]
+    compact_name = "".join(name_tokens)
+    compact_label = _normalize_city_name(hostname_label).replace(" ", "")
+    if compact_name and compact_name == compact_label:
+        return True
+    if (
+        name_tokens
+        and len(name_tokens) <= len(domain_tokens)
+        and any(
+            domain_tokens[index:index + len(name_tokens)] == name_tokens
+            for index in range(len(domain_tokens) - len(name_tokens) + 1)
+        )
+    ):
+        return True
+    ignored = {
+        "btp", "construction", "constructions", "travaux", "publics",
+        "genie", "civil", "engineering", "engineers", "company", "group",
+        "groupe", "sarl", "sa", "societe", "maroc", "morocco",
+    }
+    tokens = [
+        token for token in _normalize_city_name(company_name).split()
+        if len(token) >= 3 and token not in ignored
+    ]
+    return bool(tokens and any(token in domain_tokens for token in tokens))
+
+
+def _qualifying_contact(
+    evidence: list[EvidenceFact],
+    official_domain: str,
+    *,
+    allow_general_contact: bool = False,
+) -> tuple[str, EvidenceFact, EvidenceFact] | None:
     instructions = [
         fact for fact in evidence
         if fact.field_name == "spontaneous_application"
@@ -1522,7 +1664,7 @@ def _qualifying_contact(evidence: list[EvidenceFact], official_domain: str
                 return address, instruction, fact
     recruitment_pages = [
         fact for fact in evidence
-        if fact.source_type in {"careers", "recruitment"}
+        if fact.source_type in {"careers", "recruitment", "contact"}
         and fact.field_name == "recruitment_email"
         and _evidence_is_on_official_domain(fact, official_domain)
     ]
@@ -1547,7 +1689,66 @@ def _qualifying_contact(evidence: list[EvidenceFact], official_domain: str
                 reason_code="official_recruitment_page",
             )
             return address, authorization, fact
+    if allow_general_contact:
+        for fact in evidence:
+            if (
+                fact.field_name != "general_email"
+                or fact.source_type != "contact"
+                or not _evidence_is_on_official_domain(fact, official_domain)
+            ):
+                continue
+            address = fact.extracted_value.strip().lower()
+            verified = EmailVerificationService().verify(
+                address,
+                source_url=fact.source_url,
+                source_type="company_career",
+                official=True,
+                employer_domain=official_domain,
+            )
+            if not verified.verified:
+                continue
+            authorization = EvidenceFact(
+                source_url=fact.source_url,
+                source_type="contact",
+                page_title=fact.page_title,
+                field_name="recruitment_channel",
+                extracted_value="Official company contact-page email; policy fallback",
+                snippet=fact.snippet,
+                confidence=min(fact.confidence or 75, 75),
+                reason_code="configured_official_general_contact_fallback",
+            )
+            return address, authorization, fact
     return None
+
+
+def _contact_rejection_reason(
+    evidence: list[EvidenceFact],
+    official_domain: str,
+    *,
+    allow_general_contact: bool,
+) -> str:
+    email_facts = [
+        fact for fact in evidence
+        if fact.field_name in {"general_email", "recruitment_email"}
+    ]
+    if not email_facts:
+        return "no recruitment contact found on the verified employer website"
+    official_facts = [
+        fact for fact in email_facts
+        if _evidence_is_on_official_domain(fact, official_domain)
+    ]
+    if not official_facts:
+        return "unverified or unrelated contact: email evidence is not on the employer domain"
+    if (
+        any(fact.field_name == "general_email" for fact in official_facts)
+        and not allow_general_contact
+        and not any(fact.field_name == "recruitment_email" for fact in official_facts)
+    ):
+        return (
+            "official general contact found, but the configurable general-contact "
+            "fallback policy is disabled"
+        )
+    return "no verified recruitment email qualified under the current contact policy"
 
 
 def _evidence_is_on_official_domain(fact: EvidenceFact, official_domain: str) -> bool:
@@ -1561,14 +1762,18 @@ def _evidence_is_on_official_domain(fact: EvidenceFact, official_domain: str) ->
     )
 
 
-def _application_portal(evidence: list[EvidenceFact], official_domain: str) -> bool:
+def _application_portal_url(evidence: list[EvidenceFact], official_domain: str) -> str:
     for fact in evidence:
         if fact.field_name != "application_url":
             continue
         url = normalize_url(fact.extracted_value)
-        if url and host_domain(url) != official_domain:
-            return True
-    return False
+        eligible_url = _eligible_website(url)
+        if (
+            eligible_url
+            and _evidence_is_on_official_domain(fact, official_domain)
+        ):
+            return eligible_url
+    return ""
 
 
 class _FrenchSpontaneousCommunicator:
@@ -1589,7 +1794,9 @@ class _FrenchSpontaneousCommunicator:
         }
 
 
-def _outreach_job(session: Session, company, contact: str, location: str) -> Job:
+def _outreach_job(
+    session: Session, company, contact: str, location: str, *, application_url: str = "",
+) -> Job:
     digest = hashlib.sha256(f"btp-spontaneous:{company.id}".encode()).hexdigest()
     job, _ = mem.store.upsert_job(session, {
         "source": "btp_spontaneous",
@@ -1607,12 +1814,15 @@ def _outreach_job(session: Session, company, contact: str, location: str) -> Job
         "source_quality": 0,
         "source_confidence": 100,
         "opportunity_type": SPONTANEOUS_APPLICATION,
-        "application_method": "EMAIL",
-        "application_url": "",
+        "application_method": "ONLINE_FORM" if application_url else "EMAIL",
+        "application_url": application_url,
     })
     job.opportunity_type = SPONTANEOUS_APPLICATION
     job.source_type = SPONTANEOUS_APPLICATION
     job.status = "outreach_only"
+    if application_url:
+        job.application_method = "ONLINE_FORM"
+        job.application_url = application_url
     return job
 
 
@@ -1632,20 +1842,26 @@ def run_btp_outreach(
     website_finder: PublicCompanyWebsiteFinder | None = None,
     screening_state_path: Path | None = BTPOUTREACH_STATE_PATH,
 ) -> BtpOutreachReport:
-    """Research nearest public BTP companies and prepare only eligible Gmail drafts."""
+    """Research public BTP employers and perform only the configured safe email action."""
     if origin_city != "Casablanca":
         raise BtpOutreachSafetyError("Only the coarse Casablanca city-center origin is supported")
-    if settings.email_mode != "draft" or settings.enable_email is not True:
+    if settings.email_mode not in {"dry_run", "draft", "live"}:
+        raise BtpOutreachSafetyError("EMAIL_MODE must be dry_run, draft, or live")
+    if settings.email_mode in {"draft", "live"} and settings.enable_email is not True:
         raise BtpOutreachSafetyError(
-            "BTP outreach requires EMAIL_MODE=draft and ENABLE_EMAIL=true; no Gmail interaction occurred"
+            "draft/live BTP outreach requires ENABLE_EMAIL=true; no Gmail interaction occurred"
         )
-    if settings.email_provider != "gmail":
+    if settings.email_mode == "live" and not settings.authorize_live_spontaneous:
         raise BtpOutreachSafetyError(
-            "BTP outreach requires EMAIL_PROVIDER=gmail; no email-provider interaction occurred"
+            "live BTP outreach requires explicit AUTHORIZE_LIVE_SPONTANEOUS=true"
+        )
+    if settings.email_mode in {"draft", "live"} and settings.email_provider != "gmail":
+        raise BtpOutreachSafetyError(
+            "draft/live BTP outreach requires EMAIL_PROVIDER=gmail; no provider interaction occurred"
         )
     requested_cap = max(1, min(HARD_MAX_COMPANIES, int(max_companies)))
     report = BtpOutreachReport(origin_city=origin_city)
-    pooled = _company_pool_candidates(session)
+    pooled = _company_pool_candidates(session, config)
     report.company_pool_candidates = len(pooled)
     sent_today = mem.store.count_dispatched_today(session)
     applications_today = mem.store.count_dispatched_today(session, action="APPLY")
@@ -1659,6 +1875,8 @@ def run_btp_outreach(
     if remaining_budget == 0:
         report.daily_limit_reached = True
     cap = min(requested_cap, remaining_budget)
+    if settings.email_mode == "live" and settings.authorize_live_spontaneous:
+        cap = min(cap, 1)
     screening_state = (
         BtpOutreachState(screening_state_path) if screening_state_path else None
     )
@@ -1695,6 +1913,9 @@ def run_btp_outreach(
             searched = search.discover()
             report.errors.extend(getattr(search, "errors", []))
             report.search_budget_limited = getattr(search, "search_budget_limited", False)
+            report.rejected_sources.extend(
+                getattr(search, "rejected_sources", [])
+            )
         except Exception as exc:
             report.errors.append(f"public company web search failed: {exc}")
     elif reusable_known_sites > 0:
@@ -1725,13 +1946,16 @@ def run_btp_outreach(
                 record.get("status") == "drafted_for_review"
                 or bool(record.get("gmail_draft_id"))
             )
+            previous_application = previous_draft or record.get("status") == "sent"
             if previous_draft:
                 candidate.readiness = "OUTREACH_ELIGIBLE"
+            elif previous_application:
+                candidate.readiness = "CONTACTED"
             report.companies.append(_company_result(
                 candidate,
                 record.get("status", "existing"),
                 eligibility_reason="suppressed by persisted BTP screening state",
-                previous_application=previous_draft,
+                previous_application=previous_application,
                 previous_draft=previous_draft,
             ))
             continue
@@ -1746,6 +1970,9 @@ def run_btp_outreach(
             industry="BTP / construction", source=discovery_source,
             official_domain=host_domain(candidate.website),
         )
+        if candidate.rejected_website and company.website == candidate.rejected_website:
+            company.website = ""
+            company.official_domain = ""
         company.website = company.website or candidate.website
         target, _ = mem.store.record_discovery(
             session,
@@ -1892,6 +2119,29 @@ def run_btp_outreach(
                 screening_state.mark(candidate, "no_verified_website")
             report.companies.append(_company_result(candidate, "no_official_website"))
             continue
+        if not _candidate_domain_matches(candidate.name, website):
+            report.no_website += 1
+            candidate.rejected_website = website
+            candidate.website_rejection_reason = (
+                "candidate employer name does not match the website host; "
+                "the URL remains discovery evidence, not an official employer identity"
+            )
+            if company.website and host_domain(company.website) == host_domain(website):
+                company.website = ""
+                company.official_domain = ""
+            candidate.website = ""
+            candidate.official_domain = ""
+            target.status = "invalid_employer_website"
+            candidate.readiness = "DISCOVERED"
+            if screening_state:
+                screening_state.mark(candidate, target.status)
+            report.companies.append(_company_result(
+                candidate,
+                target.status,
+                website_rejection_reason=candidate.website_rejection_reason,
+                rejected_website=website,
+            ))
+            continue
         company.website = website
         company.official_domain = host_domain(website)
         candidate.website = website
@@ -1901,6 +2151,7 @@ def run_btp_outreach(
         report.researched += 1
         candidate.readiness = "WEBSITE_VERIFIED"
         domain = host_domain(website)
+        previously_visited_missing_evidence: list[str] = []
         try:
             stored_rows = mem.store.get_evidence(session, company_id=company.id)
             if _research_is_fresh(company, stored_rows):
@@ -1916,6 +2167,32 @@ def run_btp_outreach(
                     company_id=company.id,
                     official_domain=domain,
                 )
+                previously_visited_missing_evidence = list(
+                    getattr(result, "revisited_missing_evidence", [])
+                )
+                if (
+                    result.blocked and not result.visited and not result.evidence
+                    and not stored_rows
+                ):
+                    report.crawl_failed += 1
+                    target.status = "crawl_failed"
+                    candidate.readiness = "RESEARCH_DEFERRED"
+                    if screening_state:
+                        screening_state.mark(candidate, "crawl_failed")
+                    report.companies.append(_company_result(
+                        candidate,
+                        "crawl_blocked_or_failed",
+                        official_domain=domain,
+                        eligibility_reason=(
+                            "crawl was blocked or failed for: "
+                            + ", ".join(result.blocked[:3])
+                        ),
+                        delivery_stage="crawl_blocked_or_failed",
+                        previously_visited_missing_evidence=(
+                            previously_visited_missing_evidence
+                        ),
+                    ))
+                    continue
                 evidence = list(result.evidence)
                 if result.visited or result.evidence:
                     company.last_researched_at = datetime.now(timezone.utc)
@@ -1943,7 +2220,13 @@ def run_btp_outreach(
         ]
         if not instructions:
             report.no_spontaneous_instructions += 1
-        contact = _qualifying_contact(evidence, domain)
+        contact = _qualifying_contact(
+            evidence,
+            domain,
+            allow_general_contact=bool(config.email.get(
+                "btp_allow_official_general_contact", False,
+            )),
+        )
         if not contact:
             if any(
                 fact.field_name == "relevant_page"
@@ -1956,27 +2239,66 @@ def run_btp_outreach(
                 for fact in evidence
             ):
                 candidate.readiness = "CONTACT_FOUND"
-            if not instructions:
-                report.no_qualifying_email += 1
-                target.status = "no_explicit_instructions"
-                if screening_state:
-                    screening_state.mark(candidate, "no_explicit_instructions")
-                report.companies.append(
-                    _company_result(candidate, "no_explicit_instructions")
-                )
-                continue
-            if _application_portal(evidence, domain):
+            portal_url = _application_portal_url(evidence, domain)
+            if portal_url:
                 report.portal_or_form += 1
                 target.status = "portal_or_form"
+                lead = existing_outreach or _outreach_job(
+                    session, company, "", candidate.location, application_url=portal_url,
+                )
+                lead.application_method = "ONLINE_FORM"
+                lead.application_url = portal_url
                 if screening_state:
                     screening_state.mark(candidate, "portal_or_form")
-                report.companies.append(_company_result(candidate, "portal_or_form"))
-            else:
+                report.companies.append(_company_result(
+                    candidate, "portal_or_form", application_url=portal_url,
+                    eligibility_reason="official website exposes an actionable application route",
+                ))
+                continue
+            if not instructions:
                 report.no_qualifying_email += 1
-                target.status = "no_official_employer_email"
+                target.status = "no_recruitment_contact"
                 if screening_state:
-                    screening_state.mark(candidate, "no_official_employer_email")
-                report.companies.append(_company_result(candidate, "no_official_employer_email"))
+                    screening_state.mark(candidate, "no_recruitment_contact")
+                report.companies.append(
+                    _company_result(
+                        candidate,
+                        "no_recruitment_contact",
+                        official_domain=domain,
+                        eligibility_reason=_contact_rejection_reason(
+                            evidence,
+                            domain,
+                            allow_general_contact=bool(config.email.get(
+                                "btp_allow_official_general_contact", False,
+                            )),
+                        ),
+                        delivery_stage="contact_qualification",
+                        previously_visited_missing_evidence=(
+                            previously_visited_missing_evidence
+                        ),
+                    )
+                )
+                continue
+            report.no_qualifying_email += 1
+            target.status = "no_official_employer_email"
+            if screening_state:
+                screening_state.mark(candidate, "no_official_employer_email")
+            report.companies.append(_company_result(
+                candidate,
+                "no_official_employer_email",
+                official_domain=domain,
+                eligibility_reason=_contact_rejection_reason(
+                    evidence,
+                    domain,
+                    allow_general_contact=bool(config.email.get(
+                        "btp_allow_official_general_contact", False,
+                    )),
+                ),
+                delivery_stage="contact_qualification",
+                previously_visited_missing_evidence=(
+                    previously_visited_missing_evidence
+                ),
+            ))
             continue
         address, instruction_fact, email_fact = contact
         candidate.readiness = "OUTREACH_ELIGIBLE"
@@ -2028,13 +2350,24 @@ def run_btp_outreach(
         engine = ApplicationEngine(
             session, config, settings, profile, _FrenchSpontaneousCommunicator()
         )
-        report.draft_attempts += 1
+        if settings.email_mode == "dry_run":
+            report.validation_attempts += 1
+        elif settings.email_mode == "draft":
+            report.draft_attempts += 1
+        elif settings.email_mode == "live":
+            report.send_attempts += 1
         result = asyncio.run(engine.run(job, decision, "APPLY", address, "fr"))
         job.status = "outreach_only"
         job.opportunity_type = SPONTANEOUS_APPLICATION
         job.source_type = SPONTANEOUS_APPLICATION
         draft_id = str(result.get("draft_id") or "")
-        if result.get("status") == "drafted" and draft_id:
+        message_id = str(result.get("message_id") or "")
+        if settings.email_mode == "dry_run" and result.get("status") == "dry_run":
+            status = "dry_run_validated"
+            target.status = status
+            eligibility_reason = "safety gate passed; dry_run made no Gmail request"
+            delivery_stage = "dry_run_validated"
+        elif result.get("status") == "drafted" and draft_id:
             report.drafts += 1
             status = "drafted_for_review"
             target.status = status
@@ -2045,7 +2378,20 @@ def run_btp_outreach(
                 "employer-domain email, no prior application or draft, no cooldown, "
                 "safety gate passed, and Gmail returned a draft ID"
             )
-        elif result.get("status") == "drafted":
+            delivery_stage = "gmail_draft_confirmed"
+        elif result.get("status") == "sent" and message_id:
+            report.sent += 1
+            status = "sent"
+            target.status = "sent"
+            if screening_state:
+                screening_state.mark(
+                    candidate, "sent", gmail_message_id=message_id,
+                )
+            eligibility_reason = (
+                "live email authorized; safety gate passed; Gmail returned a message ID"
+            )
+            delivery_stage = "gmail_send_confirmed"
+        elif settings.email_mode == "draft" and result.get("status") == "drafted":
             report.errors.append(
                 f"Gmail reported a draft for {candidate.name} without a draft ID"
             )
@@ -2056,14 +2402,34 @@ def run_btp_outreach(
             if screening_state:
                 screening_state.mark(candidate, "drafted_for_review")
             eligibility_reason = "Gmail draft ID missing; outcome is not confirmed"
+            delivery_stage = "gmail_draft_unconfirmed"
         else:
             report.blocked += 1
-            status = "blocked_by_safety_gate"
+            status = result.get("status") or "blocked_by_safety_gate"
             target.status = "blocked_by_safety_gate"
             if screening_state:
                 screening_state.mark(candidate, status)
             candidate.readiness = "WEBSITE_VERIFIED"
-            eligibility_reason = "ApplicationEngine did not approve or confirm a Gmail draft"
+            eligibility_reason = str(
+                result.get("reason")
+                or result.get("error")
+                or "; ".join(result.get("report", []))
+                or "ApplicationEngine blocked the configured email action"
+            )
+            if settings.email_mode == "live" and result.get("error"):
+                delivery_stage = "gmail_send_failed"
+            elif settings.email_mode == "draft" and result.get("error"):
+                delivery_stage = "gmail_draft_failed"
+            else:
+                delivery_stage = (
+                    "safety_gate_rejected"
+                    if result.get("report")
+                    else (
+                        "missing_cv"
+                        if result.get("reason") == "no cv"
+                        else "application_engine_blocked"
+                    )
+                )
         report.companies.append(_company_result(
             candidate,
             status,
@@ -2071,7 +2437,12 @@ def run_btp_outreach(
             official_domain=domain,
             recruitment_evidence_source=instruction_fact.source_url,
             contact_email_source=email_fact.source_url,
+            contact_email=address,
+            contact_confidence=email_fact.confidence,
+            application_url="",
             eligibility_reason=eligibility_reason,
+            delivery_stage=delivery_stage,
+            previously_visited_missing_evidence=previously_visited_missing_evidence,
             previous_application=False,
             previous_draft=False,
             cooldown=False,
@@ -2088,6 +2459,13 @@ def _company_result(
     official_domain: str = "",
     recruitment_evidence_source: str = "",
     contact_email_source: str = "",
+    contact_email: str = "",
+    contact_confidence: int = 0,
+    application_url: str = "",
+    website_rejection_reason: str = "",
+    rejected_website: str = "",
+    delivery_stage: str = "",
+    previously_visited_missing_evidence: list[str] | None = None,
     eligibility_reason: str = "",
     previous_application: bool = False,
     previous_draft: bool = False,
@@ -2097,6 +2475,10 @@ def _company_result(
         "name": candidate.name,
         "company": candidate.name,
         "website": _eligible_website(candidate.website),
+        "rejected_website": rejected_website or candidate.rejected_website,
+        "website_rejection_reason": (
+            website_rejection_reason or candidate.website_rejection_reason
+        ),
         "official_domain": (
             official_domain or candidate.official_domain or host_domain(candidate.website)
         ),
@@ -2116,7 +2498,14 @@ def _company_result(
         "status": status,
         "recruitment_evidence_source": recruitment_evidence_source,
         "contact_email_source": contact_email_source,
+        "contact_email": contact_email,
+        "contact_confidence": contact_confidence,
+        "application_url": application_url,
         "eligibility_reason": eligibility_reason,
+        "delivery_stage": delivery_stage,
+        "previously_visited_missing_evidence": (
+            previously_visited_missing_evidence or []
+        ),
         "previous_application": previous_application,
         "previous_draft": previous_draft,
         "cooldown": cooldown,

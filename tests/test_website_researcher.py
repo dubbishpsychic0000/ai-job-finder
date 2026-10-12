@@ -112,14 +112,17 @@ def test_evidence_persistence_and_spontaneous_route(db):
     assert result.facts("recruitment_email")
 
 
-def test_incremental_research_reuses_frontier(tmp_path: Path):
+def test_incremental_research_without_database_refetches_for_missing_evidence(
+    tmp_path: Path,
+):
     pages = {"https://acme.ma/": Response("<a href='/careers'>Careers</a>"),
              "https://acme.ma/careers": Response("careers")}
     state = tmp_path / "research.json"
     first = researcher(pages, state_path=state).research("https://acme.ma/")
     second = researcher(pages, state_path=state).research("https://acme.ma/")
     assert first.visited
-    assert second.visited == []
+    assert second.visited == ["https://acme.ma/"]
+    assert second.revisited_missing_evidence == ["https://acme.ma/"]
 
 
 def test_failed_fetch_is_retried(tmp_path: Path):
@@ -152,6 +155,23 @@ def test_research_refreshes_expired_pages(tmp_path: Path):
     state.write_text(json.dumps(saved), encoding="utf-8")
     refreshed = researcher(pages, state_path=state).research("https://acme.ma/")
     assert refreshed.visited == ["https://acme.ma/"]
+
+
+def test_previously_visited_url_is_refetched_when_database_evidence_is_missing(
+    db, tmp_path: Path,
+):
+    pages = {"https://acme.ma/": Response("<title>Acme</title>")}
+    state = tmp_path / "research.json"
+    first = researcher(pages, db=db, state_path=state, max_pages=1).research(
+        "https://acme.ma/", company_id=42,
+    )
+    second = researcher(pages, db=db, state_path=state, max_pages=1).research(
+        "https://acme.ma/", company_id=42,
+    )
+
+    assert first.visited == ["https://acme.ma/"]
+    assert second.visited == ["https://acme.ma/"]
+    assert second.revisited_missing_evidence == ["https://acme.ma/"]
 
 
 def test_llm_values_without_matching_evidence_are_discarded():

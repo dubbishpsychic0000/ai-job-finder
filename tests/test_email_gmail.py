@@ -11,6 +11,7 @@ import json
 import logging
 import sys
 from datetime import datetime, timedelta, timezone
+from types import SimpleNamespace
 
 import pytest
 
@@ -155,6 +156,55 @@ def test_duplicate_application_blocked(db, config, profile, settings, monkeypatc
 
     assert result["status"] == "blocked"
     assert any("already applied" in r for r in result["report"])
+
+
+def test_spontaneous_live_send_requires_explicit_authorization(
+    db, config, profile, settings, monkeypatch,
+):
+    job = _job(db)
+    job.opportunity_type = "SPONTANEOUS_APPLICATION"
+    decision = _decision(db, job)
+    settings = _settings(settings, authorize_live_spontaneous=False)
+
+    def forbidden(*_args, **_kwargs):
+        raise AssertionError("unauthorized spontaneous live mode must not reach Gmail")
+
+    monkeypatch.setattr(provider_mod, "send", forbidden)
+    result = asyncio.run(_engine(
+        db, config, profile, settings, _real_communicator(profile),
+    ).run(job, decision, "APPLY", job.contact_email, "fr"))
+
+    assert result["status"] == "blocked"
+    assert "not explicitly authorized" in result["reason"]
+
+
+def test_authorized_spontaneous_live_send_requires_provider_message_id(
+    db, config, profile, settings, monkeypatch,
+):
+    job = _job(db)
+    job.opportunity_type = "SPONTANEOUS_APPLICATION"
+    decision = _decision(db, job)
+    settings = _settings(settings, authorize_live_spontaneous=True)
+    monkeypatch.setattr(
+        "app.email.service.validate",
+        lambda **_kwargs: SimpleNamespace(allowed=True, reasons=[], checks={}),
+    )
+    calls = []
+    monkeypatch.setattr(
+        provider_mod,
+        "send",
+        lambda *_args, **_kwargs: (calls.append("send") or (True, "", "")),
+    )
+
+    result = asyncio.run(_engine(
+        db, config, profile, settings, _real_communicator(profile),
+    ).run(job, decision, "APPLY", job.contact_email, "fr"))
+
+    assert calls == ["send"]
+    assert result["status"] == "deferred"
+    assert result["sent"] is False
+    assert "without a message ID" in result["error"]
+    assert db.query(models.Email).one().status == "failed"
 
 
 # ---------------------------------------------------------------------------

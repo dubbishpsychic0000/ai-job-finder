@@ -130,6 +130,7 @@ class ResearchResult:
     evidence: list[EvidenceFact] = field(default_factory=list)
     visited: list[str] = field(default_factory=list)
     blocked: list[str] = field(default_factory=list)
+    revisited_missing_evidence: list[str] = field(default_factory=list)
 
     def facts(self, field_name: str) -> list[EvidenceFact]:
         return [fact for fact in self.evidence if fact.field_name == field_name]
@@ -183,8 +184,14 @@ class WebsiteResearcher:
         while queue and len(result.visited) < self.max_pages:
             _, url = queue.pop(0)
             url = normalize_url(url)
-            if not url or url in fetched_at or url in attempted or not same_site(url, domain):
+            if not url or url in attempted or not same_site(url, domain):
                 continue
+            if url in fetched_at:
+                if self._has_persisted_evidence(
+                    url, company_id=company_id, job_id=job_id,
+                ):
+                    continue
+                result.revisited_missing_evidence.append(url)
             attempted.add(url)
             if not self._allowed(url):
                 result.blocked.append(url)
@@ -214,6 +221,20 @@ class WebsiteResearcher:
         self._state[domain] = fetched_at
         self._save_state()
         return result
+
+    def _has_persisted_evidence(
+        self, url: str, *, company_id: int | None, job_id: int | None,
+    ) -> bool:
+        if self.db_session is None:
+            return False
+        query = self.db_session.query(models.Evidence.id).filter(
+            models.Evidence.source_url == url,
+        )
+        if company_id is not None:
+            query = query.filter(models.Evidence.company_id == company_id)
+        if job_id is not None:
+            query = query.filter(models.Evidence.job_id == job_id)
+        return query.first() is not None
 
     def research_and_apply(self, start_url: str, *, company_id: int | None = None,
                            job_id: int | None = None, official_domain: str = "") -> ResearchResult:

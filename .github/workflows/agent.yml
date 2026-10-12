@@ -21,10 +21,14 @@ on:
         default: pipeline
         options: [pipeline, btp_outreach]
       email_mode:
-        description: "Email mode (BTP outreach is always draft-only)"
+        description: "Email mode; live sends require the separate BTP authorization checkbox"
         type: choice
         default: draft
         options: [dry_run, draft, live]
+      authorize_live_btp:
+        description: "Authorize one live BTP email in this manual run (requires email_mode=live)"
+        type: boolean
+        default: false
       max_companies:
         description: "Maximum nearest BTP companies to process (1-50)"
         type: number
@@ -56,10 +60,11 @@ jobs:
       # The agent sends only after the existing verification/safety gate.
       # At its hard daily limit (10), ApplicationEngine switches to Gmail drafts
       # and triggers an immediate WhatsApp alert instead.
-      # Real-source rollout: scheduled runs create reviewable Gmail drafts only.
-      # A manual dispatch may still explicitly choose live after review.
-      EMAIL_MODE: ${{ inputs.task == 'btp_outreach' && 'draft' || inputs.email_mode || 'draft' }}
-      ENABLE_EMAIL: ${{ (inputs.task == 'btp_outreach' || (inputs.email_mode || 'draft') != 'dry_run') && 'true' || 'false' }}
+      # Scheduled jobs stay draft-only regardless of dispatch inputs.
+      # Manual BTP live mode also requires the separate authorization input.
+      EMAIL_MODE: ${{ github.event_name == 'schedule' && 'draft' || inputs.email_mode || 'draft' }}
+      ENABLE_EMAIL: ${{ (github.event_name == 'schedule' || (inputs.email_mode || 'draft') != 'dry_run') && 'true' || 'false' }}
+      AUTHORIZE_LIVE_SPONTANEOUS: ${{ github.event_name == 'workflow_dispatch' && inputs.task == 'btp_outreach' && inputs.email_mode == 'live' && inputs.authorize_live_btp == true && 'true' || 'false' }}
       MIN_APPLICATION_SCORE: 80
       MIN_APPLICATION_CONFIDENCE: 0.8
     steps:
@@ -103,9 +108,10 @@ jobs:
           cat > .env << 'EOF'
           LLM_PROVIDER=gemini
           ENABLE_EMAIL=true
-          EMAIL_MODE=${{ inputs.task == 'btp_outreach' && 'draft' || inputs.email_mode || 'draft' }}
+          EMAIL_MODE=${{ github.event_name == 'schedule' && 'draft' || inputs.email_mode || 'draft' }}
           EMAIL_PROVIDER=gmail
           EMAIL_FROM=omar.benhamid@gmail.com
+          AUTHORIZE_LIVE_SPONTANEOUS=${{ github.event_name == 'workflow_dispatch' && inputs.task == 'btp_outreach' && inputs.email_mode == 'live' && inputs.authorize_live_btp == true && 'true' || 'false' }}
           MIN_APPLICATION_SCORE=80
           MIN_APPLICATION_CONFIDENCE=0.8
           TAVILY_DEBUG=1
@@ -133,8 +139,9 @@ jobs:
 
       - name: Reset ephemeral runtime state
         run: |
-          # Remove only transient outputs; persisted caches and budgets protect quotas.
-          rm -f data/test_agent.db data/*.sqlite data/*.db || true
+          # Keep agent.db: it contains authoritative companies, applications and extracted evidence.
+          # The private vault snapshot is the durable database between hosted runners.
+          rm -f data/test_agent.db data/*.sqlite || true
           rm -f data/gemini_result.json data/run_*.json || true
           echo "✓ Cleared runtime DB/cache files before run"
 
@@ -234,6 +241,7 @@ jobs:
           VAULT_URL: https://github.com/dubbishpsychic0000/ai-job-finder-vault.git
         run: |
           rm -f data/test_agent.db data/*.log* data/gemini_result.json data/run_*.json
+          python -c "import sqlite3; from app.config import get_settings; p=get_settings().sqlite_path; c=sqlite3.connect(p); c.execute('PRAGMA wal_checkpoint(TRUNCATE)').fetchall(); c.close()" || exit 1
           rm -rf /tmp/vault
           git clone --depth 1 "https://x-access-token:${VAULT_TOKEN}@${VAULT_URL#https://}" /tmp/vault
           cp -a data/. /tmp/vault/state/

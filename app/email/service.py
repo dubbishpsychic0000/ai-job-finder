@@ -82,10 +82,20 @@ class ApplicationEngine:
 
         from app.scheduler.control import is_paused  # lazy: avoid import cycle
 
-        if getattr(job, "opportunity_type", "") == "SPONTANEOUS_APPLICATION" and mode != "draft":
+        is_spontaneous = (
+            getattr(job, "opportunity_type", "") == "SPONTANEOUS_APPLICATION"
+        )
+        if is_spontaneous and mode == "live" and not getattr(
+            self.settings, "authorize_live_spontaneous", False
+        ):
             return self._record_disabled(
                 job, decision, action, score, contact_email,
-                reason="spontaneous applications are draft-only",
+                reason="live spontaneous email is not explicitly authorized",
+            )
+        if is_spontaneous and mode not in {"dry_run", "draft", "live"}:
+            return self._record_disabled(
+                job, decision, action, score, contact_email,
+                reason=f"unsupported spontaneous email mode: {mode}",
             )
         if is_paused():
             return self._record_disabled(
@@ -246,9 +256,16 @@ class ApplicationEngine:
     def _finalize_live(self, job, app, email, contact_email, subject, body,
                        attachment, score) -> dict:
         """Actually send through Gmail (only after the gate said yes)."""
-        ok, message_id, error = provider.send(
-            self.settings, to=contact_email, subject=subject, body=body,
-            attachments=[attachment])
+        try:
+            ok, message_id, error = provider.send(
+                self.settings, to=contact_email, subject=subject, body=body,
+                attachments=[attachment])
+        except Exception as exc:
+            ok, message_id, error = False, "", str(exc)
+            logger.exception("Email provider send failed")
+        if ok and not str(message_id or "").strip():
+            ok = False
+            error = "email provider reported success without a message ID"
         if ok:
             email.status = "sent"
             email.sent_at = utcnow()

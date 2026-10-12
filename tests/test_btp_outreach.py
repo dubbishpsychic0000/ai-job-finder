@@ -4,6 +4,7 @@ import asyncio
 import hashlib
 import json
 from datetime import datetime, timedelta, timezone
+from types import SimpleNamespace
 
 import pytest
 
@@ -373,7 +374,7 @@ def test_previously_screened_negative_can_be_requalified_by_official_recruitment
 
     assert report.drafts == 1
     assert report.as_run_report()["action"]["btp"]["production_smoke_outcome"] == (
-        "draft_created"
+        "gmail_draft_confirmed"
     )
 
 
@@ -1319,6 +1320,7 @@ def test_recruitment_evidence_from_third_party_domain_is_not_qualifying():
     [
         ("", "", "no_qualifying_email"),
         ("", "https://portal.vendor.example/apply", "portal_or_form"),
+        ("", "https://nocontact.ma/apply", "portal_or_form"),
         ("jobs@gmail.com", "", "no_qualifying_email"),
         ("jobs@other.ma", "", "no_qualifying_email"),
     ],
@@ -1467,6 +1469,47 @@ def test_existing_job_application_consumes_shared_btp_application_quota(
     assert report.processed == 0
     assert not researcher.visited
     assert db.query(models.Application).count() == 1
+
+
+def test_authorized_live_btp_run_is_capped_to_one_and_requires_message_id(
+    db, config, settings, profile, monkeypatch,
+):
+    settings = settings.model_copy(update={
+        "email_mode": "live",
+        "enable_email": True,
+        "email_provider": "gmail",
+        "authorize_live_spontaneous": True,
+    })
+    monkeypatch.setattr(
+        "app.email.service.validate",
+        lambda **_kwargs: SimpleNamespace(allowed=True, reasons=[], checks={}),
+    )
+    monkeypatch.setattr("app.scheduler.control.is_paused", lambda: False)
+    sends = []
+    monkeypatch.setattr(
+        provider,
+        "send",
+        lambda *_args, **_kwargs: (
+            sends.append("send") or (True, "message-id", "")
+        ),
+    )
+    companies = [
+        _company("Atlas Company", "https://atlas.ma", distance=1),
+        _company("Rif Company", "https://rif.ma", distance=2),
+    ]
+    researcher = _Researcher({
+        "atlas.ma": _evidence("atlas.ma", email="jobs@atlas.ma"),
+        "rif.ma": _evidence("rif.ma", email="jobs@rif.ma"),
+    })
+
+    report = _run(db, config, settings, profile, companies, researcher)
+
+    assert report.processed == 1
+    assert report.send_attempts == 1
+    assert report.sent == 1
+    assert report.drafts == 0
+    assert sends == ["send"]
+    assert report.companies[0]["delivery_stage"] == "gmail_send_confirmed"
 
 
 @pytest.mark.parametrize("safety_failure", ["missing_cv", "daily_limit"])
