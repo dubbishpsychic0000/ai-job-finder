@@ -86,7 +86,17 @@ owner requested Morocco be prioritized; the private preferences were updated
 to list Morocco first while retaining `sponsorship_required: true`. MEGEC's
 published page does not establish sponsorship availability, so a Moroccan
 application must remain blocked unless that requirement is satisfied without
-relaxing it. No email or draft has been created.
+relaxing it. The restore fix was published in `a6bf933`; targeted MEGEC
+preflight **38386255517** then returned `dry_run_validated`, re-fetched the
+official route, resolved the French CV, and passed the existing safety gate
+with **0 sends and 0 drafts**. A fresh production history preflight,
+**38386390488**, again found zero WCA-tracked application, draft, active or
+uncertain attempt, cooldown, or suppression records; the database hash was
+unchanged and no provider, messaging, or vault-write side effect occurred.
+Gmail mailbox history remains `NOT_CHECKED`, and the history report retains
+`submission_clearance: UNKNOWN`. The saved sponsorship requirement remains
+unsatisfied by available official evidence; therefore no live run was
+dispatched and no email or draft has been created.
 
 Latest focused redirect/BTP/history run: **116 passed**; full suite:
 **423 passed, 1 skipped**. Ruff, Python compilation, and `git diff --check`
