@@ -1,5 +1,53 @@
 # Project status
 
+## Read-only employer-history preflight
+
+The manual `history_preflight` task restores only `state/agent.db`,
+`state/btp_outreach_state.json`, `candidate/profile.yaml`, and
+`candidate/preferences.yaml` from the private vault using sparse checkout. It
+does not restore OAuth/API-key files, build the normal API-key `.env`, execute
+discovery or outreach, or run provider calls. Its CLI uses an immutable
+SQLite `mode=ro` connection, refuses non-empty SQLite WAL/journal sidecars,
+checks the restored database hash before and after reading, and never calls
+database initialization or migration. Missing, corrupt, inconsistent, or
+incompletely restored state returns `UNKNOWN`; no matching WCA row is reported
+as a scoped database result, not proof of mailbox-wide clearance.
+
+The sanitized report separately counts application outcomes, WCA-tracked
+drafts, unresolved/active live-send and draft attempts, employer cooldowns,
+BTP suppression records, and daily outbound limits for ODBM, TGCC, El Ouatik
+Frères, CETEMCO, and MEGEC; history checks can be limited to an allowlisted
+employer. Gmail
+mailbox history is always `NOT_CHECKED`; submission clearance remains unknown
+when that separate history cannot be verified. The report contains no message
+content, contact addresses, draft IDs, or candidate identity values. Route
+evidence is marked previously reported but not re-crawled by the read-only
+history task. The manual BTP task accepts only three allowlisted employer IDs,
+starts from each fixed official careers URL, skips broad discovery for targeted
+runs, and filters the candidate set to that employer before applying existing
+identity, duplicate, cooldown, route-verification, claims, daily-limit, and
+delivery gates. A target is a selector, not authorization. Targeted
+`email_mode=dry_run` restores only the production DB, BTP state, candidate
+profile/preferences, and CV; it disables LLM/WhatsApp credentials, rolls back
+all database work, refuses to initialize a missing DB, does not persist
+screening state, and skips WhatsApp and vault-persistence steps. It validates
+current route evidence and the generated application without a Gmail call or
+draft. An explicitly labeled `Postuler:
+email` route can qualify a general contact address; other general contacts
+remain excluded unless the existing general-contact option and recruitment
+evidence permit them. CETEMCO's current listing requires an exact vacancy title
+in the subject and verified CV fit, which the generic spontaneous sender cannot
+provide, so that targeted email route is blocked. ODBM and TGCC remain report-only portals because WCA
+does not submit web forms. The history task independently skips normal vault
+restoration, `.env` creation, outreach, WhatsApp hooks, and state persistence,
+including on failure; it uploads only the sanitized report.
+
+Latest focused history-preflight/BTP/discovery/integration run: **121 passed**;
+full suite **422 passed, 1 skipped**. Ruff, Python compilation, workflow YAML
+parsing, and `git diff --check` passed. These are local deterministic tests.
+The hosted production preflight remains pending; no employer is cleared from
+local state.
+
 ## Local discovery and outreach safety hardening
 
 Spontaneous BTP outreach now requires explicit, same-page application or CV

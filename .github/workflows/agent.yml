@@ -19,7 +19,7 @@ on:
         description: "Workflow to run"
         type: choice
         default: pipeline
-        options: [pipeline, btp_outreach]
+        options: [pipeline, btp_outreach, history_preflight]
       email_mode:
         description: "Email mode; live sends require the separate BTP authorization checkbox"
         type: choice
@@ -33,6 +33,11 @@ on:
         description: "Maximum nearest BTP companies to process (1-50)"
         type: number
         default: 20
+      target_employer:
+        description: "Optional allowlisted employer target for history or BTP checks"
+        type: choice
+        default: none
+        options: [none, el_ouatik_freres, cetemco, megec]
       whatsapp_test:
         description: "Send one WhatsApp connection-test template message"
         type: boolean
@@ -48,12 +53,12 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 55
     env:
-      LLM_PROVIDER: gemini
-      WHATSAPP_PHONE_NUMBER_ID: ${{ vars.WHATSAPP_PHONE_NUMBER_ID }}
-      WHATSAPP_RECIPIENT: ${{ secrets.WHATSAPP_RECIPIENT }}
-      WHATSAPP_TEMPLATE_NAME: ${{ vars.WHATSAPP_TEMPLATE_NAME }}
-      WHATSAPP_TEMPLATE_LANGUAGE: ${{ vars.WHATSAPP_TEMPLATE_LANGUAGE || 'en_US' }}
-      WHATSAPP_GRAPH_API_VERSION: ${{ vars.WHATSAPP_GRAPH_API_VERSION || 'v23.0' }}
+      LLM_PROVIDER: ${{ (inputs.task == 'history_preflight' || (inputs.task == 'btp_outreach' && inputs.email_mode == 'dry_run' && inputs.target_employer != 'none')) && 'null' || 'gemini' }}
+      WHATSAPP_PHONE_NUMBER_ID: ${{ (inputs.task == 'history_preflight' || (inputs.task == 'btp_outreach' && inputs.email_mode == 'dry_run' && inputs.target_employer != 'none')) && 'disabled' || vars.WHATSAPP_PHONE_NUMBER_ID }}
+      WHATSAPP_RECIPIENT: ${{ (inputs.task == 'history_preflight' || (inputs.task == 'btp_outreach' && inputs.email_mode == 'dry_run' && inputs.target_employer != 'none')) && 'disabled' || secrets.WHATSAPP_RECIPIENT }}
+      WHATSAPP_TEMPLATE_NAME: ${{ (inputs.task == 'history_preflight' || (inputs.task == 'btp_outreach' && inputs.email_mode == 'dry_run' && inputs.target_employer != 'none')) && 'disabled' || vars.WHATSAPP_TEMPLATE_NAME }}
+      WHATSAPP_TEMPLATE_LANGUAGE: ${{ (inputs.task == 'history_preflight' || (inputs.task == 'btp_outreach' && inputs.email_mode == 'dry_run' && inputs.target_employer != 'none')) && 'disabled' || vars.WHATSAPP_TEMPLATE_LANGUAGE || 'en_US' }}
+      WHATSAPP_GRAPH_API_VERSION: ${{ (inputs.task == 'history_preflight' || (inputs.task == 'btp_outreach' && inputs.email_mode == 'dry_run' && inputs.target_employer != 'none')) && 'disabled' || vars.WHATSAPP_GRAPH_API_VERSION || 'v23.0' }}
       # A final workflow step sends exactly one WhatsApp status on every run,
       # including pipeline failures.
       WHATSAPP_RUN_SUMMARY_MANAGED: workflow
@@ -62,9 +67,9 @@ jobs:
       # and triggers an immediate WhatsApp alert instead.
       # Scheduled jobs stay draft-only regardless of dispatch inputs.
       # Manual BTP live mode also requires the separate authorization input.
-      EMAIL_MODE: ${{ github.event_name == 'schedule' && 'draft' || inputs.email_mode || 'draft' }}
-      ENABLE_EMAIL: ${{ (github.event_name == 'schedule' || (inputs.email_mode || 'draft') != 'dry_run') && 'true' || 'false' }}
-      AUTHORIZE_LIVE_SPONTANEOUS: ${{ github.event_name == 'workflow_dispatch' && inputs.task == 'btp_outreach' && inputs.email_mode == 'live' && inputs.authorize_live_btp == true && 'true' || 'false' }}
+      EMAIL_MODE: ${{ inputs.task == 'history_preflight' && 'dry_run' || github.event_name == 'schedule' && 'draft' || inputs.email_mode || 'draft' }}
+      ENABLE_EMAIL: ${{ inputs.task == 'history_preflight' && 'false' || (github.event_name == 'schedule' || (inputs.email_mode || 'draft') != 'dry_run') && 'true' || 'false' }}
+      AUTHORIZE_LIVE_SPONTANEOUS: ${{ inputs.task == 'history_preflight' && 'false' || github.event_name == 'workflow_dispatch' && inputs.task == 'btp_outreach' && inputs.email_mode == 'live' && inputs.authorize_live_btp == true && 'true' || 'false' }}
       MIN_APPLICATION_SCORE: 80
       MIN_APPLICATION_CONFIDENCE: 0.8
     steps:
@@ -80,7 +85,77 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements.txt
 
+      - name: Restore only read-only history-preflight inputs
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.task == 'history_preflight' }}
+        env:
+          VAULT_TOKEN: ${{ secrets.VAULT_TOKEN }}
+          VAULT_URL: https://github.com/dubbishpsychic0000/ai-job-finder-vault.git
+        run: |
+          mkdir -p data candidate
+          printf '{"vault_snapshot_restored":false,"state_database_restored":false,"vault_read_performed":false}\n' > data/preflight_restore_status.json
+          rm -rf /tmp/wca-history-vault
+          set +e
+          git clone --depth 1 --filter=blob:none --sparse \
+            "https://x-access-token:${VAULT_TOKEN}@${VAULT_URL#https://}" \
+            /tmp/wca-history-vault >/dev/null 2>&1
+          clone_status=$?
+          if [ "$clone_status" -eq 0 ]; then
+            printf '{"vault_snapshot_restored":false,"state_database_restored":false,"vault_read_performed":true}\n' \
+              > data/preflight_restore_status.json
+            git -C /tmp/wca-history-vault sparse-checkout set --no-cone \
+              state/agent.db state/btp_outreach_state.json \
+              candidate/profile.yaml candidate/preferences.yaml >/dev/null 2>&1
+            checkout_status=$?
+            if [ "$checkout_status" -eq 0 ]; then
+              git -C /tmp/wca-history-vault checkout >/dev/null 2>&1
+              checkout_status=$?
+            fi
+            if [ "$checkout_status" -eq 0 ]; then
+              cp /tmp/wca-history-vault/candidate/profile.yaml candidate/profile.yaml 2>/dev/null
+              profile_status=$?
+              cp /tmp/wca-history-vault/candidate/preferences.yaml candidate/preferences.yaml 2>/dev/null
+              preferences_status=$?
+              cp /tmp/wca-history-vault/state/agent.db data/agent.db 2>/dev/null
+              database_status=$?
+              cp /tmp/wca-history-vault/state/btp_outreach_state.json data/btp_outreach_state.json 2>/dev/null
+              state_status=$?
+              if [ "$database_status" -eq 0 ]; then
+                printf '{"vault_snapshot_restored":true,"state_database_restored":true,"vault_read_performed":true,"candidate_profile_restored":%s,"candidate_preferences_restored":%s,"screening_state_restored":%s}\n' \
+                  "$([ "$profile_status" -eq 0 ] && echo true || echo false)" \
+                  "$([ "$preferences_status" -eq 0 ] && echo true || echo false)" \
+                  "$([ "$state_status" -eq 0 ] && echo true || echo false)" \
+                  > data/preflight_restore_status.json
+              else
+                printf '{"vault_snapshot_restored":true,"state_database_restored":false,"vault_read_performed":true}\n' > data/preflight_restore_status.json
+              fi
+            fi
+          fi
+          rm -rf /tmp/wca-history-vault
+
+      - name: Restore targeted BTP preflight inputs only
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.task == 'btp_outreach' && inputs.email_mode == 'dry_run' && inputs.target_employer != 'none' }}
+        env:
+          VAULT_TOKEN: ${{ secrets.VAULT_TOKEN }}
+          VAULT_URL: https://github.com/dubbishpsychic0000/ai-job-finder-vault.git
+        run: |
+          mkdir -p data candidate
+          rm -rf /tmp/wca-target-vault
+          git clone --depth 1 --filter=blob:none --sparse \
+            "https://x-access-token:${VAULT_TOKEN}@${VAULT_URL#https://}" \
+            /tmp/wca-target-vault >/dev/null 2>&1
+          git -C /tmp/wca-target-vault sparse-checkout set --no-cone \
+            state/agent.db state/btp_outreach_state.json \
+            candidate/profile.yaml candidate/preferences.yaml candidate/cv/
+          git -C /tmp/wca-target-vault checkout >/dev/null 2>&1
+          cp /tmp/wca-target-vault/state/agent.db data/agent.db
+          cp /tmp/wca-target-vault/state/btp_outreach_state.json data/btp_outreach_state.json
+          cp /tmp/wca-target-vault/candidate/profile.yaml candidate/profile.yaml
+          cp /tmp/wca-target-vault/candidate/preferences.yaml candidate/preferences.yaml
+          cp -a /tmp/wca-target-vault/candidate/cv candidate/cv
+          rm -rf /tmp/wca-target-vault
+
       - name: Restore candidate data, OAuth secrets, and state (private vault)
+        if: ${{ inputs.task != 'history_preflight' && !(inputs.task == 'btp_outreach' && inputs.email_mode == 'dry_run' && inputs.target_employer != 'none') }}
         env:
           VAULT_TOKEN: ${{ secrets.VAULT_TOKEN }}
           VAULT_URL: https://github.com/dubbishpsychic0000/ai-job-finder-vault.git
@@ -101,6 +176,7 @@ jobs:
           cp -a /tmp/vault/state/. ./data/ 2>/dev/null || true
 
       - name: Build .env from vault and secrets
+        if: ${{ inputs.task != 'history_preflight' && !(inputs.task == 'btp_outreach' && inputs.email_mode == 'dry_run' && inputs.target_employer != 'none') }}
         env:
           GEMINI_API_KEYS: ${{ secrets.GEMINI_API_KEYS }}
         run: |
@@ -138,6 +214,7 @@ jobs:
           echo "✓ Preserved API budget tracking from the private vault"
 
       - name: Reset ephemeral runtime state
+        if: ${{ inputs.task != 'history_preflight' && !(inputs.task == 'btp_outreach' && inputs.email_mode == 'dry_run' && inputs.target_employer != 'none') }}
         run: |
           # Keep agent.db: it contains authoritative companies, applications and extracted evidence.
           # The private vault snapshot is the durable database between hosted runners.
@@ -158,22 +235,53 @@ jobs:
           cat /tmp/run_report.json || true
           exit $(cat /tmp/pipeline_exit_code)
 
+      - name: Run read-only employer history preflight
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.task == 'history_preflight' }}
+        env:
+          TARGET_EMPLOYER: ${{ inputs.target_employer || 'none' }}
+        run: |
+          set +e
+          args=(python -m app.cli history-preflight \
+            --database data/agent.db \
+            --screening-state data/btp_outreach_state.json \
+            --profile candidate/profile.yaml \
+            --preferences candidate/preferences.yaml \
+            --restore-status data/preflight_restore_status.json)
+          if [ "$TARGET_EMPLOYER" != "none" ]; then
+            args+=(--employer "$TARGET_EMPLOYER")
+          fi
+          "${args[@]}" > /tmp/history_preflight_report.json 2>/dev/null
+          if [ ! -s /tmp/history_preflight_report.json ]; then
+            printf '{"workflow":"history_preflight","report_schema_version":1,"read_only":false,"database":{"status":"UNKNOWN","reason_code":"preflight_command_failed","modified":null},"side_effects":{"database_modified":null,"vault_read":true,"vault_modified":false,"messaging":false,"gmail_provider":false,"discovery_or_llm_provider":false},"scope":{"database_history":"WCA_TRACKED_ONLY","gmail_mailbox_history":"NOT_CHECKED"},"employers":{"el_ouatik_freres":{"duplicate_suppression":{"status":"UNKNOWN","reason_code":"preflight_command_failed","record_count":0}},"cetemco":{"duplicate_suppression":{"status":"UNKNOWN","reason_code":"preflight_command_failed","record_count":0}},"megec":{"duplicate_suppression":{"status":"UNKNOWN","reason_code":"preflight_command_failed","record_count":0}},"odbm":{"duplicate_suppression":{"status":"UNKNOWN","reason_code":"preflight_command_failed","record_count":0}},"tgcc":{"duplicate_suppression":{"status":"UNKNOWN","reason_code":"preflight_command_failed","record_count":0}}}}\n' \
+              > /tmp/history_preflight_report.json
+          fi
+          exit 0
+
       - name: Run BTP spontaneous-application workflow
         if: ${{ github.event_name == 'workflow_dispatch' && inputs.task == 'btp_outreach' }}
         env:
-          GEMINI_API_KEYS: ${{ secrets.GEMINI_API_KEYS }}
-          WHATSAPP_ACCESS_TOKEN: ${{ secrets.WHATSAPP_ACCESS_TOKEN }}
+          GEMINI_API_KEYS: ${{ inputs.email_mode == 'dry_run' && inputs.target_employer != 'none' && 'disabled' || secrets.GEMINI_API_KEYS }}
+          WHATSAPP_ACCESS_TOKEN: ${{ inputs.email_mode == 'dry_run' && inputs.target_employer != 'none' && 'disabled' || secrets.WHATSAPP_ACCESS_TOKEN }}
           MAX_COMPANIES: ${{ inputs.max_companies || 20 }}
+          TARGET_EMPLOYER: ${{ inputs.target_employer || 'none' }}
+          TARGET_PREFLIGHT_ONLY: ${{ inputs.email_mode == 'dry_run' && inputs.target_employer != 'none' && 'true' || 'false' }}
         run: |
           set +e
-          python -m app.cli btp-outreach --origin-city Casablanca --max-companies "$MAX_COMPANIES" > /tmp/run_report.json 2> /tmp/run.log
+          args=(python -m app.cli btp-outreach --origin-city Casablanca --max-companies "$MAX_COMPANIES")
+          if [ "$TARGET_EMPLOYER" != "none" ]; then
+            args+=(--target-employer "$TARGET_EMPLOYER")
+          fi
+          if [ "$TARGET_PREFLIGHT_ONLY" = "true" ]; then
+            args+=(--preflight-only)
+          fi
+          "${args[@]}" > /tmp/run_report.json 2> /tmp/run.log
           echo $? > /tmp/pipeline_exit_code
           cat /tmp/run.log || true
           cat /tmp/run_report.json || true
           exit $(cat /tmp/pipeline_exit_code)
 
       - name: Upload run artifacts
-        if: ${{ always() }}
+        if: ${{ always() && inputs.task != 'history_preflight' }}
         uses: actions/upload-artifact@v4
         with:
           name: ${{ (github.event_name == 'workflow_dispatch' && inputs.task == 'btp_outreach') && 'btp-outreach-logs' || 'agent-logs' }}-${{ github.run_id }}
@@ -182,8 +290,16 @@ jobs:
             /tmp/run.log
             /tmp/tavily_debug.json
 
+      - name: Upload sanitized history-preflight report
+        if: ${{ always() && inputs.task == 'history_preflight' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: employer-history-preflight-${{ github.run_id }}
+          path: /tmp/history_preflight_report.json
+          if-no-files-found: warn
+
       - name: Send WhatsApp run status
-        if: ${{ always() }}
+        if: ${{ always() && inputs.task != 'history_preflight' && !(inputs.task == 'btp_outreach' && inputs.email_mode == 'dry_run' && inputs.target_employer != 'none') }}
         env:
           WHATSAPP_ACCESS_TOKEN: ${{ secrets.WHATSAPP_ACCESS_TOKEN }}
         run: |
@@ -228,14 +344,14 @@ jobs:
           PY
 
       - name: Send WhatsApp connection test
-        if: ${{ always() && inputs.whatsapp_test == true }}
+        if: ${{ always() && inputs.task != 'history_preflight' && !(inputs.task == 'btp_outreach' && inputs.email_mode == 'dry_run' && inputs.target_employer != 'none') && inputs.whatsapp_test == true }}
         env:
           WHATSAPP_ACCESS_TOKEN: ${{ secrets.WHATSAPP_ACCESS_TOKEN }}
         run: |
           python -c "from app.notifications.whatsapp import MetaWhatsAppProvider; import sys; p=MetaWhatsAppProvider(); ok=p.send('WhatsApp connection test: your Worldwide Career Agent is configured and ready.'); print(f'WhatsApp request accepted by Meta; handset delivery unverified; message id: {p.last_message_id or \"not returned\"}'); sys.exit(0 if ok else 1)"
 
       - name: Persist state back to vault
-        if: always()
+        if: ${{ always() && inputs.task != 'history_preflight' && !(inputs.task == 'btp_outreach' && inputs.email_mode == 'dry_run' && inputs.target_employer != 'none') }}
         env:
           VAULT_TOKEN: ${{ secrets.VAULT_TOKEN }}
           VAULT_URL: https://github.com/dubbishpsychic0000/ai-job-finder-vault.git
@@ -253,7 +369,7 @@ jobs:
           git push origin HEAD:main
 
       - name: Upload run logs
-        if: always()
+        if: ${{ always() && inputs.task != 'history_preflight' }}
         uses: actions/upload-artifact@v4
         with:
           name: ${{ (github.event_name == 'workflow_dispatch' && inputs.task == 'btp_outreach') && 'btp-outreach-runtime-logs' || 'agent-runtime-logs' }}-${{ github.run_id }}

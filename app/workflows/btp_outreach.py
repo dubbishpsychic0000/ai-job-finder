@@ -35,7 +35,7 @@ from app.connectors.tavily_resilience import (
     TavilyKey,
     key_fingerprint,
 )
-from app.discovery.email_verification import EmailVerificationService
+from app.discovery.email_verification import EMAIL_RE, EmailVerificationService
 from app.discovery.employers import classify_result
 from app.discovery.website_researcher import (
     EvidenceFact,
@@ -58,6 +58,27 @@ MAX_OVERPASS_BYTES = 5 * 1024 * 1024
 MAX_CANDIDATES = 1000
 DEFAULT_MAX_COMPANIES = 20
 HARD_MAX_COMPANIES = 50
+TARGET_EMPLOYERS = {
+    "el_ouatik_freres": {
+        "name": "Elouatiki Frères",
+        "aliases": ("El Ouatik Frères", "Elouatiki Frères", "Elouatiki Freres"),
+        "website": "https://elouatikifreres.com/fr/carrieres/",
+    },
+    "cetemco": {
+        "name": "CETEMCO",
+        "aliases": ("CETEMCO", "Centre des Techniques et des Matériaux de Construction"),
+        "website": "https://cetemco.org/offres-demplois/",
+        "email_action_block_reason": (
+            "the current vacancy requires its exact job title in the subject; "
+            "the workflow has no vacancy-specific subject or verified-CV-fit path"
+        ),
+    },
+    "megec": {
+        "name": "MEGEC",
+        "aliases": ("MEGEC", "M.E.G.E.C."),
+        "website": "https://www.megec.com/candidature-spontanee/",
+    },
+}
 MAX_WEBSITE_SEARCH_RESULTS = 8
 MAX_TAVILY_API_CALLS_PER_RUN = BTP_TAVILY_DAILY_RESERVE
 MAX_DUCKDUCKGO_API_CALLS_PER_RUN = 3
@@ -159,8 +180,9 @@ class _BoundedPublicSearchRouter:
 class BtpOutreachState:
     """Vault-persisted screening ledger; protects progress when Actions resets SQLite."""
 
-    def __init__(self, path: Path):
+    def __init__(self, path: Path, *, persist: bool = True):
         self.path = path
+        self.persist = persist
         self.records: dict[str, dict[str, str]] = {}
         if not path.exists():
             return
@@ -265,6 +287,8 @@ class BtpOutreachState:
         self._save()
 
     def _save(self) -> None:
+        if not self.persist:
+            return
         self.path.parent.mkdir(parents=True, exist_ok=True)
         temporary = self.path.with_suffix(self.path.suffix + ".tmp")
         serialized = json.dumps({
@@ -325,6 +349,8 @@ class BtpCompany:
 @dataclass
 class BtpOutreachReport:
     origin_city: str = "Casablanca"
+    target_employer: str = ""
+    preflight_only: bool = False
     candidates: int = 0
     osm_candidates: int = 0
     wikidata_candidates: int = 0
@@ -386,6 +412,8 @@ class BtpOutreachReport:
         return {
             "workflow": "btp_outreach",
             "origin_city": self.origin_city,
+            "target_employer": self.target_employer or None,
+            "preflight_only": self.preflight_only,
             "limitation": self.limitation,
             "discovery": {
                 "new_jobs": 0,
@@ -1649,7 +1677,7 @@ def _qualifying_contact(
     official_domain: str,
     *,
     allow_general_contact: bool = False,
-) -> tuple[str, EvidenceFact, EvidenceFact] | None:
+) -> tuple[str, EvidenceFact, EvidenceFact, str] | None:
     instructions = [
         fact for fact in evidence
         if fact.field_name in {
@@ -1670,6 +1698,12 @@ def _qualifying_contact(
             address = fact.extracted_value.strip().lower()
             if address not in instruction_text:
                 continue
+            if (
+                fact.field_name == "general_email"
+                and not allow_general_contact
+                and not re.search(r"\b(?:postuler|apply)\b", instruction_text, re.I)
+            ):
+                continue
             verified = EmailVerificationService().verify(
                 address,
                 source_url=fact.source_url,
@@ -1678,7 +1712,13 @@ def _qualifying_contact(
                 employer_domain=official_domain,
             )
             if verified.verified:
-                return address, instruction, fact
+                route_type = (
+                    "level_a_explicit_email_instruction"
+                    if fact.field_name == "recruitment_email"
+                    or re.search(r"\b(?:postuler|apply)\b", instruction_text, re.I)
+                    else "level_c_configured_general_contact"
+                )
+                return address, instruction, fact, route_type
         for fact in evidence:
             if (
                 fact.source_url != instruction.source_url
@@ -1700,9 +1740,69 @@ def _qualifying_contact(
                 application_instruction=instruction,
             )
             if verified.verified:
-                return address, instruction, fact
+                return address, instruction, fact, "level_a_explicit_email_instruction"
+
+    for fact in evidence:
+        if fact.field_name not in {"recruitment_email", "general_email"}:
+            continue
+        if not _evidence_is_on_official_domain(fact, official_domain):
+            continue
+        address = fact.extracted_value.strip().lower()
+        local_part = address.split("@", 1)[0]
+        if fact.field_name == "general_email" and local_part in {
+            "info", "contact", "hello", "admin", "support", "office",
+        }:
+            continue
+        if not _is_recruitment_context(fact):
+            continue
+        if fact.field_name == "general_email" and not _has_explicit_recruitment_label(fact):
+            continue
+        conflicting_instruction = any(
+            instruction.source_url == fact.source_url
+            and _explicit_instruction_text(instruction)
+            and address not in _explicit_instruction_text(instruction).casefold()
+            for instruction in evidence
+            if instruction.field_name in {
+                "application_instructions", "spontaneous_application",
+            }
+        )
+        if conflicting_instruction:
+            continue
+        verified = EmailVerificationService().verify(
+            address,
+            source_url=fact.source_url,
+            source_type="company_career",
+            official=True,
+            employer_domain=official_domain,
+        )
+        if verified.verified:
+            route_type = (
+                "level_b_official_recruitment_email"
+                if fact.field_name == "recruitment_email"
+                else "level_b_recruitment_labeled_email"
+            )
+            return address, fact, fact, route_type
 
     return None
+
+
+def _is_recruitment_context(fact: EvidenceFact) -> bool:
+    snippet = EMAIL_RE.sub("", fact.snippet)
+    context = " ".join((fact.page_title, snippet)).casefold()
+    return bool(re.search(
+        r"\b(?:recruit(?:ment|ing)?|recrut(?:ement|ement)|career(?:s)?|"
+        r"emploi|jobs?|human resources|hr|rh|talent|hiring)\b",
+        context,
+    ))
+
+
+def _has_explicit_recruitment_label(fact: EvidenceFact) -> bool:
+    context = EMAIL_RE.sub("", fact.snippet).casefold()
+    return bool(re.search(
+        r"\b(?:recruit(?:ment|ing)?|recrut(?:ement|ement)|career(?:s)?|"
+        r"emploi|jobs?|human resources|hr|rh|talent|hiring)\b",
+        context,
+    ))
 
 
 def _explicit_instruction_text(fact: EvidenceFact) -> str:
@@ -1845,6 +1945,8 @@ def run_btp_outreach(
     *,
     origin_city: str = "Casablanca",
     max_companies: int = DEFAULT_MAX_COMPANIES,
+    target_employer: str | None = None,
+    preflight_only: bool = False,
     discovery: OverpassBtpDiscovery | None = None,
     wikidata_discovery: WikidataBtpDiscovery | None = None,
     seed_csv_path: Path | None = None,
@@ -1870,8 +1972,31 @@ def run_btp_outreach(
         raise BtpOutreachSafetyError(
             "draft/live BTP outreach requires EMAIL_PROVIDER=gmail; no provider interaction occurred"
         )
+    target_spec = None
+    if target_employer:
+        target_spec = TARGET_EMPLOYERS.get(target_employer)
+        if target_spec is None:
+            raise BtpOutreachSafetyError(
+                "target_employer must be selected from the supported official-employer list"
+            )
+        target_website = _eligible_website(target_spec["website"])
+        if (
+            not target_website
+            or not _candidate_domain_matches(target_spec["name"], target_website)
+        ):
+            raise BtpOutreachSafetyError(
+                "configured employer target failed official website validation"
+            )
+    if preflight_only and (not target_spec or settings.email_mode != "dry_run"):
+        raise BtpOutreachSafetyError(
+            "preflight_only requires an allowlisted target_employer and EMAIL_MODE=dry_run"
+        )
     requested_cap = max(1, min(HARD_MAX_COMPANIES, int(max_companies)))
-    report = BtpOutreachReport(origin_city=origin_city)
+    report = BtpOutreachReport(
+        origin_city=origin_city,
+        target_employer=target_spec["name"] if target_spec else "",
+        preflight_only=preflight_only,
+    )
     pooled = _company_pool_candidates(session, config)
     report.company_pool_candidates = len(pooled)
     sent_today = mem.store.count_dispatched_today(session)
@@ -1889,37 +2014,61 @@ def run_btp_outreach(
     if settings.email_mode == "live" and settings.authorize_live_spontaneous:
         cap = min(cap, 1)
     screening_state = (
-        BtpOutreachState(screening_state_path) if screening_state_path else None
+        BtpOutreachState(
+            screening_state_path,
+            persist=not preflight_only,
+        ) if screening_state_path else None
     )
     directory = discovery or OverpassBtpDiscovery()
     listed: list[BtpCompany] = []
     searched: list[BtpCompany] = []
-    try:
-        listed = directory.discover()
-        report.errors.extend(getattr(directory, "errors", []))
-    except Exception as exc:
-        report.errors.extend(getattr(directory, "errors", []))
-        report.errors.append(f"public Overpass discovery failed: {exc}")
-    try:
-        seeded = load_btp_seed_csv(seed_csv_path)
-    except Exception as exc:
-        seeded = []
-        report.errors.append(f"curated BTP seed CSV could not be read: {exc}")
-    wikidata = wikidata_discovery or WikidataBtpDiscovery()
-    try:
-        wikidata_companies = wikidata.discover()
-        report.errors.extend(getattr(wikidata, "errors", []))
-    except Exception as exc:
-        wikidata_companies = []
-        report.errors.append(f"Wikidata BTP discovery failed: {exc}")
+    wikidata_companies: list[BtpCompany] = []
+    seeded: list[BtpCompany] = []
+    if target_spec is None:
+        try:
+            listed = directory.discover()
+            report.errors.extend(getattr(directory, "errors", []))
+        except Exception as exc:
+            report.errors.extend(getattr(directory, "errors", []))
+            report.errors.append(f"public Overpass discovery failed: {exc}")
+        try:
+            seeded = load_btp_seed_csv(seed_csv_path)
+        except Exception as exc:
+            seeded = []
+            report.errors.append(f"curated BTP seed CSV could not be read: {exc}")
+        wikidata = wikidata_discovery or WikidataBtpDiscovery()
+        try:
+            wikidata_companies = wikidata.discover()
+            report.errors.extend(getattr(wikidata, "errors", []))
+        except Exception as exc:
+            wikidata_companies = []
+            report.errors.append(f"Wikidata BTP discovery failed: {exc}")
     search = company_search or PublicBtpCompanySearch()
-    base_candidates = _merge_candidates(pooled, listed, seeded, wikidata_companies)
+    targeted_candidate = []
+    if target_spec is not None:
+        targeted_candidate = [BtpCompany(
+            name=target_spec["name"],
+            website=target_spec["website"],
+            city="Casablanca",
+            region="Casablanca-Settat",
+            latitude=CASABLANCA_CENTER[0],
+            longitude=CASABLANCA_CENTER[1],
+            distance_km=0,
+            source_url=target_spec["website"],
+            source="company_careers_direct",
+            official_domain=host_domain(target_spec["website"]),
+            industry="BTP / construction",
+            relevance_score=100,
+        )]
+    base_candidates = _merge_candidates(
+        pooled, listed, seeded, wikidata_companies, targeted_candidate,
+    )
     reusable_known_sites = sum(
         bool(_eligible_website(candidate.website))
         and not (screening_state and screening_state.is_suppressed(candidate))
         for candidate in base_candidates
     )
-    if cap > 0 and reusable_known_sites == 0:
+    if target_spec is None and cap > 0 and reusable_known_sites == 0:
         try:
             searched = search.discover()
             report.errors.extend(getattr(search, "errors", []))
@@ -1929,7 +2078,7 @@ def run_btp_outreach(
             )
         except Exception as exc:
             report.errors.append(f"public company web search failed: {exc}")
-    elif reusable_known_sites > 0:
+    elif target_spec is None and reusable_known_sites > 0:
         report.external_company_search_skipped = True
     if not base_candidates and not searched:
         report.refresh_readiness_counts()
@@ -1938,9 +2087,17 @@ def run_btp_outreach(
     report.seed_candidates = len(seeded)
     report.wikidata_candidates = len(wikidata_companies)
     report.web_candidates = len(searched)
-    candidates = _rank_company_candidates(
-        _merge_candidates(base_candidates, searched)[:MAX_CANDIDATES]
-    )
+    candidates = _merge_candidates(base_candidates, searched)
+    if target_spec is not None:
+        expected_domain = host_domain(target_spec["website"])
+        candidates = [
+            candidate for candidate in candidates
+            if host_domain(candidate.website) == expected_domain
+            or candidate.name.casefold() in {
+                alias.casefold() for alias in target_spec["aliases"]
+            }
+        ]
+    candidates = _rank_company_candidates(candidates[:MAX_CANDIDATES])
     report.candidates = len(candidates)
     report.known_website_candidates = sum(
         bool(_eligible_website(candidate.website)) for candidate in candidates
@@ -2286,6 +2443,27 @@ def run_btp_outreach(
                     ):
                         company.careers_url = fact.extracted_value
                         candidate.careers_url = fact.extracted_value
+                if crawl_incomplete:
+                    report.crawl_failed += 1
+                    target.status = "crawl_failed"
+                    candidate.readiness = "RESEARCH_DEFERRED"
+                    if screening_state:
+                        screening_state.mark(candidate, "crawl_failed")
+                    report.companies.append(_company_result(
+                        candidate,
+                        "crawl_incomplete",
+                        official_domain=domain,
+                        eligibility_reason=(
+                            "official-site crawl was partial; evidence was not used "
+                            "to authorize an application route"
+                        ),
+                        eligibility_reason_code="crawl_incomplete",
+                        delivery_stage="crawl_blocked_or_failed",
+                        previously_visited_missing_evidence=(
+                            previously_visited_missing_evidence
+                        ),
+                    ))
+                    continue
         except Exception as exc:
             report.errors.append(f"website research failed for a listed company: {exc}")
             target.status = "research_error"
@@ -2325,6 +2503,26 @@ def run_btp_outreach(
                 candidate.readiness = "CONTACT_FOUND"
             portal_url = _application_portal_url(evidence, domain)
             if portal_url:
+                portal_fact = next(
+                    (
+                        fact for fact in evidence
+                        if fact.field_name == "application_url"
+                        and normalize_url(fact.extracted_value) == portal_url
+                    ),
+                    None,
+                )
+                portal_instruction = next(
+                    (
+                        fact for fact in evidence
+                        if fact.field_name in {
+                            "application_instructions", "spontaneous_application",
+                        }
+                        and portal_fact is not None
+                        and fact.source_url == portal_fact.source_url
+                        and _explicit_instruction_text(fact)
+                    ),
+                    None,
+                )
                 report.portal_or_form += 1
                 target.status = "portal_or_form"
                 lead = existing_outreach or _outreach_job(
@@ -2336,7 +2534,21 @@ def run_btp_outreach(
                     screening_state.mark(candidate, "portal_or_form")
                 report.companies.append(_company_result(
                     candidate, "portal_or_form", application_url=portal_url,
-                    eligibility_reason="official website exposes an actionable application route",
+                    application_route_type="level_a_official_portal",
+                    application_evidence_url=(
+                        portal_instruction.source_url if portal_instruction else ""
+                    ),
+                    application_evidence_excerpt=(
+                        _explicit_instruction_text(portal_instruction)
+                        if portal_instruction else ""
+                    ),
+                    application_evidence_confidence=(
+                        portal_instruction.confidence if portal_instruction else 0
+                    ),
+                    eligibility_reason=(
+                        "Level A: official application portal with same-page "
+                        "submission instructions"
+                    ),
                     eligibility_reason_code="explicit_application_portal_instructions",
                 ))
                 continue
@@ -2399,7 +2611,7 @@ def run_btp_outreach(
                 ),
             ))
             continue
-        address, instruction_fact, email_fact = contact
+        address, instruction_fact, email_fact, route_type = contact
         candidate.readiness = "OUTREACH_ELIGIBLE"
         job = existing_outreach or _outreach_job(session, company, address, candidate.location)
         job.contact_email = address
@@ -2430,6 +2642,31 @@ def run_btp_outreach(
                 screening_state.mark(candidate, "no_official_employer_email")
             report.companies.append(_company_result(candidate, "no_official_employer_email"))
             continue
+        if target_spec and target_spec.get("email_action_block_reason"):
+            report.blocked += 1
+            target.status = "blocked_by_safety_gate"
+            if screening_state:
+                screening_state.mark(candidate, "blocked_by_safety_gate")
+            report.companies.append(_company_result(
+                candidate,
+                "blocked_by_safety_gate",
+                official_domain=domain,
+                recruitment_evidence_source=instruction_fact.source_url,
+                contact_email_source=email_fact.source_url,
+                contact_email=address,
+                contact_confidence=email_fact.confidence,
+                contact_email_relationship=email_fact.domain_relationship,
+                application_instructions=_explicit_instruction_text(instruction_fact),
+                application_evidence_excerpt=instruction_fact.snippet or instruction_fact.extracted_value,
+                application_evidence_url=instruction_fact.source_url,
+                application_evidence_confidence=instruction_fact.confidence,
+                application_route_type=route_type,
+                contact_verification_method=verification.verification_method,
+                eligibility_reason=target_spec["email_action_block_reason"],
+                eligibility_reason_code="vacancy_subject_and_cv_fit_not_supported",
+                delivery_stage="manual_vacancy_review_required",
+            ))
+            continue
         contact_cooldown_days = int(config.rules.get("follow_up_days", [7])[0])
         if mem.store.recent_contact(session, address, days=contact_cooldown_days):
             report.blocked += 1
@@ -2449,9 +2686,9 @@ def run_btp_outreach(
         decision = mem.store.get_last_decision(session, job.id)
         if not decision:
             evidence_reason = (
-                "Official recruitment channel"
-                if instruction_fact.field_name == "recruitment_channel"
-                else "Official spontaneous-application instruction"
+                "Official recruitment contact; spontaneous application"
+                if route_type.startswith("level_b")
+                else "Official application route instructions"
             )
             decision = mem.store.add_decision(
                 session, job.id, SPONTANEOUS_APPLICATION, 0, {},
@@ -2476,7 +2713,10 @@ def run_btp_outreach(
         if settings.email_mode == "dry_run" and result.get("status") == "dry_run":
             status = "dry_run_validated"
             target.status = status
-            eligibility_reason = "safety gate passed; dry_run made no Gmail request"
+            eligibility_reason = (
+                f"{route_type}: official-site evidence qualified the spontaneous "
+                "application route; safety gate passed and dry_run made no Gmail request"
+            )
             delivery_stage = "dry_run_validated"
         elif result.get("status") == "drafted" and draft_id:
             report.drafts += 1
@@ -2485,9 +2725,9 @@ def run_btp_outreach(
             if screening_state:
                 screening_state.mark(candidate, status, gmail_draft_id=draft_id)
             eligibility_reason = (
-                "official HTTPS domain, employer recruitment evidence, verified "
-                "employer-domain email, no prior application or draft, no cooldown, "
-                "safety gate passed, and Gmail returned a draft ID"
+                f"{route_type}: official HTTPS domain, published evidence, verified "
+                "recipient, no prior application or draft, no cooldown, safety gate "
+                "passed, and Gmail returned a draft ID"
             )
             delivery_stage = "gmail_draft_confirmed"
         elif result.get("status") == "sent" and message_id:
@@ -2499,7 +2739,8 @@ def run_btp_outreach(
                     candidate, "sent", gmail_message_id=message_id,
                 )
             eligibility_reason = (
-                "live email authorized; safety gate passed; Gmail returned a message ID"
+                f"{route_type}: live email authorized; safety gate passed; Gmail "
+                "returned a message ID"
             )
             delivery_stage = "gmail_send_confirmed"
         elif settings.email_mode == "draft" and result.get("status") == "drafted":
@@ -2578,7 +2819,19 @@ def run_btp_outreach(
             contact_email=address,
             contact_confidence=email_fact.confidence,
             contact_email_relationship=email_fact.domain_relationship,
-            application_instructions=instruction_fact.extracted_value,
+            application_instructions=(
+                _explicit_instruction_text(instruction_fact)
+                if instruction_fact.field_name in {
+                    "application_instructions", "spontaneous_application",
+                }
+                else ""
+            ),
+            application_evidence_excerpt=(
+                instruction_fact.snippet or instruction_fact.extracted_value
+            ),
+            application_evidence_url=instruction_fact.source_url,
+            application_evidence_confidence=instruction_fact.confidence,
+            application_route_type=route_type,
             contact_verification_method=verification.verification_method,
             application_url="",
             eligibility_reason=eligibility_reason,
@@ -2648,6 +2901,10 @@ def _company_result(
     application_instructions: str = "",
     contact_verification_method: str = "",
     application_url: str = "",
+    application_route_type: str = "",
+    application_evidence_url: str = "",
+    application_evidence_excerpt: str = "",
+    application_evidence_confidence: int = 0,
     website_rejection_reason: str = "",
     rejected_website: str = "",
     delivery_stage: str = "",
@@ -2691,6 +2948,10 @@ def _company_result(
         "application_instructions": application_instructions,
         "contact_verification_method": contact_verification_method,
         "application_url": application_url,
+        "application_route_type": application_route_type,
+        "application_evidence_url": application_evidence_url,
+        "application_evidence_excerpt": application_evidence_excerpt,
+        "application_evidence_confidence": application_evidence_confidence,
         "eligibility_reason": eligibility_reason,
         "eligibility_reason_code": eligibility_reason_code,
         "delivery_stage": delivery_stage,

@@ -16,6 +16,7 @@ from app.discovery.website_researcher import (
     EvidenceFact,
     ResearchResult,
     WebsiteResearcher,
+    extract_application_instructions,
 )
 from app.email import provider
 from app.memory import store
@@ -148,6 +149,80 @@ def test_cmd_btp_outreach_allows_only_authorized_live_mode(monkeypatch):
         cli.cmd_btp_outreach(SimpleNamespace(origin_city="Casablanca", max_companies=1))
 
 
+def test_cmd_targeted_preflight_rolls_back_and_uses_no_state_cache(monkeypatch, tmp_path):
+    restored_db = tmp_path / "agent.db"
+    restored_db.touch()
+    settings = SimpleNamespace(
+        email_mode="dry_run",
+        enable_email=False,
+        email_provider="gmail",
+        authorize_live_spontaneous=False,
+        sqlite_path=restored_db,
+    )
+    monkeypatch.setattr(cli, "get_settings", lambda: settings)
+    monkeypatch.setattr(
+        cli, "init_db",
+        lambda: pytest.fail("targeted preflight must not initialize or migrate the DB"),
+    )
+    monkeypatch.setattr(cli, "get_config", lambda: SimpleNamespace(discovery={}))
+    monkeypatch.setattr(cli, "get_profile", lambda: SimpleNamespace())
+    monkeypatch.setattr(cli, "_print_json", lambda *_args, **_kwargs: None)
+
+    session = SimpleNamespace(rollback_calls=0)
+    session.rollback = lambda: setattr(session, "rollback_calls", session.rollback_calls + 1)
+
+    class _SessionCtx:
+        def __enter__(self):
+            return session
+
+        def __exit__(self, *_args):
+            return False
+
+    monkeypatch.setattr(cli, "session_scope", lambda: _SessionCtx())
+    captured = {}
+
+    def fake_run_btp(_session, _config, _settings, _profile, **kwargs):
+        captured.update(kwargs)
+        return SimpleNamespace(as_run_report=lambda: {"workflow": "btp_outreach"})
+
+    monkeypatch.setattr("app.workflows.btp_outreach.run_btp_outreach", fake_run_btp)
+
+    cli.cmd_btp_outreach(SimpleNamespace(
+        origin_city="Casablanca",
+        max_companies=1,
+        target_employer="megec",
+        preflight_only=True,
+    ))
+
+    assert captured["target_employer"] == "megec"
+    assert captured["preflight_only"] is True
+    assert captured["researcher"].state_path is None
+    assert session.rollback_calls == 1
+
+
+def test_cmd_targeted_preflight_refuses_missing_database(monkeypatch, tmp_path):
+    settings = SimpleNamespace(
+        email_mode="dry_run",
+        enable_email=False,
+        email_provider="gmail",
+        authorize_live_spontaneous=False,
+        sqlite_path=tmp_path / "missing-agent.db",
+    )
+    monkeypatch.setattr(cli, "get_settings", lambda: settings)
+    monkeypatch.setattr(
+        cli, "init_db",
+        lambda: pytest.fail("missing preflight DB must not be initialized"),
+    )
+
+    with pytest.raises(SystemExit, match="existing restored database"):
+        cli.cmd_btp_outreach(SimpleNamespace(
+            origin_city="Casablanca",
+            max_companies=1,
+            target_employer="megec",
+            preflight_only=True,
+        ))
+
+
 def _evidence(domain, *, instruction=True, email="recrutement@build.ma", portal=""):
     url = f"https://{domain}/contact"
     result = []
@@ -164,16 +239,28 @@ def _evidence(domain, *, instruction=True, email="recrutement@build.ma", portal=
             reason_code="explicit_spontaneous_instruction",
         ))
     if email:
+        recruitment_local_terms = (
+            "recruit", "recrut", "career", "emploi", "talent", "hr", "rh",
+            "hiring", "jobs",
+        )
+        is_recruitment = any(
+            term in email.partition("@")[0].lower()
+            for term in recruitment_local_terms
+        )
         result.append(EvidenceFact(
             source_url=url,
-            source_type="contact",
+            source_type="recruitment" if is_recruitment else "contact",
             page_title="Contact",
-            field_name="general_email",
+            field_name="recruitment_email" if is_recruitment else "general_email",
             extracted_value=email,
             snippet=f"Contact: {email}",
-            domain_relationship="company_general",
+            domain_relationship=(
+                "company_recruitment" if is_recruitment else "company_general"
+            ),
             confidence=100,
-            reason_code="employer_domain",
+            reason_code=(
+                "employer_domain_recruitment" if is_recruitment else "employer_domain"
+            ),
         ))
     if portal:
         text = "Soumettez votre CV au moyen de ce formulaire de candidature."
@@ -204,7 +291,7 @@ def _run(db, config, settings, profile, companies, researcher, **kwargs):
         config,
         settings,
         profile,
-        discovery=_Discovery(companies),
+        discovery=kwargs.pop("discovery", _Discovery(companies)),
         wikidata_discovery=_Discovery([]),
         company_search=kwargs.pop("company_search", _EmptyCompanySearch()),
         researcher=researcher,
@@ -454,6 +541,17 @@ def test_btp_screening_state_rejects_corrupt_ledger(tmp_path):
     path.write_text("{broken", encoding="utf-8")
     with pytest.raises(BtpOutreachSafetyError, match="unreadable"):
         BtpOutreachState(path)
+
+
+def test_nonpersistent_btp_screening_state_keeps_suppression_without_writing(tmp_path):
+    path = tmp_path / "screening.json"
+    state = BtpOutreachState(path, persist=False)
+    candidate = _company("MEGEC", "https://www.megec.com/candidature-spontanee/")
+
+    state.mark(candidate, "in_progress")
+
+    assert state.is_suppressed(candidate)
+    assert path.exists() is False
 
 
 @pytest.mark.parametrize(
@@ -1544,28 +1642,30 @@ def test_company_pool_reuses_fresh_recruitment_evidence_without_search_or_recraw
     assert draft_calls == ["draft"]
 
 
-def test_official_recruitment_email_without_submission_instructions_is_not_eligible(
+def test_official_careers_email_without_literal_submission_instruction_is_eligible(
     db, config, settings, profile, monkeypatch
 ):
-    settings = settings.model_copy(update={
-        "email_mode": "draft", "enable_email": True, "email_provider": "gmail",
-    })
+    settings = settings.model_copy(update={"email_mode": "dry_run", "enable_email": False})
     recruitment_email = EvidenceFact(
         source_url="https://recruiting.ma/careers",
         source_type="recruitment",
-        page_title="Careers",
+        page_title="Careers — Join our team",
         field_name="recruitment_email",
-        extracted_value="recrutement@recruiting.ma",
-        snippet="Recruitment contact: recrutement@recruiting.ma",
+        extracted_value="jobs@recruiting.ma",
+        snippet="Careers contact: jobs@recruiting.ma",
         domain_relationship="company_recruitment",
         confidence=100,
-        reason_code="employer_domain",
+        reason_code="employer_domain_recruitment",
     )
     researcher = _Researcher({"recruiting.ma": [recruitment_email]})
-    def forbidden(*_args, **_kwargs):
-        raise AssertionError("A recruitment address alone cannot authorize a draft")
-
-    monkeypatch.setattr(provider, "create_draft", forbidden)
+    monkeypatch.setattr(
+        provider, "send",
+        lambda *_args, **_kwargs: pytest.fail("dry-run must not call Gmail"),
+    )
+    monkeypatch.setattr(
+        provider, "create_draft",
+        lambda *_args, **_kwargs: pytest.fail("dry-run must not create a Gmail draft"),
+    )
     monkeypatch.setattr("app.scheduler.control.is_paused", lambda: False)
 
     report = _run(
@@ -1574,13 +1674,19 @@ def test_official_recruitment_email_without_submission_instructions_is_not_eligi
         researcher,
     )
 
-    assert report.drafts == 0
-    assert report.no_explicit_instructions == 1
-    assert report.draft_attempts == 0
-    assert report.companies[0]["status"] == "no_recruitment_contact"
-    assert report.companies[0]["eligibility_reason_code"] == (
-        "missing_application_instructions"
-    )
+    company = report.companies[0]
+    assert report.validation_attempts == 1
+    assert company["status"] == "dry_run_validated"
+    assert company["contact_email"] == "jobs@recruiting.ma"
+    assert company["contact_email_source"] == recruitment_email.source_url
+    assert company["recruitment_evidence_source"] == recruitment_email.source_url
+    assert company["application_instructions"] == ""
+    assert company["application_route_type"] == "level_b_official_recruitment_email"
+    assert company["application_evidence_excerpt"] == recruitment_email.snippet
+    assert company["application_evidence_confidence"] == 100
+    assert "spontaneous" in company["eligibility_reason"]
+    assert company["previous_application"] is False
+    assert company["previous_draft"] is False
 
 
 def test_application_instruction_must_name_the_qualified_email_route():
@@ -1606,6 +1712,363 @@ def test_application_instruction_must_name_the_qualified_email_route():
     assert btp_outreach._qualifying_contact(
         [instruction, email], "route-check.ma",
     ) is None
+
+
+def test_official_recruitment_email_with_explicit_instructions_is_level_a(
+    db, config, settings, profile, monkeypatch,
+):
+    settings = settings.model_copy(update={"email_mode": "dry_run", "enable_email": False})
+    source_url = "https://apply-check.ma/careers"
+    address = "jobs@apply-check.ma"
+    instruction = EvidenceFact(
+        source_url=source_url,
+        source_type="recruitment",
+        page_title="Careers",
+        field_name="application_instructions",
+        extracted_value=f"Submit your CV and application to {address}.",
+        snippet=f"Submit your CV and application to {address}.",
+        confidence=96,
+    )
+    email = EvidenceFact(
+        source_url=source_url,
+        source_type="recruitment",
+        page_title="Careers",
+        field_name="recruitment_email",
+        extracted_value=address,
+        snippet=f"Careers contact: {address}",
+        domain_relationship="company_recruitment",
+        confidence=98,
+    )
+    monkeypatch.setattr("app.scheduler.control.is_paused", lambda: False)
+
+    report = _run(
+        db, config, settings, profile,
+        [_company("Apply Check", "https://apply-check.ma")],
+        _Researcher({"apply-check.ma": [instruction, email]}),
+    )
+
+    company = report.companies[0]
+    assert report.validation_attempts == 1
+    assert company["application_route_type"] == "level_a_explicit_email_instruction"
+    assert company["application_instructions"] == instruction.extracted_value
+    assert company["application_evidence_confidence"] == instruction.confidence
+
+
+def test_generic_info_contact_on_careers_page_remains_excluded_by_default(
+    db, config, settings, profile, monkeypatch,
+):
+    settings = settings.model_copy(update={"email_mode": "dry_run", "enable_email": False})
+    generic = EvidenceFact(
+        source_url="https://generic-careers.ma/careers",
+        source_type="careers",
+        page_title="Careers",
+        field_name="general_email",
+        extracted_value="info@generic-careers.ma",
+        snippet="Contact: info@generic-careers.ma",
+        domain_relationship="company_general",
+        confidence=100,
+    )
+    researcher = _Researcher({"generic-careers.ma": [generic]})
+    monkeypatch.setattr("app.scheduler.control.is_paused", lambda: False)
+
+    report = _run(
+        db, config, settings, profile,
+        [_company("Generic Careers", "https://generic-careers.ma")],
+        researcher,
+    )
+
+    assert report.validation_attempts == 0
+    assert report.companies[0]["status"] == "no_recruitment_contact"
+    assert report.companies[0]["eligibility_reason_code"] == (
+        "missing_application_instructions"
+    )
+
+
+def test_unpublished_or_fabricated_recruitment_address_is_not_eligible():
+    page_context_only = EvidenceFact(
+        source_url="https://fabricated-careers.ma/careers",
+        source_type="careers",
+        page_title="Careers",
+        field_name="relevant_page",
+        extracted_value="https://fabricated-careers.ma/careers",
+        snippet="Careers",
+    )
+
+    assert btp_outreach._qualifying_contact(
+        [page_context_only], "fabricated-careers.ma",
+    ) is None
+    fabricated = EvidenceFact(
+        source_url=page_context_only.source_url,
+        source_type="careers",
+        page_title="Careers",
+        field_name="recruitment_email",
+        extracted_value="jobs@fabricated-careers.ma",
+        snippet="Careers contact: jobs@fabricated-careers.ma",
+        domain_relationship="company_recruitment",
+        confidence=100,
+    )
+    assert btp_outreach._qualifying_contact(
+        [fabricated], "fabricated-careers.ma",
+    ) is not None
+    unrelated = EvidenceFact(
+        source_url=page_context_only.source_url,
+        source_type="careers",
+        page_title="Careers",
+        field_name="recruitment_email",
+        extracted_value="jobs@invented-mail.example",
+        snippet="Careers contact: jobs@invented-mail.example",
+        domain_relationship="company_recruitment",
+        confidence=100,
+    )
+    assert btp_outreach._qualifying_contact(
+        [unrelated], "fabricated-careers.ma",
+    ) is None
+
+
+def test_configured_level_c_contact_requires_same_page_explicit_instructions():
+    source_url = "https://configured-contact.ma/careers"
+    address = "info@configured-contact.ma"
+    instruction = EvidenceFact(
+        source_url=source_url,
+        source_type="careers",
+        page_title="Careers",
+        field_name="application_instructions",
+        extracted_value=f"Submit your CV for employment enquiries to {address}.",
+        snippet=f"Submit your CV for employment enquiries to {address}.",
+        confidence=92,
+    )
+    email = EvidenceFact(
+        source_url=source_url,
+        source_type="careers",
+        page_title="Careers",
+        field_name="general_email",
+        extracted_value=address,
+        snippet=f"General contact: {address}",
+        domain_relationship="company_general",
+        confidence=100,
+    )
+
+    assert btp_outreach._qualifying_contact(
+        [instruction, email], "configured-contact.ma",
+    ) is None
+    route = btp_outreach._qualifying_contact(
+        [instruction, email], "configured-contact.ma",
+        allow_general_contact=True,
+    )
+    assert route is not None
+    assert route[0] == address
+    assert route[3] == "level_c_configured_general_contact"
+
+
+def test_explicit_apply_label_qualifies_published_general_recipient():
+    source_url = "https://www.megec.com/candidature-spontanee/"
+    address = "Contact@megec.com"
+    instruction = EvidenceFact(
+        source_url=source_url,
+        source_type="spontaneous",
+        page_title="Candidature spontanée",
+        field_name="application_instructions",
+        extracted_value=f"Postuler : {address}",
+        snippet=f"Postuler : {address}",
+        confidence=95,
+    )
+    email = EvidenceFact(
+        source_url=source_url,
+        source_type="spontaneous",
+        page_title="Candidature spontanée",
+        field_name="general_email",
+        extracted_value=address,
+        snippet=f"Postuler : {address}",
+        domain_relationship="company_general",
+        confidence=95,
+    )
+
+    route = btp_outreach._qualifying_contact(
+        [instruction, email], "megec.com",
+    )
+
+    assert route is not None
+    assert route[0] == address.lower()
+    assert route[3] == "level_a_explicit_email_instruction"
+    assert extract_application_instructions(
+        "Postuler : Contact@megec.com"
+    ) == "Postuler : Contact@megec.com"
+
+
+def test_targeted_btp_dry_run_only_processes_allowlisted_employer(
+    db, config, settings, profile, monkeypatch,
+):
+    settings = settings.model_copy(update={"email_mode": "dry_run", "enable_email": False})
+    unrelated = _Discovery([_company("Unrelated", "https://unrelated.ma")])
+    source_url = "https://www.megec.com/candidature-spontanee/"
+    address = "Contact@megec.com"
+    evidence = [
+        EvidenceFact(
+            source_url=source_url,
+            source_type="spontaneous",
+            page_title="Candidature spontanée",
+            field_name="application_instructions",
+            extracted_value=f"Postuler : {address}",
+            snippet=f"Postuler : {address}",
+            confidence=95,
+        ),
+        EvidenceFact(
+            source_url=source_url,
+            source_type="spontaneous",
+            page_title="Candidature spontanée",
+            field_name="general_email",
+            extracted_value=address,
+            snippet=f"Postuler : {address}",
+            domain_relationship="company_general",
+            confidence=95,
+        ),
+    ]
+    researcher = _Researcher({"megec.com": evidence})
+    monkeypatch.setattr("app.scheduler.control.is_paused", lambda: False)
+    monkeypatch.setattr(
+        provider, "send",
+        lambda *_args, **_kwargs: pytest.fail("targeted dry run must never send"),
+    )
+    monkeypatch.setattr(
+        provider, "create_draft",
+        lambda *_args, **_kwargs: pytest.fail("targeted dry run must not create drafts"),
+    )
+
+    report = _run(
+        db, config, settings, profile, unrelated.companies, researcher,
+        discovery=unrelated,
+        target_employer="megec",
+        max_companies=1,
+    )
+
+    assert unrelated.called is False
+    assert report.target_employer == "MEGEC"
+    assert report.processed == 1
+    assert [company["name"] for company in report.companies] == ["MEGEC"]
+    assert report.companies[0]["contact_email"] == "contact@megec.com"
+    assert report.companies[0]["application_route_type"] == (
+        "level_a_explicit_email_instruction"
+    )
+    assert report.send_attempts == report.draft_attempts == 0
+    assert report.sent == report.drafts == 0
+
+
+def test_cetemco_current_vacancy_requires_manual_title_and_cv_review(
+    db, config, settings, profile, monkeypatch,
+):
+    settings = settings.model_copy(update={"email_mode": "dry_run", "enable_email": False})
+    evidence = _evidence("cetemco.org", email="recrute@cetemco.ma")
+    evidence[0] = EvidenceFact(
+        source_url="https://cetemco.org/offres-demplois/",
+        source_type="careers",
+        page_title="Offres d'emplois — CETEMCO",
+        field_name="application_instructions",
+        extracted_value=(
+            "Pour postuler à Ingénieur Technico-commercial, envoyez votre CV à "
+            "recrute@cetemco.ma, en précisant l'intitulé du poste dans l'objet du mail."
+        ),
+        snippet=(
+            "Pour postuler à Ingénieur Technico-commercial, envoyez votre CV à "
+            "recrute@cetemco.ma, en précisant l'intitulé du poste dans l'objet du mail."
+        ),
+        confidence=95,
+    )
+    evidence[1] = EvidenceFact(
+        source_url="https://cetemco.org/offres-demplois/",
+        source_type="careers",
+        page_title="Offres d'emplois — CETEMCO",
+        field_name="recruitment_email",
+        extracted_value="recrute@cetemco.ma",
+        snippet="Pour postuler: recrute@cetemco.ma",
+        domain_relationship="official_alternate_recruitment_domain",
+        confidence=95,
+    )
+    researcher = _Researcher({"cetemco.org": evidence})
+    monkeypatch.setattr("app.scheduler.control.is_paused", lambda: False)
+    monkeypatch.setattr(
+        provider, "send",
+        lambda *_args, **_kwargs: pytest.fail("CETEMCO vacancy review must not send"),
+    )
+    monkeypatch.setattr(
+        provider, "create_draft",
+        lambda *_args, **_kwargs: pytest.fail("CETEMCO vacancy review must not draft"),
+    )
+
+    report = _run(
+        db, config, settings, profile, [], researcher,
+        target_employer="cetemco",
+        max_companies=1,
+    )
+
+    company = report.companies[0]
+    assert company["status"] == "blocked_by_safety_gate"
+    assert company["eligibility_reason_code"] == (
+        "vacancy_subject_and_cv_fit_not_supported"
+    )
+    assert company["application_instructions"].find(
+        "l'intitulé du poste dans l'objet"
+    ) >= 0
+    assert report.validation_attempts == report.send_attempts == report.draft_attempts == 0
+
+
+def test_btp_target_rejects_arbitrary_employer_strings(db, config, settings, profile):
+    settings = settings.model_copy(update={"email_mode": "dry_run", "enable_email": False})
+    with pytest.raises(BtpOutreachSafetyError, match="supported official-employer list"):
+        run_btp_outreach(
+            db,
+            config,
+            settings,
+            profile,
+            target_employer="https://attacker.example/",
+        )
+
+
+def test_official_application_portal_records_qualifying_evidence(
+    db, config, settings, profile, monkeypatch,
+):
+    settings = settings.model_copy(update={"email_mode": "dry_run", "enable_email": False})
+    source_url = "https://portal-qualified.ma/careers"
+    portal_url = "https://portal-qualified.ma/apply"
+    instruction = EvidenceFact(
+        source_url=source_url,
+        source_type="careers",
+        page_title="Careers",
+        field_name="application_instructions",
+        extracted_value="Submit your application through our online form.",
+        snippet="Submit your application through our online form.",
+        confidence=94,
+    )
+    portal = EvidenceFact(
+        source_url=source_url,
+        source_type="careers",
+        page_title="Careers",
+        field_name="application_url",
+        extracted_value=portal_url,
+        snippet="Apply online",
+        confidence=90,
+    )
+    monkeypatch.setattr(
+        provider, "send",
+        lambda *_args, **_kwargs: pytest.fail("portal research must not call Gmail"),
+    )
+    monkeypatch.setattr(
+        provider, "create_draft",
+        lambda *_args, **_kwargs: pytest.fail("portal research must not create drafts"),
+    )
+
+    report = _run(
+        db, config, settings, profile,
+        [_company("Portal Qualified", "https://portal-qualified.ma")],
+        _Researcher({"portal-qualified.ma": [instruction, portal]}),
+    )
+
+    company = report.companies[0]
+    assert report.portal_or_form == 1
+    assert company["application_route_type"] == "level_a_official_portal"
+    assert company["application_url"] == portal_url
+    assert company["application_evidence_url"] == source_url
+    assert company["application_evidence_excerpt"] == instruction.extracted_value
+    assert company["application_evidence_confidence"] == instruction.confidence
 
 
 def test_enabled_general_contact_fallback_still_requires_submission_instructions(
@@ -1663,6 +2126,15 @@ def test_partial_crawl_without_instructions_fails_closed_with_reason_code(
     researcher = PartiallyBlockedResearcher({
         "partial-crawl.ma": [recruitment_email],
     })
+    researcher.evidence_by_domain["partial-crawl.ma"].append(EvidenceFact(
+        source_url="https://partial-crawl.ma/careers",
+        source_type="recruitment",
+        page_title="Careers",
+        field_name="application_instructions",
+        extracted_value="Submit your application to jobs@partial-crawl.ma.",
+        snippet="Submit your application to jobs@partial-crawl.ma.",
+        confidence=95,
+    ))
 
     def forbidden(*_args, **_kwargs):
         raise AssertionError("A partial crawl cannot authorize a draft without instructions")
@@ -1675,6 +2147,7 @@ def test_partial_crawl_without_instructions_fails_closed_with_reason_code(
     )
 
     assert report.draft_attempts == 0
+    assert report.companies[0]["status"] == "crawl_incomplete"
     assert report.companies[0]["eligibility_reason_code"] == "crawl_incomplete"
 
 

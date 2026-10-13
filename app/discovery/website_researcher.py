@@ -71,6 +71,13 @@ def extract_spontaneous_instruction(text: str) -> str:
 
 def extract_application_instructions(text: str) -> str:
     """Return an explicit CV/application submission instruction, not incidental prose."""
+    labeled_email = re.search(
+        rf"\b(?:postuler|apply)\s*[:\-]\s*(?:mailto:)?\s*{EMAIL_RE.pattern}",
+        text or "",
+        re.IGNORECASE,
+    )
+    if labeled_email:
+        return labeled_email.group(0).strip()[:800]
     action = re.compile(
         r"\b(?:send|submit|email|e-mail|apply|transmit|envoyez|adressez|"
         r"transmettez|soumettez|veuillez envoyer|veuillez adresser)\b",

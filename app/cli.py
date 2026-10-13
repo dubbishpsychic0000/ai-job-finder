@@ -19,6 +19,7 @@ import asyncio
 import json
 import logging
 import sys
+from pathlib import Path
 
 from rich.console import Console
 from rich.table import Table
@@ -116,29 +117,39 @@ def cmd_btp_outreach(args) -> None:
     from app.workflows.btp_outreach import BtpOutreachSafetyError, run_btp_outreach
 
     settings = get_settings()
-    allowed_modes = {"draft", "live"}
+    allowed_modes = {"dry_run", "draft", "live"}
     if settings.email_mode not in allowed_modes:
-        raise SystemExit(
-            "BTP outreach requires EMAIL_MODE=draft or EMAIL_MODE=live with explicit authorization; "
-            "no Gmail interaction occurred"
-        )
-    if settings.enable_email is not True:
+        raise SystemExit("BTP outreach requires EMAIL_MODE=dry_run, draft, or live")
+    if settings.email_mode != "dry_run" and settings.enable_email is not True:
         raise SystemExit("BTP outreach requires ENABLE_EMAIL=true; no Gmail interaction occurred")
-    if settings.email_provider != "gmail":
+    if settings.email_mode != "dry_run" and settings.email_provider != "gmail":
         raise SystemExit("BTP outreach requires EMAIL_PROVIDER=gmail; no email-provider interaction occurred")
     if settings.email_mode == "live" and settings.authorize_live_spontaneous is not True:
         raise SystemExit(
             "BTP live outreach requires AUTHORIZE_LIVE_SPONTANEOUS=true; "
             "no Gmail interaction occurred"
         )
-    init_db()
+    preflight_only = bool(getattr(args, "preflight_only", False))
+    target_employer = getattr(args, "target_employer", None)
+    if preflight_only and (settings.email_mode != "dry_run" or not target_employer):
+        raise SystemExit(
+            "--preflight-only requires --target-employer and EMAIL_MODE=dry_run; "
+            "no provider interaction occurred"
+        )
+    if preflight_only and not settings.sqlite_path.is_file():
+        raise SystemExit(
+            "targeted preflight requires an existing restored database; "
+            "refusing to create or initialize a local database"
+        )
+    if not preflight_only:
+        init_db()
     config = get_config()
     profile = get_profile()
     company_universe = None
     try:
         with session_scope() as s:
             discovery_cfg = config.discovery or {}
-            if discovery_cfg.get("company_universe_discovery", False):
+            if discovery_cfg.get("company_universe_discovery", False) and not preflight_only:
                 from app.workflows.company_universe import run_company_universe_discovery
 
                 researcher = None
@@ -159,6 +170,19 @@ def cmd_btp_outreach(args) -> None:
                 company_universe = asyncio.run(run_company_universe_discovery(
                     s, config, researcher=researcher,
                 ))
+            route_researcher = None
+            if preflight_only:
+                from app.discovery.website_researcher import WebsiteResearcher
+
+                route_researcher = WebsiteResearcher(
+                    max_pages=int(config.discovery.get("website_research_max_pages", 12)),
+                    per_host_delay=float(
+                        config.discovery.get("website_research_delay_seconds", 0.25)
+                    ),
+                    state_path=None,
+                    session=s,
+                    allow_redirects=False,
+                )
             report = run_btp_outreach(
                 s,
                 config,
@@ -166,7 +190,12 @@ def cmd_btp_outreach(args) -> None:
                 profile,
                 origin_city=args.origin_city,
                 max_companies=args.max_companies,
+                target_employer=target_employer,
+                preflight_only=preflight_only,
+                researcher=route_researcher,
             )
+            if preflight_only:
+                s.rollback()
     except BtpOutreachSafetyError as exc:
         console.print(f"[red]{exc}[/red]")
         raise SystemExit(2) from exc
@@ -174,6 +203,27 @@ def cmd_btp_outreach(args) -> None:
     if company_universe is not None:
         run_report["company_universe"] = company_universe.as_dict()
     _print_json(run_report)
+
+
+def cmd_history_preflight(args) -> None:
+    """Inspect employer history without initializing or mutating the database."""
+    from app.config import RunnerSettings
+    from app.workflows.history_preflight import run_history_preflight
+
+    settings = RunnerSettings(_env_file=None)
+    report = run_history_preflight(
+        database_path=args.database,
+        screening_state_path=args.screening_state,
+        profile_path=args.profile,
+        preferences_path=args.preferences,
+        restore_status_path=args.restore_status,
+        employer_cooldown_days=settings.employer_cooldown_days,
+        daily_max_outbound=settings.daily_max_outbound,
+        daily_max_applications=settings.daily_max_applications,
+        daily_max_inquiries=settings.daily_max_inquiries,
+        employer_ids=tuple(args.employer) if args.employer else None,
+    )
+    _print_json(report)
 
 
 def cmd_analyze(_args) -> None:
@@ -344,6 +394,34 @@ def main(argv: list[str] | None = None) -> None:
     )
     btp.add_argument("--origin-city", choices=("Casablanca",), default="Casablanca")
     btp.add_argument("--max-companies", type=int, default=20)
+    from app.workflows.btp_outreach import TARGET_EMPLOYERS
+    btp.add_argument("--target-employer", choices=tuple(TARGET_EMPLOYERS))
+    btp.add_argument(
+        "--preflight-only",
+        action="store_true",
+        help="targeted dry-run that rolls back database changes and does not persist screening state",
+    )
+    history_preflight = sub.add_parser(
+        "history-preflight",
+        help="read-only employer application and outreach history preflight",
+    )
+    history_preflight.add_argument("--database", type=Path,
+                                   default=ROOT_DIR / "data" / "agent.db")
+    history_preflight.add_argument("--screening-state", type=Path,
+                                   default=ROOT_DIR / "data" / "btp_outreach_state.json")
+    history_preflight.add_argument("--profile", type=Path,
+                                   default=ROOT_DIR / "candidate" / "profile.yaml")
+    history_preflight.add_argument("--preferences", type=Path,
+                                   default=ROOT_DIR / "candidate" / "preferences.yaml")
+    history_preflight.add_argument("--restore-status", type=Path,
+                                   default=ROOT_DIR / "data" / "preflight_restore_status.json")
+    from app.workflows.history_preflight import EMPLOYERS
+    history_preflight.add_argument(
+        "--employer",
+        action="append",
+        choices=tuple(EMPLOYERS),
+        help="inspect only this supported employer; repeat to select multiple",
+    )
     for name in ("analyze", "act", "followups", "search-plan",
                  "stats", "pause", "resume", "scheduler"):
         sub.add_parser(name)
@@ -364,6 +442,7 @@ def main(argv: list[str] | None = None) -> None:
         "run-once": cmd_run_once,
         "discover": cmd_discover,
         "btp-outreach": cmd_btp_outreach,
+        "history-preflight": cmd_history_preflight,
         "analyze": cmd_analyze,
         "act": cmd_act,
         "followups": cmd_followups,

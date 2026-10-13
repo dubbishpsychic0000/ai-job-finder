@@ -318,7 +318,7 @@ def test_company_universe_prioritizes_missing_contacts_and_preserves_qualificati
     assert report.outreach_ready_companies == 1
 
 
-def test_company_with_contact_but_no_application_instructions_remains_due_for_research(
+def test_company_with_official_recruitment_email_needs_no_literal_instructions(
     db,
 ):
     candidate = CompanyCandidate(
@@ -338,7 +338,7 @@ def test_company_with_contact_but_no_application_instructions_remains_due_for_re
     rows = db.query(Evidence).filter_by(company_id=company.id).all()
 
     assert _research_is_fresh(company, rows, datetime.now(timezone.utc))
-    assert _research_is_due(company, rows, datetime.now(timezone.utc))
+    assert not _research_is_due(company, rows, datetime.now(timezone.utc))
 
 
 def test_company_universe_does_not_promote_directory_or_document_urls():
