@@ -1,5 +1,40 @@
 # Project status
 
+## Local discovery and outreach safety hardening
+
+Spontaneous BTP outreach now requires explicit, same-page application or CV
+submission instructions that name the selected email address. A published
+recruitment address by itself, a configured general-contact fallback, or an
+application link without same-page instructions cannot authorize a draft.
+Official application portals remain reportable as form routes, but only when
+the employer page also publishes actionable submission instructions. Per-company
+reason codes distinguish missing instructions, incomplete crawls, mismatched
+contact routes, and confirmed portal instructions.
+
+Company-universe research distinguishes a verified published recruitment
+contact from an actionable outreach route. A company with an address but no
+application instructions is not marked outreach-ready and remains due for
+research; companies without verified contacts retain first priority.
+
+Tavily request slots are durably reserved before provider dispatch. Reservations
+share a cross-process locked UTC-day ledger per key, so retries and failed
+requests consume the same limits as successful calls. Duplicate configured
+keys are collapsed. General discovery has a shared aggregate cap of 17 provider
+attempts per run, including retries, while preserving the separate three-call
+daily BTP reserve. Cache responses expire at the 30-day query-response TTL;
+legacy entries without timestamps are stale. Discovery reports distinguish
+API attempts, successes, failed attempts, retries, cache hits, empty results,
+budget deferrals, normalization rejections, duplicate classes, and new jobs.
+The cache TTL does not establish the age or availability of job postings
+contained in a cached response.
+
+Validation uses deterministic fixtures and mocked providers only: the focused
+discovery/BTP/Gmail/company-universe set passed **167 tests, 1 skipped**; the
+full suite passed **370 tests, 1 skipped**; Ruff passed on all changed Python
+files; and `git diff --check` passed. No live Tavily request, website crawl,
+Gmail operation, production workflow, commit, or push was performed for this
+hardening pass.
+
 ## Production Gmail draft validation
 
 The saved Gmail token at the private vault's `secrets/gmail_token.json` passed
@@ -169,6 +204,16 @@ The discovery pipeline has connector-level diagnostics, deduplication, safety
 gates, public ATS connectors, and an index-only LinkedIn path. Search-provider
 failures are isolated from the rest of the pipeline.
 
+The BTP CLI launch gate has been corrected: `app/cli.py` now allows the manual
+`EMAIL_MODE=live` path only when `ENABLE_EMAIL=true`, `EMAIL_PROVIDER=gmail`, and
+`AUTHORIZE_LIVE_SPONTANEOUS=true`. Scheduled runs remain draft-only because the
+workflow forces `EMAIL_MODE=draft` for `schedule` events and only populates the
+live authorization flag in the manual `btp_outreach` dispatch path. This aligns
+with the existing workflow and keeps the safety gate in the service layer.
+
+Validation on the current checkout: full suite **391 passed, 1 skipped**; `ruff
+check app/cli.py tests/test_btp_outreach.py` passed; `git diff --check` passed.
+
 The current hardening pass addresses silent zero-result behavior, Tavily quota
 waste, unsafe email provenance, and accidental CI cache/budget resets. Search
 coverage has not yet been measured against a representative employer set.
@@ -234,3 +279,84 @@ configuration. Their real-world yield, query limits, entity quality, and local
 Moroccan coverage still require a bounded production pilot. Common Crawl URL
 seeding, procurement and professional-directory adapters, and a measured
 LinkedIn indexed-search pilot remain future work.
+
+## BTP contact-route diagnosis
+
+The artifact for BTP run **38214738802** recorded Ciments du Maroc's
+`careers_url` and `recruitment_url` as the unrelated Quarry Life Award page.
+The workflow previously trusted those persisted route fields before the
+verified employer homepage, so stale route metadata could direct a bounded
+crawl away from current contact/career navigation. That is the concrete
+pipeline defect established by the run artifact; it does not establish whether
+the recruitment address was still published on the site at run time.
+
+BTP website research now starts from the verified employer website, allowing
+the bounded crawler to follow current navigation and sitemap links instead of
+assuming stored route metadata is current. When a crawled page contains
+explicit application instructions, its evidence-backed URL replaces the
+stored career/recruitment route fields (including stale values) in both
+company state and the current report candidate. A regression seeds the Ciments
+company with the stale award route, keeps that route in the sitemap, and
+verifies discovery through the homepage's contact navigation and replacement
+with the actual instruction page.
+
+This is a fixture-level reproduction and fix, not a new production crawl or
+Gmail operation. The historical artifact does not contain page-level fetch and
+extraction evidence sufficient to prove every stage of the prior run. Scheduled
+runs **38319771898** and **38270366253** were separately blocked upstream by
+having no eligible job target; this route fix does not address that condition.
+Validation: full test suite **348 passed, 1 skipped**; changed-file Ruff and
+`git diff --check` passed.
+
+## Scheduled zero-job discovery diagnosis
+
+Scheduled runs **38270366253** and **38319771898** did execute the configured
+job-discovery stage. Run **38319771898** queried 21 search-plan entries per
+configured connector. The broad Tavily connector returned 76 normalized
+opportunities, all deduplicated (76 duplicates, 0 new jobs); the remaining
+enabled Tavily connectors returned 0. Analysis correctly examined 0 jobs
+because it only processes newly stored jobs. Discovery and analysis reported
+no connector errors, so the old artifact alone made an exhausted/failing
+provider look like an ordinary empty result.
+
+The logs contain 236 “all Tavily keys spent/failed” messages for
+**38319771898** and 247 for **38270366253**. The latter run's artifact recorded
+86 normalized opportunities, all duplicates, plus one successful HTTP 200
+Tavily diagnostic; its other uncached searches had no successful provider
+response. The logs conflate exhausted local request budgets with provider
+failures, so they do not establish whether the persisted key budget, provider
+quota, credentials, or network caused the unavailable searches. The latest
+run's 76 results came from prior cached query responses; no live Tavily
+success was recorded in its debug artifact.
+
+The configured search plan allowed 21–22 queries to run against each of 12
+enabled Tavily connectors, with no aggregate per-run cap (`max_requests_per_source`
+defaults to unlimited). The shared general-search budget is only 17 requests
+per key per UTC day (20 total, with 3 reserved for BTP). Consequently the
+first connector could consume the usable budget before domain-restricted
+sources were reached; cached results also had no expiration and could be
+reused indefinitely. Company discovery remained separate: the latest run's
+BTP stage processed 9 of 18 candidates and researched 3, but made no draft
+attempts. Contact, instruction, identity, and duplicate safeguards were not
+relaxed.
+
+The search wrapper now reports whether results came from cache or the
+provider, and emits safe reason codes for budget exhaustion, provider quota,
+and provider request failure. Tavily query results expire after 30 days;
+expired entries are not passed downstream as current job evidence. Uncached
+queries are allocated round-robin across configured budgeted connectors using
+the shared remaining API budget, with the existing per-source query cap
+preserved. The scheduler skips uncached Tavily requests after budget
+exhaustion and reports per-source empty, failed, cached, stale-cache,
+budget-deferred, normalization-rejected, and exact/probable/in-run duplicate
+counts. A zero-new-job run with fetched duplicates now has an explicit
+actionable alert. Company-level BTP research continues independently of job
+discovery.
+
+All changes are fixture/mock validated only. No live discovery, website crawl,
+Gmail operation, workflow dispatch, credential change, commit, or push was
+performed. External Tavily availability and actual discovery yield after this
+change remain unverified. Focused recovery/discovery/company-pipeline/BTP
+tests: **115 passed**; full suite: **354 passed, 1 skipped**. Ruff passed on
+all changed Python files and `git diff --check` passed. The patch is unstaged
+on `main`; no untracked files were created.

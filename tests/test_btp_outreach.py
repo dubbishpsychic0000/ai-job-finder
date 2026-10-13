@@ -8,6 +8,7 @@ from types import SimpleNamespace
 
 import pytest
 
+import app.cli as cli
 import app.workflows.btp_outreach as btp_outreach
 from app import models
 from app.connectors.tavily_resilience import DailyBudget, ResilientTavily, TavilyCache, TavilyKey
@@ -104,11 +105,54 @@ class _EmptyCompanySearch:
         return []
 
 
+def test_cmd_btp_outreach_allows_only_authorized_live_mode(monkeypatch):
+    settings = SimpleNamespace(
+        email_mode="live",
+        enable_email=True,
+        email_provider="gmail",
+        authorize_live_spontaneous=True,
+    )
+    monkeypatch.setattr(cli, "get_settings", lambda: settings)
+    monkeypatch.setattr(cli, "init_db", lambda: None)
+    monkeypatch.setattr(cli, "get_config", lambda: SimpleNamespace(discovery={}))
+    monkeypatch.setattr(cli, "get_profile", lambda: SimpleNamespace())
+    monkeypatch.setattr(cli, "_print_json", lambda *_args, **_kwargs: None)
+
+    class _SessionCtx:
+        def __enter__(self):
+            return SimpleNamespace()
+        def __exit__(self, *args):
+            return False
+
+    monkeypatch.setattr(cli, "session_scope", lambda: _SessionCtx())
+
+    sent = {}
+
+    def fake_run_btp(session, config, settings_, profile, **kwargs):
+        sent["called"] = True
+        return SimpleNamespace(as_run_report=lambda: {"status": "ok"})
+
+    monkeypatch.setattr("app.workflows.btp_outreach.run_btp_outreach", fake_run_btp)
+
+    cli.cmd_btp_outreach(SimpleNamespace(origin_city="Casablanca", max_companies=1))
+    assert sent["called"] is True
+
+    bad_settings = SimpleNamespace(
+        email_mode="live",
+        enable_email=True,
+        email_provider="gmail",
+        authorize_live_spontaneous=False,
+    )
+    monkeypatch.setattr(cli, "get_settings", lambda: bad_settings)
+    with pytest.raises(SystemExit, match="AUTHORIZE_LIVE_SPONTANEOUS"):
+        cli.cmd_btp_outreach(SimpleNamespace(origin_city="Casablanca", max_companies=1))
+
+
 def _evidence(domain, *, instruction=True, email="recrutement@build.ma", portal=""):
     url = f"https://{domain}/contact"
     result = []
-    if instruction:
-        text = "Envoyez votre candidature spontanée par e-mail à recrutement@build.ma."
+    if instruction and email:
+        text = f"Envoyez votre candidature spontanée par e-mail à {email}."
         result.append(EvidenceFact(
             source_url=url,
             source_type="spontaneous",
@@ -132,6 +176,17 @@ def _evidence(domain, *, instruction=True, email="recrutement@build.ma", portal=
             reason_code="employer_domain",
         ))
     if portal:
+        text = "Soumettez votre CV au moyen de ce formulaire de candidature."
+        result.append(EvidenceFact(
+            source_url=url,
+            source_type="careers",
+            page_title="Contact",
+            field_name="application_instructions",
+            extracted_value=text,
+            snippet=text,
+            confidence=90,
+            reason_code="explicit_application_submission_instruction",
+        ))
         result.append(EvidenceFact(
             source_url=url,
             source_type="careers",
@@ -366,7 +421,18 @@ def test_previously_screened_negative_can_be_requalified_by_official_recruitment
         confidence=100,
         reason_code="employer_domain",
     )
-    researcher = _Researcher({"previously-screened.ma": [recruitment]})
+    address = recruitment.extracted_value
+    instruction = EvidenceFact(
+        source_url=recruitment.source_url,
+        source_type="recruitment",
+        page_title="Careers",
+        field_name="application_instructions",
+        extracted_value=f"Envoyez votre CV de candidature à {address}.",
+        snippet=f"Envoyez votre CV de candidature à {address}.",
+    )
+    researcher = _Researcher({
+        "previously-screened.ma": [instruction, recruitment],
+    })
     monkeypatch.setattr(
         provider, "create_draft", lambda *_args, **_kwargs: (True, "real-draft", "")
     )
@@ -1072,6 +1138,80 @@ def test_uncertain_btp_draft_is_reconciled_before_any_new_create(
     assert reconcile_calls == ["reconcile"]
 
 
+@pytest.mark.parametrize(
+    ("reconciliation", "expected_status", "expected_sent"),
+    [
+        (provider.LiveSendReconciliation("found", "gmail-message", 1),
+         "existing_application", 1),
+        (provider.LiveSendReconciliation("not_found"),
+         "live_send_recovery_required", 0),
+    ],
+)
+def test_uncertain_btp_live_send_is_reconciled_without_a_new_send(
+    db, config, settings, profile, monkeypatch, reconciliation,
+    expected_status, expected_sent,
+):
+    settings = settings.model_copy(update={
+        "email_mode": "live", "enable_email": True, "email_provider": "gmail",
+        "authorize_live_spontaneous": True,
+    })
+    candidate = _company("Live Recovery BTP", "https://live-recovery.ma")
+    company = store.get_or_create_company(db, candidate.name)
+    company.website = candidate.website
+    company.official_domain = "live-recovery.ma"
+    job = models.Job(
+        source="btp_spontaneous", external_id="live-recovery",
+        dedup_key="live-recovery-job", title=candidate.name,
+        company_id=company.id, location="Casablanca, Morocco", country="Morocco",
+        description="BTP company", url="https://live-recovery.ma",
+        contact_email="jobs@live-recovery.ma", status="outreach_only",
+        opportunity_type="SPONTANEOUS_APPLICATION",
+    )
+    db.add(job)
+    db.flush()
+    decision = store.add_decision(
+        db, job.id, "APPLY", 0, {}, "verified instructions", [],
+    )
+    application = store.add_application(
+        db, job.id, decision.id, "APPLY", 0, job.contact_email,
+    )
+    application.status = "deferred"
+    email = store.add_email(
+        db, application.id, job.contact_email, "Application", "Hello",
+        status="uncertain", mode="live",
+    )
+    email.delivery_state = "uncertain"
+    attempt = models.LiveSendAttempt(
+        attempt_key="a" * 32, active_job_id=job.id, job_id=job.id,
+        application_id=application.id, email_id=email.id,
+        employer_name=candidate.name, recipient=job.contact_email,
+        subject=email.subject, message_fingerprint="b" * 64,
+        state="uncertain",
+    )
+    db.add(attempt)
+    db.commit()
+    monkeypatch.setattr(
+        provider, "reconcile_live_send",
+        lambda *_args, **_kwargs: reconciliation,
+    )
+    monkeypatch.setattr(
+        provider, "send",
+        lambda *_args, **_kwargs: pytest.fail("recovery must never dispatch a new send"),
+    )
+    monkeypatch.setattr("app.scheduler.control.is_paused", lambda: False)
+
+    report = _run(
+        db, config, settings, profile, [candidate],
+        _Researcher({"live-recovery.ma": []}),
+    )
+
+    assert report.sent == expected_sent
+    assert report.companies[0]["status"] == expected_status
+    assert db.query(models.LiveSendAttempt).one().state == (
+        "confirmed_sent" if expected_sent else "uncertain"
+    )
+
+
 def test_osm_company_without_website_uses_public_site_lookup_before_research(
     db, config, settings, profile, monkeypatch
 ):
@@ -1150,7 +1290,7 @@ def test_search_budget_defers_only_unknown_site_and_known_sites_still_create_dra
     statuses = {item["name"]: item["status"] for item in report.companies}
     assert statuses == {
         "Atlas Company": "drafted_for_review",
-        "Rif Company": "no_official_employer_email",
+        "Rif Company": "no_recruitment_contact",
         "Unknown BTP": "search_budget_deferred",
     }
     assert finder_calls == ["Unknown BTP"]
@@ -1203,7 +1343,7 @@ def test_search_budget_defers_only_unknown_site_and_known_sites_still_create_dra
         screening_state_path=screening_state_path,
     )
     assert next_run.drafts == 0
-    assert next_run.existing == 2
+    assert next_run.existing == 1
     assert next_run.search_budget_deferred == 1
     duplicate_company = next(
         company for company in next_run.companies
@@ -1332,6 +1472,18 @@ def test_company_pool_reuses_fresh_recruitment_evidence_without_search_or_recraw
         confidence=100,
         reason_code="employer_domain",
     ))
+    address = "recrutement@civil-works.ma"
+    db.add(models.Evidence(
+        company_id=company.id,
+        source_url="https://civil-works.ma/careers",
+        source_type="recruitment",
+        page_title="Careers",
+        field_name="application_instructions",
+        extracted_value=f"Envoyez votre CV de candidature à {address}.",
+        snippet=f"Envoyez votre CV de candidature à {address}.",
+        confidence=95,
+        reason_code="explicit_application_submission_instruction",
+    ))
     db.flush()
 
     class SearchMustNotRun:
@@ -1392,7 +1544,7 @@ def test_company_pool_reuses_fresh_recruitment_evidence_without_search_or_recraw
     assert draft_calls == ["draft"]
 
 
-def test_official_recruitment_page_email_can_qualify_without_spontaneous_wording(
+def test_official_recruitment_email_without_submission_instructions_is_not_eligible(
     db, config, settings, profile, monkeypatch
 ):
     settings = settings.model_copy(update={
@@ -1410,6 +1562,186 @@ def test_official_recruitment_page_email_can_qualify_without_spontaneous_wording
         reason_code="employer_domain",
     )
     researcher = _Researcher({"recruiting.ma": [recruitment_email]})
+    def forbidden(*_args, **_kwargs):
+        raise AssertionError("A recruitment address alone cannot authorize a draft")
+
+    monkeypatch.setattr(provider, "create_draft", forbidden)
+    monkeypatch.setattr("app.scheduler.control.is_paused", lambda: False)
+
+    report = _run(
+        db, config, settings, profile,
+        [_company("Recruiting Company", "https://recruiting.ma")],
+        researcher,
+    )
+
+    assert report.drafts == 0
+    assert report.no_explicit_instructions == 1
+    assert report.draft_attempts == 0
+    assert report.companies[0]["status"] == "no_recruitment_contact"
+    assert report.companies[0]["eligibility_reason_code"] == (
+        "missing_application_instructions"
+    )
+
+
+def test_application_instruction_must_name_the_qualified_email_route():
+    source_url = "https://route-check.ma/careers"
+    instruction = EvidenceFact(
+        source_url=source_url,
+        source_type="recruitment",
+        page_title="Careers",
+        field_name="application_instructions",
+        extracted_value="Envoyez votre CV de candidature à candidatures@route-check.ma.",
+        snippet="Envoyez votre CV de candidature à candidatures@route-check.ma.",
+    )
+    email = EvidenceFact(
+        source_url=source_url,
+        source_type="recruitment",
+        page_title="Careers",
+        field_name="recruitment_email",
+        extracted_value="recrutement@route-check.ma",
+        snippet="Contact recrutement: recrutement@route-check.ma",
+        domain_relationship="company_recruitment",
+    )
+
+    assert btp_outreach._qualifying_contact(
+        [instruction, email], "route-check.ma",
+    ) is None
+
+
+def test_enabled_general_contact_fallback_still_requires_submission_instructions(
+    db, config, settings, profile, monkeypatch
+):
+    settings = settings.model_copy(update={
+        "email_mode": "draft", "enable_email": True, "email_provider": "gmail",
+    })
+    config.email["btp_allow_official_general_contact"] = True
+    evidence = _evidence(
+        "general-contact.ma", instruction=False, email="info@general-contact.ma",
+    )
+    researcher = _Researcher({"general-contact.ma": evidence})
+
+    def forbidden(*_args, **_kwargs):
+        raise AssertionError("Configured general-contact fallback cannot bypass instructions")
+
+    monkeypatch.setattr(provider, "create_draft", forbidden)
+    report = _run(
+        db, config, settings, profile,
+        [_company("General Contact", "https://general-contact.ma")],
+        researcher,
+    )
+
+    assert report.draft_attempts == 0
+    assert report.companies[0]["eligibility_reason_code"] == (
+        "missing_application_instructions"
+    )
+
+
+def test_partial_crawl_without_instructions_fails_closed_with_reason_code(
+    db, config, settings, profile, monkeypatch
+):
+    settings = settings.model_copy(update={
+        "email_mode": "draft", "enable_email": True, "email_provider": "gmail",
+    })
+    address = "recrutement@partial-crawl.ma"
+    recruitment_email = EvidenceFact(
+        source_url="https://partial-crawl.ma/careers",
+        source_type="recruitment",
+        page_title="Careers",
+        field_name="recruitment_email",
+        extracted_value=address,
+        snippet=f"Recruitment contact: {address}",
+        domain_relationship="company_recruitment",
+        confidence=100,
+    )
+
+    class PartiallyBlockedResearcher(_Researcher):
+        def research(self, *args, **kwargs):
+            result = super().research(*args, **kwargs)
+            result.blocked = ["https://partial-crawl.ma/recruitment"]
+            return result
+
+    researcher = PartiallyBlockedResearcher({
+        "partial-crawl.ma": [recruitment_email],
+    })
+
+    def forbidden(*_args, **_kwargs):
+        raise AssertionError("A partial crawl cannot authorize a draft without instructions")
+
+    monkeypatch.setattr(provider, "create_draft", forbidden)
+    report = _run(
+        db, config, settings, profile,
+        [_company("Partial Crawl", "https://partial-crawl.ma")],
+        researcher,
+    )
+
+    assert report.draft_attempts == 0
+    assert report.companies[0]["eligibility_reason_code"] == "crawl_incomplete"
+
+
+def test_official_portal_without_submission_instructions_is_not_eligible(
+    db, config, settings, profile, monkeypatch
+):
+    settings = settings.model_copy(update={
+        "email_mode": "draft", "enable_email": True, "email_provider": "gmail",
+    })
+    portal = EvidenceFact(
+        source_url="https://portal-incomplete.ma/careers",
+        source_type="careers",
+        page_title="Careers",
+        field_name="application_url",
+        extracted_value="https://portal-incomplete.ma/apply",
+        snippet="Apply",
+    )
+    researcher = _Researcher({"portal-incomplete.ma": [portal]})
+
+    def forbidden(*_args, **_kwargs):
+        raise AssertionError("An application link without instructions is not actionable")
+
+    monkeypatch.setattr(provider, "create_draft", forbidden)
+    report = _run(
+        db, config, settings, profile,
+        [_company("Portal Without Instructions", "https://portal-incomplete.ma")],
+        researcher,
+    )
+
+    assert report.portal_or_form == 0
+    assert report.draft_attempts == 0
+    assert report.companies[0]["status"] == "no_recruitment_contact"
+    assert report.companies[0]["eligibility_reason_code"] == (
+        "missing_application_instructions"
+    )
+
+
+def test_recruitment_email_named_by_explicit_application_instruction_qualifies(
+    db, config, settings, profile, monkeypatch
+):
+    settings = settings.model_copy(update={
+        "email_mode": "draft", "enable_email": True, "email_provider": "gmail",
+    })
+    address = "recrutement@recruiting.ma"
+    source_url = "https://recruiting.ma/careers"
+    instruction = EvidenceFact(
+        source_url=source_url,
+        source_type="recruitment",
+        page_title="Careers",
+        field_name="application_instructions",
+        extracted_value=f"Envoyez votre CV de candidature à {address}.",
+        snippet=f"Envoyez votre CV de candidature à {address}.",
+    )
+    recruitment_email = EvidenceFact(
+        source_url=source_url,
+        source_type="recruitment",
+        page_title="Careers",
+        field_name="recruitment_email",
+        extracted_value=address,
+        snippet=f"Contact recrutement: {address}",
+        domain_relationship="company_recruitment",
+        confidence=100,
+        reason_code="employer_domain",
+    )
+    researcher = _Researcher({
+        "recruiting.ma": [instruction, recruitment_email],
+    })
     monkeypatch.setattr(
         provider, "create_draft", lambda *_args, **_kwargs: (True, "draft-id", "")
     )
@@ -1422,8 +1754,10 @@ def test_official_recruitment_page_email_can_qualify_without_spontaneous_wording
     )
 
     assert report.drafts == 1
-    assert report.no_explicit_instructions == 1
-    assert report.companies[0]["status"] == "drafted_for_review"
+    assert report.no_explicit_instructions == 0
+    assert report.companies[0]["application_instructions"] == (
+        f"Envoyez votre CV de candidature à {address}."
+    )
 
 
 @pytest.mark.parametrize(
@@ -1445,9 +1779,7 @@ def test_official_recruitment_page_email_can_qualify_without_spontaneous_wording
             {
                 "https://www.cimentsdumaroc.com/sitemap.xml": (
                     "<urlset><url><loc>"
-                    "https://www.cimentsdumaroc.com/fr/contacteznous"
-                    "</loc></url>"
-                    "<url><loc>https://www.cimentsdumaroc.com/fr/award"
+                    "https://www.cimentsdumaroc.com/fr/award"
                     "</loc></url></urlset>"
                 ),
                 "https://www.cimentsdumaroc.com/fr": (
@@ -1526,6 +1858,21 @@ def test_named_employer_pages_extract_and_qualify_published_recruitment_route(
     settings = settings.model_copy(update={
         "email_mode": "draft", "enable_email": True, "email_provider": "gmail",
     })
+    if company_name == "Ciments du Maroc":
+        company = store.get_or_create_company(
+            db,
+            company_name,
+            website,
+            "Morocco",
+            official_domain="cimentsdumaroc.com",
+        )
+        company.careers_url = (
+            "https://www.cimentsdumaroc.com/fr/award"
+        )
+        company.recruitment_url = (
+            "https://www.cimentsdumaroc.com/fr/award"
+        )
+        db.flush()
     monkeypatch.setattr(
         provider,
         "create_draft",
@@ -1578,6 +1925,14 @@ def test_named_employer_pages_extract_and_qualify_published_recruitment_route(
     assert outcome["contact_email_source"] == contact_source
     assert outcome["application_instructions"]
     assert outcome["gmail_draft_confirmed"]
+    if company_name == "Ciments du Maroc":
+        assert start_url in fetched_urls
+        assert contact_source in fetched_urls
+        company = db.query(models.Company).filter_by(name=company_name).one()
+        assert company.careers_url == contact_source
+        assert company.recruitment_url == contact_source
+        assert outcome["careers_url"] == contact_source
+        assert outcome["recruitment_url"] == contact_source
     assert db.query(models.EmailVerification).one().verified
     assert db.query(models.EmailVerification).one().verification_method == verification_method
     if company_name == "Ciments du Maroc":

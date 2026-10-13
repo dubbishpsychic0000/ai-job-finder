@@ -18,6 +18,7 @@ from app.workflows import btp_outreach
 from app.workflows.btp_outreach import run_btp_outreach
 from app.workflows.company_universe import (
     _interleave_candidates,
+    _research_is_due,
     _research_is_fresh,
     run_company_universe_discovery,
 )
@@ -86,6 +87,7 @@ def test_company_universe_workflow_accepts_no_vacancy_candidate(db, config):
 
 def _seed_researched_company(
     db, candidate, *, days_ago: int, recruitment_email: str = "",
+    has_application_instructions: bool = False,
 ):
     OpenCompanyDiscovery(fetch_json=lambda *_args, **_kwargs: {}).persist(
         db, [candidate],
@@ -106,6 +108,16 @@ def _seed_researched_company(
         extracted_value=recruitment_email or source_url,
         snippet="Recruitment contact published on official company website.",
     ))
+    if recruitment_email and has_application_instructions:
+        db.add(Evidence(
+            company_id=company.id,
+            source_url=source_url,
+            source_type="careers",
+            page_title="Careers",
+            field_name="application_instructions",
+            extracted_value=f"Envoyez votre CV de candidature à {recruitment_email}.",
+            snippet=f"Envoyez votre CV de candidature à {recruitment_email}.",
+        ))
     db.flush()
     return company
 
@@ -156,6 +168,15 @@ def test_company_universe_improves_over_previous_research_selection(db, config):
                 field_name="recruitment_email",
                 extracted_value=f"careers@{official_domain}",
                 snippet="Recruitment contact published on official careers page.",
+            ))
+            address = f"careers@{official_domain}"
+            db.add(Evidence(
+                company_id=company_id,
+                source_url=f"https://{official_domain}/careers",
+                source_type="careers",
+                field_name="application_instructions",
+                extracted_value=f"Envoyez votre CV de candidature à {address}.",
+                snippet=f"Envoyez votre CV de candidature à {address}.",
             ))
             db.flush()
             return ResearchResult(
@@ -262,6 +283,7 @@ def test_company_universe_prioritizes_missing_contacts_and_preserves_qualificati
     _seed_researched_company(
         db, fresh_contact, days_ago=5,
         recruitment_email="careers@fresh-contact.ma",
+        has_application_instructions=True,
     )
     researched = []
 
@@ -294,6 +316,29 @@ def test_company_universe_prioritizes_missing_contacts_and_preserves_qualificati
     assert report.companies_discovered == 3
     assert report.companies_with_qualifying_contacts == 2
     assert report.outreach_ready_companies == 1
+
+
+def test_company_with_contact_but_no_application_instructions_remains_due_for_research(
+    db,
+):
+    candidate = CompanyCandidate(
+        name="Contact Without Instructions",
+        industry="construction",
+        website="https://contact-without-instructions.ma",
+        source="fixture",
+        reason="construction employer",
+        relevance_score=70,
+    )
+    company = _seed_researched_company(
+        db,
+        candidate,
+        days_ago=1,
+        recruitment_email="careers@contact-without-instructions.ma",
+    )
+    rows = db.query(Evidence).filter_by(company_id=company.id).all()
+
+    assert _research_is_fresh(company, rows, datetime.now(timezone.utc))
+    assert _research_is_due(company, rows, datetime.now(timezone.utc))
 
 
 def test_company_universe_does_not_promote_directory_or_document_urls():

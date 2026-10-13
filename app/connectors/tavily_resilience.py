@@ -13,11 +13,14 @@ functional regardless of quota or transient API failures:
 """
 from __future__ import annotations
 
+import errno
 import hashlib
 import json
 import logging
 import os
 import threading
+import time
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -32,10 +35,18 @@ logger = logging.getLogger(__name__)
 TAVILY_DAILY_REQUEST_LIMIT = 20
 BTP_TAVILY_DAILY_RESERVE = 3
 GENERAL_TAVILY_DAILY_LIMIT = TAVILY_DAILY_REQUEST_LIMIT - BTP_TAVILY_DAILY_RESERVE
+TAVILY_CACHE_TTL_SECONDS = 30 * 24 * 60 * 60
+_budget_locks_guard = threading.Lock()
+_budget_locks: dict[str, threading.RLock] = {}
+
+
+def _budget_thread_lock(identity: str) -> threading.RLock:
+    with _budget_locks_guard:
+        return _budget_locks.setdefault(identity, threading.RLock())
 
 
 def _cache_key(query: str, location: str) -> str:
-    payload = f"tavily\x00{query}\x00{location}".encode("utf-8")
+    payload = f"tavily\x00{query}\x00{location}".encode()
     return hashlib.sha256(payload).hexdigest()
 
 
@@ -50,12 +61,57 @@ def key_fingerprint(api_key: str, length: int = 8) -> str:
     return hashlib.sha256(api_key.encode("utf-8")).hexdigest()[:length]
 
 
-class TavilyCache:
-    """Disk-backed query -> response cache with atomic writes."""
+@contextmanager
+def _budget_file_lock(path: Path):
+    """Serialize ledger updates across threads and processes on Windows and POSIX."""
+    lock_path = path.with_name(path.name + ".lock")
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    with lock_path.open("a+b") as lock_file:
+        lock_file.seek(0, os.SEEK_END)
+        if lock_file.tell() == 0:
+            lock_file.write(b"\0")
+            lock_file.flush()
+        lock_file.seek(0)
+        if os.name == "nt":
+            import msvcrt
 
-    def __init__(self, path: Path, max_entries: int = 2000):
+            while True:
+                try:
+                    msvcrt.locking(lock_file.fileno(), msvcrt.LK_NBLCK, 1)
+                    break
+                except OSError as exc:
+                    if exc.errno not in {errno.EACCES, errno.EDEADLOCK} and getattr(
+                        exc, "winerror", None
+                    ) not in {33, 36, 158}:
+                        raise
+                    time.sleep(0.05)
+            try:
+                yield
+            finally:
+                lock_file.seek(0)
+                msvcrt.locking(lock_file.fileno(), msvcrt.LK_UNLCK, 1)
+        else:
+            import fcntl
+
+            fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
+            try:
+                yield
+            finally:
+                fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
+
+
+class TavilyCache:
+    """Disk-backed query cache with bounded freshness and atomic writes."""
+
+    def __init__(
+        self,
+        path: Path,
+        max_entries: int = 2000,
+        ttl_seconds: int = TAVILY_CACHE_TTL_SECONDS,
+    ):
         self.path = path
         self.max_entries = max_entries
+        self.ttl_seconds = max(0, int(ttl_seconds))
         self._lock = threading.Lock()
         self._data: dict[str, Any] = {}
         self._load()
@@ -65,17 +121,36 @@ class TavilyCache:
             return
         try:
             with self.path.open("r", encoding="utf-8") as fh:
-                self._data = json.load(fh)
+                data = json.load(fh)
+            if not isinstance(data, dict):
+                raise ValueError("Tavily cache root must be an object")
+            self._data = data
         except Exception as exc:
             logger.warning("Tavily cache unreadable (%s); starting fresh", exc)
             self._data = {}
 
     def get(self, key: str) -> Any:
-        return self._data.get(key)
+        entry = self._data.get(key)
+        if not isinstance(entry, dict) or "cached_at" not in entry:
+            return None
+        try:
+            cached_at = float(entry["cached_at"])
+        except (TypeError, ValueError):
+            return None
+        age = datetime.now(timezone.utc).timestamp() - cached_at
+        if age < 0 or age >= self.ttl_seconds:
+            return None
+        return entry.get("results")
+
+    def has_stale_entry(self, key: str) -> bool:
+        return key in self._data and self.get(key) is None
 
     def put(self, key: str, value: Any) -> None:
         with self._lock:
-            self._data[key] = value
+            self._data[key] = {
+                "cached_at": datetime.now(timezone.utc).timestamp(),
+                "results": value,
+            }
             if len(self._data) > self.max_entries:
                 for old in list(self._data)[: len(self._data) - self.max_entries]:
                     self._data.pop(old, None)
@@ -96,16 +171,22 @@ class DailyBudget:
 
     def __init__(self, path: Path, limit: int):
         self.path = path
+        self.identity = str(path.resolve())
         self.limit = int(limit)
-        self._lock = threading.Lock()
+        self._lock = _budget_thread_lock(self.identity)
         self._date = ""
         self._count = 0
         self._exhausted = False
+        self.last_reservation_error = ""
+        self._ledger_error = False
         self._load()
 
     @staticmethod
-    def _today() -> str:
-        return datetime.now(timezone.utc).date().isoformat()
+    def _today(now: datetime | None = None) -> str:
+        instant = now or datetime.now(timezone.utc)
+        if instant.tzinfo is None:
+            instant = instant.replace(tzinfo=timezone.utc)
+        return instant.astimezone(timezone.utc).date().isoformat()
 
     def _load(self) -> None:
         if not self.path.exists():
@@ -120,9 +201,32 @@ class DailyBudget:
         except Exception:
             self._date, self._count, self._exhausted = "", 0, False
 
-    def _save(self) -> None:
+    def _reload_for_date(self, today: str) -> None:
+        if self._ledger_error and self._date == today:
+            return
+        self._date, self._count, self._exhausted = "", 0, False
+        self._ledger_error = False
+        if not self.path.exists():
+            return
+        try:
+            with self.path.open("r", encoding="utf-8") as fh:
+                raw = json.load(fh)
+            if not isinstance(raw, dict):
+                raise ValueError("budget ledger is not an object")
+            if raw.get("date") == today:
+                self._date = today
+                self._count = max(0, int(raw.get("count", 0)))
+                self._exhausted = bool(raw.get("exhausted", False))
+        except (OSError, ValueError, TypeError, AttributeError):
+            self._date = today
+            self._exhausted = True
+            self._ledger_error = True
+            logger.error("could not read Tavily budget ledger at %s", self.path)
+
+    def _save(self) -> bool:
         tmp = self.path.with_suffix(".json.tmp")
         try:
+            self.path.parent.mkdir(parents=True, exist_ok=True)
             with tmp.open("w", encoding="utf-8") as fh:
                 json.dump({
                     "date": self._date,
@@ -130,36 +234,124 @@ class DailyBudget:
                     "exhausted": self._exhausted,
                 }, fh)
             os.replace(tmp, self.path)
+            return True
         except OSError as exc:
-            logger.warning("could not persist Tavily budget: %s", exc)
+            logger.error("could not persist Tavily budget at %s: %s", self.path, exc)
+            return False
 
-    def remaining(self) -> int:
-        if self._date == self._today() and self._exhausted:
-            return 0
+    def remaining(self, now: datetime | None = None) -> int:
         if self.limit <= 0:
-            return 1 << 30  # unlimited
-        if self._date != self._today():
-            return self.limit
-        return max(0, self.limit - self._count)
+            return 1 << 30
+        today = self._today(now)
+        with self._lock:
+            try:
+                with _budget_file_lock(self.path):
+                    self._reload_for_date(today)
+                    if self._ledger_error or self._exhausted:
+                        return 0
+                    return max(0, self.limit - self._count)
+            except OSError as exc:
+                self._date = today
+                self._ledger_error = True
+                self.last_reservation_error = "budget_ledger_unavailable"
+                logger.error("could not lock Tavily budget ledger at %s: %s", self.path, exc)
+                return 0
+
+    def reserve(self, now: datetime | None = None) -> bool:
+        """Persist one request reservation before dispatch, including failed calls."""
+        self.last_reservation_error = ""
+        if self.limit <= 0:
+            return True
+        today = self._today(now)
+        with self._lock:
+            try:
+                with _budget_file_lock(self.path):
+                    self._reload_for_date(today)
+                    if self._ledger_error:
+                        self.last_reservation_error = "budget_ledger_unavailable"
+                        return False
+                    if self._exhausted or self._count >= self.limit:
+                        self.last_reservation_error = "daily_request_budget_exhausted"
+                        return False
+                    self._date = today
+                    self._count += 1
+                    if not self._save():
+                        self._count -= 1
+                        self.last_reservation_error = "budget_ledger_unavailable"
+                        self._ledger_error = True
+                        return False
+                    return True
+            except OSError as exc:
+                self._date = today
+                self.last_reservation_error = "budget_ledger_unavailable"
+                self._ledger_error = True
+                logger.error("could not reserve Tavily request at %s: %s", self.path, exc)
+                return False
 
     def record(self) -> None:
-        if self.limit <= 0:
-            return
-        with self._lock:
-            if self._date != self._today():
-                self._date, self._count = self._today(), 0
-                self._exhausted = False
-            self._count += 1
-            self._save()
+        """Compatibility alias for reserving an outbound request."""
+        self.reserve()
 
     def exhaust(self) -> None:
-        """Mark the daily budget as spent (e.g. after an API quota error)."""
-        with self._lock:
-            self._date = self._today()
-            if self.limit > 0:
-                self._count = self.limit
+        """Stop further calls after the provider confirms the key is quota-exhausted."""
+        today = self._today()
+        with self._lock, _budget_file_lock(self.path):
+            self._reload_for_date(today)
+            self._date = today
             self._exhausted = True
-            self._save()
+            if not self._save():
+                self._ledger_error = True
+                raise OSError("could not persist Tavily quota exhaustion")
+
+
+class ApiAttemptBudget:
+    """Thread-safe aggregate cap shared by all Tavily connectors in one run."""
+
+    def __init__(self, limit: int):
+        self.limit = max(0, int(limit))
+        self._lock = threading.Lock()
+        self._attempts = 0
+        self._successes = 0
+        self._failures = 0
+        self._retries = 0
+
+    def remaining(self) -> int:
+        with self._lock:
+            return max(0, self.limit - self._attempts)
+
+    def reserve(self, daily_budget: DailyBudget, *, retry: bool = False) -> str:
+        """Reserve both caps immediately before a provider request is dispatched."""
+        with self._lock:
+            if self._attempts >= self.limit:
+                return "run_api_attempt_budget_exhausted"
+            if not daily_budget.reserve():
+                return (
+                    daily_budget.last_reservation_error
+                    or "daily_request_budget_exhausted"
+                )
+            self._attempts += 1
+            if retry:
+                self._retries += 1
+            return ""
+
+    def record_success(self) -> None:
+        with self._lock:
+            self._successes += 1
+
+    def record_failure(self) -> None:
+        with self._lock:
+            self._failures += 1
+
+    def as_dict(self) -> dict[str, int]:
+        with self._lock:
+            return {
+                "limit": self.limit,
+                "attempts": self._attempts,
+                "successes": self._successes,
+                "failed_attempts": self._failures,
+                "retry_attempts": self._retries,
+                "remaining": max(0, self.limit - self._attempts),
+            }
 
 
 @dataclass
@@ -192,9 +384,13 @@ class ResilientTavily:
         result_source_type: str = "search_engine",
         query_suffix: str = "job",
         max_key_attempts: int | None = None,
+        attempt_budget: ApiAttemptBudget | None = None,
     ):
         if keys:
-            self.keys = list(keys)
+            unique_keys: dict[str, TavilyKey] = {}
+            for key in keys:
+                unique_keys.setdefault(key_fingerprint(key.api_key, 64), key)
+            self.keys = list(unique_keys.values())
         else:
             # Single key fallback
             api_key = os.getenv("TAVILY_API_KEY", "")
@@ -217,16 +413,38 @@ class ResilientTavily:
         self.result_source_type = result_source_type
         self.query_suffix = query_suffix
         self.max_key_attempts = max_key_attempts
+        self.attempt_budget = attempt_budget or ApiAttemptBudget(GENERAL_TAVILY_DAILY_LIMIT)
         self.name = f"tavily_resilient:{self.keys[0].fp}"
         self.last_status = "ready"
+        self.last_origin = "none"
+        self.last_error_code = ""
+        self.last_deferred_reason = ""
+        self.last_call_attempts = 0
+        self._attempt_stats = {
+            "attempts": 0,
+            "successes": 0,
+            "failed_attempts": 0,
+            "retry_attempts": 0,
+        }
+
+    def attempt_metrics(self) -> dict[str, int]:
+        return dict(self._attempt_stats)
 
     def has_cached_result(self, query: str, location: str = "") -> bool:
+        q = self._build_query(query, location)
+        return self.cache.get(_cache_key(q, location)) is not None
+
+    def has_stale_cached_result(self, query: str, location: str = "") -> bool:
+        q = self._build_query(query, location)
+        return self.cache.has_stale_entry(_cache_key(q, location))
+
+    def _build_query(self, query: str, location: str) -> str:
         q = f"{query} {location} {self.query_suffix}".strip()
         if self.official_only:
             q += " (site:boards.greenhouse.io OR site:jobs.lever.co OR site:myworkdayjobs.com OR site:jobs.smartrecruiters.com OR site:icims.com OR site:jobs.ashbyhq.com OR site:recruitee.com)"
         elif self.domains:
             q += " (" + " OR ".join(f"site:{domain}" for domain in self.domains) + ")"
-        return self.cache.get(_cache_key(q, location)) is not None
+        return q
 
     def _allowed(self, href: str, *, ats: str = "") -> bool:
         from urllib.parse import urlparse
@@ -248,29 +466,53 @@ class ResilientTavily:
         return host.split(".")[0].replace("-", " ").title()
 
     async def search(self, query: str, location: str = "") -> list[Opportunity]:
-        q = f"{query} {location} {self.query_suffix}".strip()
-        if self.official_only:
-            q += " (site:boards.greenhouse.io OR site:jobs.lever.co OR site:myworkdayjobs.com OR site:jobs.smartrecruiters.com OR site:icims.com OR site:jobs.ashbyhq.com OR site:recruitee.com)"
-        elif self.domains:
-            q += " (" + " OR ".join(f"site:{domain}" for domain in self.domains) + ")"
+        self.last_origin = "none"
+        self.last_error_code = ""
+        self.last_deferred_reason = ""
+        self.last_call_attempts = 0
+        q = self._build_query(query, location)
 
         cache_key = _cache_key(q, location)
         cached = self.cache.get(cache_key)
         if cached is not None:
+            self.last_origin = "cache"
             self.last_status = "ok" if cached else "empty"
             # Convert cached dicts back to Opportunity objects
             return [Opportunity(**d) for d in cached]
 
         keys = self.keys
-        if self.max_key_attempts is not None:
-            keys = [
-                key for key in keys if key.budget.remaining() > 0
-            ][:max(0, self.max_key_attempts)]
+        saw_quota_error = False
+        saw_request_error = False
+        saw_daily_budget = False
+        saw_run_budget = False
+        saw_ledger_error = False
+        attempts_this_query = 0
         for key in keys:
-            if key.budget.remaining() <= 0:
-                logger.debug("Tavily key %s budget exhausted, skipping", key.fp)
+            if (
+                self.max_key_attempts is not None
+                and attempts_this_query >= max(0, self.max_key_attempts)
+            ):
                 continue
 
+            reservation_error = self.attempt_budget.reserve(
+                key.budget, retry=attempts_this_query > 0,
+            )
+            if reservation_error == "run_api_attempt_budget_exhausted":
+                saw_run_budget = True
+                self.last_deferred_reason = reservation_error
+                break
+            if reservation_error == "daily_request_budget_exhausted":
+                saw_daily_budget = True
+                self.last_deferred_reason = reservation_error
+                continue
+            if reservation_error == "budget_ledger_unavailable":
+                saw_ledger_error = True
+                continue
+            attempts_this_query += 1
+            self.last_call_attempts += 1
+            self._attempt_stats["attempts"] += 1
+            if attempts_this_query > 1:
+                self._attempt_stats["retry_attempts"] += 1
             try:
                 resp = requests.post(
                     "https://api.tavily.com/search",
@@ -290,18 +532,18 @@ class ResilientTavily:
 
                 resp.raise_for_status()
                 data = resp.json()
+                if not isinstance(data, dict) or not isinstance(data.get("results"), list):
+                    raise ValueError("Tavily response is missing a results list")
 
                 # Debug: persist a compact raw response for forensic analysis when enabled
                 if os.getenv('TAVILY_DEBUG', '').lower() in ('1', 'true', 'yes'):
                     try:
-                        results_preview = data.get('results', [])[:3] if isinstance(data, dict) else []
                         dbg = {
                             'ts': datetime.now(timezone.utc).isoformat(),
-                            'query': q,
+                            'query_hash': hashlib.sha256(q.encode("utf-8")).hexdigest(),
                             'key_fp': key.fp,
                             'status_code': getattr(resp, 'status_code', None),
-                            'results_len': len(data.get('results', [])) if isinstance(data, dict) and data.get('results') else 0,
-                            'sample': results_preview,
+                            'results_len': len(data["results"]),
                         }
                         import json as _json
                         with open('/tmp/tavily_debug.json', 'a', encoding='utf-8') as _fh:
@@ -346,20 +588,41 @@ class ResilientTavily:
                 # An empty, successful response is a valid negative result.
                 # Cache it and charge the one request so key rotation cannot
                 # turn an empty query into one request per credential.
-                key.budget.record()
+                self.attempt_budget.record_success()
+                self._attempt_stats["successes"] += 1
                 self.cache.put(cache_key, [o.to_dict() for o in out])
                 if out:
                     logger.info("Tavily key %s success, %d results", key.fp, len(out))
                 else:
                     logger.info("Tavily key %s returned empty results", key.fp)
+                self.last_origin = "api"
                 self.last_status = "ok" if out else "empty"
                 return out
 
             except Exception as exc:
+                self.attempt_budget.record_failure()
+                self._attempt_stats["failed_attempts"] += 1
                 logger.warning("Tavily key %s failed: %s -> trying next key", key.fp, str(exc)[:200])
                 if _is_quota_error(exc):
+                    saw_quota_error = True
                     key.budget.exhaust()
+                else:
+                    saw_request_error = True
 
+        if saw_quota_error and not saw_request_error:
+            self.last_error_code = "provider_quota_exhausted"
+        elif saw_request_error:
+            self.last_error_code = "provider_request_failed"
+        elif saw_quota_error:
+            self.last_error_code = "provider_quota_exhausted"
+        elif saw_run_budget:
+            self.last_error_code = "run_api_attempt_budget_exhausted"
+        elif saw_daily_budget:
+            self.last_error_code = "daily_request_budget_exhausted"
+        elif saw_ledger_error:
+            self.last_error_code = "budget_ledger_unavailable"
+        else:
+            self.last_error_code = "daily_request_budget_exhausted"
         self.last_status = "degraded"
         logger.info("all Tavily keys spent/failed -> returning empty")
         return []

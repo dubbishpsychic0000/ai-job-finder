@@ -61,6 +61,7 @@ def run_pipeline(session: Session | None = None, *, sources_path: Path | None = 
                 "opportunity_sources": discovery.opportunity_sources,
                 "social_signals": discovery.social_signals,
                 "source_reports": discovery.source_reports,
+                "api_request_budget": getattr(discovery, "api_request_budget", {}),
                 "alerts": discovery.alerts,
             }
             analysis = asyncio.run(run_analysis(s, config, profile, llm, prefs.countries))

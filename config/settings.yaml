@@ -39,6 +39,7 @@ discovery:
   results_per_source: 25
   max_per_country: 5                  # more role/localized terms kept per country
   max_queries_per_run: 60             # wider global cap, still rate-limited below
+  max_api_requests_per_run: 17        # aggregate Tavily attempts, including retries
   min_exploration_per_country: 3      # retain fresh searches despite old zero-result history
   vocab_cache_path: "data/search_vocab_cache.json"
   vocab_llm: false                    # expand roles via LLM (cached on disk)

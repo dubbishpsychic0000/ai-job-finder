@@ -53,6 +53,7 @@ def _upgrade_schema() -> None:
     """Idempotently add columns introduced after the initial schema."""
     from sqlalchemy import inspect, text
 
+    models.LiveSendAttempt.__table__.create(bind=engine, checkfirst=True)
     insp = inspect(engine)
     email_columns = {c["name"] for c in insp.get_columns("emails")} if insp.has_table("emails") else set()
     with engine.begin() as conn:

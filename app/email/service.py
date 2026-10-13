@@ -16,9 +16,11 @@ from __future__ import annotations
 
 import hashlib
 import logging
+import uuid
 from datetime import timedelta
 from pathlib import Path
 
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app import memory as mem
@@ -26,7 +28,7 @@ from app.agents.communication_agent import CommunicationAgent
 from app.config import AgentConfig, CandidateProfile, RunnerSettings
 from app.email import provider
 from app.email.safety_gate import validate
-from app.models import Application, Email, utcnow
+from app.models import Application, Email, LiveSendAttempt, utcnow
 
 logger = logging.getLogger(__name__)
 
@@ -116,6 +118,11 @@ class ApplicationEngine:
             return self._record_disabled(
                 job, decision, action, score, contact_email,
                 reason="ENABLE_EMAIL=false (dry-run)")
+
+        if mode == "live":
+            recovery = self._recover_pending_live_send(job)
+            if recovery is not None:
+                return recovery
 
         attachment = resolve_attachment(Path("candidate") / "cv", target_language)
         if not attachment:
@@ -301,19 +308,79 @@ class ApplicationEngine:
 
     def _finalize_live(self, job, app, email, contact_email, subject, body,
                        attachment, score) -> dict:
-        """Actually send through Gmail (only after the gate said yes)."""
+        """Persist a send intent before crossing the irreversible provider boundary."""
+        attempt_key = uuid.uuid4().hex
+        fingerprint = _message_fingerprint(
+            contact_email, subject, body, [attachment],
+        )
+        company = getattr(job, "company", None)
+        attempt = LiveSendAttempt(
+            attempt_key=attempt_key,
+            active_job_id=job.id,
+            job_id=job.id,
+            application_id=app.id,
+            email_id=email.id,
+            employer_name=getattr(company, "name", "") or "",
+            recipient=contact_email,
+            subject=subject,
+            message_fingerprint=fingerprint,
+            state="prepared",
+        )
+        email.delivery_state = "prepared"
+        email.status = "prepared"
+        app.status = "deferred"
+        self.session.add(attempt)
+        try:
+            self.session.commit()
+        except IntegrityError:
+            self.session.rollback()
+            logger.warning("Live send for job %s already has an active attempt", job.id)
+            return {
+                "sent": False, "status": "recovery_required",
+                "reason": "another live-send attempt is already active for this application",
+                "application_id": app.id, "email_id": email.id,
+            }
+        except Exception as exc:
+            self.session.rollback()
+            logger.error("Live-send intent persistence failed; Gmail was not called (%s)",
+                         type(exc).__name__)
+            raise RuntimeError(
+                "Live-send intent could not be persisted; no message was attempted"
+            ) from None
+
+        # A persisted dispatching state is deliberately treated as uncertain:
+        # a crash can occur either just before or just after the network call.
+        attempt.state = "dispatching"
+        attempt.updated_at = utcnow()
+        email.delivery_state = "dispatching"
+        email.status = "dispatching"
+        try:
+            self.session.commit()
+        except Exception as exc:
+            self.session.rollback()
+            logger.error("Live-send dispatch state persistence failed; Gmail was not called (%s)",
+                         type(exc).__name__)
+            raise RuntimeError(
+                "Live-send dispatch state could not be persisted; no message was attempted"
+            ) from None
+
         try:
             ok, message_id, error = provider.send(
                 self.settings, to=contact_email, subject=subject, body=body,
-                attachments=[attachment])
+                attachments=[attachment], attempt_key=attempt_key)
         except Exception as exc:
-            ok, message_id, error = False, "", str(exc)
-            logger.exception("Email provider send failed")
+            ok, message_id, error = False, "", provider.GMAIL_SEND_OUTCOME_UNCERTAIN
+            logger.warning("Email provider send raised after dispatch began (%s)",
+                           type(exc).__name__)
         if ok and not str(message_id or "").strip():
             ok = False
-            error = "email provider reported success without a message ID"
+            error = provider.GMAIL_SEND_OUTCOME_UNCERTAIN
         if ok:
+            attempt.state = "confirmed_sent"
+            attempt.updated_at = utcnow()
+            attempt.message_id = message_id
             email.status = "sent"
+            email.delivery_state = "confirmed"
             email.sent_at = utcnow()
             email.message_id = message_id or ""
             app.status = "sent"
@@ -327,15 +394,47 @@ class ApplicationEngine:
             mem.store.record_event(self.session, "action", f"email sent to {contact_email}",
                                    "info", {"job_id": job.id, "email_id": email.id,
                                             "message_id": message_id})
+            result_status = app.status
         else:
-            email.status = "failed"
             email.error = error
-            app.status = "deferred"
-            mem.store.record_event(self.session, "action", f"email send failed: {error}",
-                                   "error", {"job_id": job.id})
-        return {"sent": ok, "status": app.status, "error": error if not ok else "",
+            if str(error).startswith(provider.GMAIL_SEND_NOT_ATTEMPTED):
+                attempt.state = "definitively_failed"
+                attempt.active_job_id = None
+                attempt.error = error
+                attempt.updated_at = utcnow()
+                email.status = "failed"
+                email.delivery_state = "definitively_failed"
+                app.status = "failed"
+                result_status = "failed"
+                event = "Gmail send definitively not attempted"
+            else:
+                attempt.state = "uncertain"
+                attempt.updated_at = utcnow()
+                attempt.error = error or provider.GMAIL_SEND_OUTCOME_UNCERTAIN
+                email.status = "uncertain"
+                email.delivery_state = "uncertain"
+                app.status = "deferred"
+                result_status = "recovery_required"
+                event = "Gmail send outcome uncertain; automatic resend blocked"
+            mem.store.record_event(self.session, "action", event,
+                                   "error", {"job_id": job.id, "attempt_key": attempt_key})
+        try:
+            self.session.commit()
+        except Exception as exc:
+            self.session.rollback()
+            logger.error("Live-send result persistence failed; durable dispatch intent remains (%s)",
+                         type(exc).__name__)
+            raise RuntimeError(
+                "Live-send result could not be persisted; reconciliation is required"
+            ) from None
+        return {"sent": ok, "status": result_status, "error": error if not ok else "",
                 "application_id": app.id, "email_id": email.id,
                 "message_id": email.message_id, "draft_id": email.draft_id}
+
+    def _recover_pending_live_send(self, job) -> dict | None:
+        return reconcile_pending_live_send(
+            self.session, self.settings, self.config, job,
+        )
 
     def _record_disabled(self, job, decision, action, score, contact_email, reason: str) -> dict:
         app = mem.store.add_application(self.session, job.id, decision.id, action,
@@ -344,6 +443,103 @@ class ApplicationEngine:
         mem.store.record_event(self.session, "action", reason, "info", {"job_id": job.id})
         return {"sent": False, "status": "blocked", "reason": reason,
                 "application_id": app.id}
+
+
+def reconcile_pending_live_send(session: Session, settings: RunnerSettings,
+                                config: AgentConfig, job) -> dict | None:
+    """Reconcile a persisted live attempt without initiating any new send."""
+    attempts = session.query(LiveSendAttempt).filter(
+        LiveSendAttempt.job_id == job.id,
+        LiveSendAttempt.state.in_(("prepared", "dispatching", "uncertain", "confirmed_sent")),
+    ).order_by(LiveSendAttempt.id).all()
+    if not attempts:
+        return None
+    if len(attempts) != 1:
+        return {
+            "sent": False, "status": "recovery_required",
+            "reason": "multiple live-send records exist; operator reconciliation is required",
+        }
+    attempt = attempts[0]
+    app = session.get(Application, attempt.application_id)
+    email = session.get(Email, attempt.email_id)
+    if app is None or email is None:
+        return {
+            "sent": False, "status": "recovery_required",
+            "reason": "live-send record has missing application data",
+        }
+    if attempt.state == "confirmed_sent":
+        return {
+            "sent": False, "status": "sent",
+            "reason": "application was already confirmed sent; duplicate suppressed",
+            "application_id": app.id, "email_id": email.id,
+            "message_id": attempt.message_id, "recovered": True,
+        }
+    if attempt.state == "prepared":
+        attempt.state = "definitively_failed"
+        attempt.active_job_id = None
+        attempt.error = "process stopped before dispatch state was persisted"
+        attempt.updated_at = utcnow()
+        app.status = "failed"
+        email.status = "failed"
+        email.delivery_state = "definitively_failed"
+        email.error = attempt.error
+        try:
+            session.commit()
+        except Exception:
+            session.rollback()
+            raise
+        return None
+
+    result = provider.reconcile_live_send(
+        settings,
+        attempt_key=attempt.attempt_key,
+        recipient=attempt.recipient,
+        subject=attempt.subject,
+        started_at=attempt.started_at,
+    )
+    if result.status == "found":
+        attempt.state = "confirmed_sent"
+        attempt.active_job_id = attempt.job_id
+        attempt.message_id = result.message_id
+        attempt.updated_at = utcnow()
+        email.status = "sent"
+        email.delivery_state = "confirmed"
+        email.sent_at = utcnow()
+        email.message_id = result.message_id
+        app.status = "sent"
+        app.sent_at = email.sent_at
+        app.follow_up_at = app.sent_at + timedelta(
+            days=int(config.rules.get("follow_up_days", [7])[0]),
+        )
+        job.status = "acted"
+        mem.store.upsert_contact(
+            session, attempt.recipient, source="application_reconciled",
+            company_id=job.company_id,
+        )
+        mem.store.record_event(
+            session, "action", "Gmail live send recovered from Sent mailbox",
+            "info", {"job_id": job.id, "attempt_key": attempt.attempt_key,
+                     "message_id": result.message_id},
+        )
+        session.commit()
+        return {
+            "sent": True, "status": "sent", "message_id": result.message_id,
+            "application_id": app.id, "email_id": email.id, "recovered": True,
+        }
+
+    attempt.state = "uncertain"
+    attempt.updated_at = utcnow()
+    attempt.error = f"Sent mailbox reconciliation: {result.status}"
+    email.status = "uncertain"
+    email.delivery_state = "uncertain"
+    email.error = attempt.error
+    app.status = "deferred"
+    session.commit()
+    return {
+        "sent": False, "status": "recovery_required",
+        "reason": f"live-send reconciliation is {result.status}; automatic resend blocked",
+        "application_id": app.id, "email_id": email.id,
+    }
 
 
 def reconcile_pending_draft(session: Session, settings: RunnerSettings, job_id: int) -> dict | None:
@@ -364,6 +560,7 @@ def reconcile_pending_draft(session: Session, settings: RunnerSettings, job_id: 
             "status": "recovery_required",
             "reason": "multiple or unmarked Gmail draft attempts require manual reconciliation",
         }
+
 
     app, email = pending[0]
     result = provider.reconcile_draft(settings, email.draft_attempt_key)
@@ -406,3 +603,18 @@ def reconcile_pending_draft(session: Session, settings: RunnerSettings, job_id: 
         "email_id": email.id,
         "recovered": True,
     }
+
+
+def _message_fingerprint(recipient: str, subject: str, body: str,
+                         attachments: list[str]) -> str:
+    attachment_digests = []
+    for attachment in attachments:
+        digest = hashlib.sha256()
+        with Path(attachment).open("rb") as stream:
+            for chunk in iter(lambda: stream.read(64 * 1024), b""):
+                digest.update(chunk)
+        attachment_digests.append(digest.hexdigest())
+    content = "\0".join((
+        recipient.strip().casefold(), subject, body, *attachment_digests,
+    ))
+    return hashlib.sha256(content.encode("utf-8")).hexdigest()

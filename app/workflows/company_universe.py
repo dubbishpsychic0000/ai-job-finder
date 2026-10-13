@@ -14,6 +14,7 @@ from app.discovery.company_universe import (
     _trusted_website,
     canonical_company_key,
 )
+from app.discovery.email_verification import EmailVerificationService
 from app.discovery.website_researcher import host_domain
 from app.models import Company, Evidence
 
@@ -243,8 +244,8 @@ def _research_is_fresh(company: Company, rows: list[Evidence], now: datetime) ->
 def _research_is_due(company: Company, rows: list[Evidence], now: datetime) -> bool:
     if not _research_is_fresh(company, rows, now):
         return True
-    has_contact, _ = _contact_readiness(company, rows)
-    return not has_contact
+    _, actionable_route = _contact_readiness(company, rows)
+    return not actionable_route
 
 
 def _research_timestamp(company: Company) -> float:
@@ -259,13 +260,29 @@ def _research_timestamp(company: Company) -> float:
 def _contact_readiness(company: Company, rows: list[Evidence]) -> tuple[bool, bool]:
     if not company.official_domain:
         return False, False
-    from app.workflows.btp_outreach import _evidence_facts, _qualifying_contact
-
-    contact = _qualifying_contact(
-        _evidence_facts(rows),
-        company.official_domain.lower().removeprefix("www.").rstrip("."),
+    from app.workflows.btp_outreach import (
+        _evidence_facts,
+        _evidence_is_on_official_domain,
+        _qualifying_contact,
     )
-    return bool(contact), bool(contact and _trusted_website(company.website))
+
+    official_domain = company.official_domain.lower().removeprefix("www.").rstrip(".")
+    facts = _evidence_facts(rows)
+    verified_recruitment_contact = any(
+        fact.field_name == "recruitment_email"
+        and _evidence_is_on_official_domain(fact, official_domain)
+        and EmailVerificationService().verify(
+            fact.extracted_value,
+            source_url=fact.source_url,
+            source_type="company_career",
+            official=True,
+            employer_domain=official_domain,
+        ).verified
+        for fact in facts
+    )
+    actionable_route = _qualifying_contact(facts, official_domain)
+    has_contact = bool(verified_recruitment_contact or actionable_route)
+    return has_contact, bool(actionable_route and _trusted_website(company.website))
 def _interleave_candidates(
     candidates: list[CompanyCandidate], limit: int,
 ) -> list[CompanyCandidate]:

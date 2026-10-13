@@ -116,10 +116,21 @@ def cmd_btp_outreach(args) -> None:
     from app.workflows.btp_outreach import BtpOutreachSafetyError, run_btp_outreach
 
     settings = get_settings()
-    if settings.email_mode != "draft" or settings.enable_email is not True:
-        raise SystemExit("BTP outreach requires EMAIL_MODE=draft and ENABLE_EMAIL=true; no Gmail interaction occurred")
+    allowed_modes = {"draft", "live"}
+    if settings.email_mode not in allowed_modes:
+        raise SystemExit(
+            "BTP outreach requires EMAIL_MODE=draft or EMAIL_MODE=live with explicit authorization; "
+            "no Gmail interaction occurred"
+        )
+    if settings.enable_email is not True:
+        raise SystemExit("BTP outreach requires ENABLE_EMAIL=true; no Gmail interaction occurred")
     if settings.email_provider != "gmail":
         raise SystemExit("BTP outreach requires EMAIL_PROVIDER=gmail; no email-provider interaction occurred")
+    if settings.email_mode == "live" and settings.authorize_live_spontaneous is not True:
+        raise SystemExit(
+            "BTP live outreach requires AUTHORIZE_LIVE_SPONTANEOUS=true; "
+            "no Gmail interaction occurred"
+        )
     init_db()
     config = get_config()
     profile = get_profile()
@@ -262,8 +273,8 @@ def cmd_dashboard(args) -> None:
 
 def cmd_gmail_auth(_args) -> None:
     """One-time interactive OAuth authorization for the active email mode
-    (draft -> gmail.compose; live -> gmail.send). Prints only WHERE the token
-    was stored — never the token or the client secret.
+    (draft -> gmail.compose; live -> send, compose fallback, and read-only
+    Sent-mail reconciliation). Prints only WHERE the token was stored.
     """
     from app.config import get_settings
     from app.email import gmail_oauth

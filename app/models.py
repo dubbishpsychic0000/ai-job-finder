@@ -245,6 +245,28 @@ class Email(Base):
     error: Mapped[str] = mapped_column(Text, default="")
 
 
+class LiveSendAttempt(Base):
+    __tablename__ = "live_send_attempts"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    attempt_key: Mapped[str] = mapped_column(String(64), unique=True)
+    active_job_id: Mapped[int | None] = mapped_column(
+        ForeignKey("jobs.id"), unique=True, nullable=True,
+    )
+    job_id: Mapped[int] = mapped_column(ForeignKey("jobs.id"), index=True)
+    application_id: Mapped[int] = mapped_column(ForeignKey("applications.id"))
+    email_id: Mapped[int] = mapped_column(ForeignKey("emails.id"))
+    employer_name: Mapped[str] = mapped_column(String(255), default="")
+    recipient: Mapped[str] = mapped_column(String(255))
+    subject: Mapped[str] = mapped_column(String(512))
+    message_fingerprint: Mapped[str] = mapped_column(String(64))
+    state: Mapped[str] = mapped_column(String(24), index=True)
+    started_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+    message_id: Mapped[str] = mapped_column(String(255), default="")
+    error: Mapped[str] = mapped_column(Text, default="")
+
+
 Index(
     "uq_emails_draft_attempt_key",
     Email.draft_attempt_key,

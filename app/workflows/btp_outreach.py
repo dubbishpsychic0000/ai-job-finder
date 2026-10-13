@@ -28,6 +28,7 @@ from app.connectors.search_engine import resolve_search_url
 from app.connectors.tavily_resilience import (
     BTP_TAVILY_DAILY_RESERVE,
     TAVILY_DAILY_REQUEST_LIMIT,
+    ApiAttemptBudget,
     DailyBudget,
     ResilientTavily,
     TavilyCache,
@@ -39,12 +40,17 @@ from app.discovery.employers import classify_result
 from app.discovery.website_researcher import (
     EvidenceFact,
     WebsiteResearcher,
+    extract_application_instructions,
     extract_spontaneous_instruction,
     host_domain,
     normalize_url,
 )
 from app.email import provider
-from app.email.service import ApplicationEngine, reconcile_pending_draft
+from app.email.service import (
+    ApplicationEngine,
+    reconcile_pending_draft,
+    reconcile_pending_live_send,
+)
 from app.models import Company, Discovery, Email, Evidence, Job
 
 OVERPASS_URL = "https://overpass-api.de/api/interpreter"
@@ -845,17 +851,21 @@ def _configured_public_search():
 
     data_dir = ROOT_DIR / "data"
     data_dir.mkdir(parents=True, exist_ok=True)
-    keys = [
-        TavilyKey(
+    keys = []
+    seen_fingerprints = set()
+    for key in api_keys:
+        fingerprint = key_fingerprint(key, 64)
+        if fingerprint in seen_fingerprints:
+            continue
+        seen_fingerprints.add(fingerprint)
+        keys.append(TavilyKey(
             api_key=key,
             budget=DailyBudget(
                 data_dir / f"tavily_budget_{key_fingerprint(key)}.json",
                 limit=TAVILY_DAILY_REQUEST_LIMIT,
             ),
             fp=key_fingerprint(key),
-        )
-        for key in api_keys
-    ]
+        ))
     connector = ResilientTavily(
         keys=keys,
         cache=TavilyCache(data_dir / "tavily_cache.json"),
@@ -864,6 +874,7 @@ def _configured_public_search():
         result_source_type="search_engine",
         query_suffix="",
         max_key_attempts=1,
+        attempt_budget=ApiAttemptBudget(BTP_TAVILY_DAILY_RESERVE),
     )
     return _BoundedPublicSearchRouter(
         primary=_TavilyCompanySearch(
@@ -1639,13 +1650,16 @@ def _qualifying_contact(
     *,
     allow_general_contact: bool = False,
 ) -> tuple[str, EvidenceFact, EvidenceFact] | None:
-    spontaneous_instructions = [
+    instructions = [
         fact for fact in evidence
-        if fact.field_name == "spontaneous_application"
+        if fact.field_name in {
+            "application_instructions", "spontaneous_application",
+        }
         and _evidence_is_on_official_domain(fact, official_domain)
-        and extract_spontaneous_instruction(fact.extracted_value or fact.snippet)
+        and _explicit_instruction_text(fact)
     ]
-    for instruction in spontaneous_instructions:
+    for instruction in instructions:
+        instruction_text = _explicit_instruction_text(instruction).lower()
         for fact in evidence:
             if fact.source_url != instruction.source_url:
                 continue
@@ -1654,6 +1668,8 @@ def _qualifying_contact(
             if fact.field_name not in {"general_email", "recruitment_email"}:
                 continue
             address = fact.extracted_value.strip().lower()
+            if address not in instruction_text:
+                continue
             verified = EmailVerificationService().verify(
                 address,
                 source_url=fact.source_url,
@@ -1663,15 +1679,6 @@ def _qualifying_contact(
             )
             if verified.verified:
                 return address, instruction, fact
-    application_instructions = [
-        fact for fact in evidence
-        if fact.field_name in {
-            "application_instructions", "spontaneous_application",
-        }
-        and _evidence_is_on_official_domain(fact, official_domain)
-        and (fact.extracted_value or fact.snippet)
-    ]
-    for instruction in application_instructions:
         for fact in evidence:
             if (
                 fact.source_url != instruction.source_url
@@ -1681,6 +1688,8 @@ def _qualifying_contact(
             ):
                 continue
             address = fact.extracted_value.strip().lower()
+            if address not in instruction_text:
+                continue
             verified = EmailVerificationService().verify(
                 address,
                 source_url=fact.source_url,
@@ -1692,63 +1701,41 @@ def _qualifying_contact(
             )
             if verified.verified:
                 return address, instruction, fact
-    recruitment_pages = [
-        fact for fact in evidence
-        if fact.source_type in {"careers", "recruitment", "contact"}
-        and fact.field_name == "recruitment_email"
-        and _evidence_is_on_official_domain(fact, official_domain)
-    ]
-    for fact in recruitment_pages:
-        address = fact.extracted_value.strip().lower()
-        verified = EmailVerificationService().verify(
-            address,
-            source_url=fact.source_url,
-            source_type="company_career",
-            official=True,
-            employer_domain=official_domain,
-        )
-        if verified.verified:
-            authorization = EvidenceFact(
-                source_url=fact.source_url,
-                source_type=fact.source_type,
-                page_title=fact.page_title,
-                field_name="recruitment_channel",
-                extracted_value="Official employer recruitment channel",
-                snippet=fact.snippet,
-                confidence=fact.confidence,
-                reason_code="official_recruitment_page",
-            )
-            return address, authorization, fact
-    if allow_general_contact:
-        for fact in evidence:
-            if (
-                fact.field_name != "general_email"
-                or fact.source_type != "contact"
-                or not _evidence_is_on_official_domain(fact, official_domain)
-            ):
-                continue
-            address = fact.extracted_value.strip().lower()
-            verified = EmailVerificationService().verify(
-                address,
-                source_url=fact.source_url,
-                source_type="company_career",
-                official=True,
-                employer_domain=official_domain,
-            )
-            if not verified.verified:
-                continue
-            authorization = EvidenceFact(
-                source_url=fact.source_url,
-                source_type="contact",
-                page_title=fact.page_title,
-                field_name="recruitment_channel",
-                extracted_value="Official company contact-page email; policy fallback",
-                snippet=fact.snippet,
-                confidence=min(fact.confidence or 75, 75),
-                reason_code="configured_official_general_contact_fallback",
-            )
-            return address, authorization, fact
+
     return None
+
+
+def _explicit_instruction_text(fact: EvidenceFact) -> str:
+    text = fact.extracted_value or fact.snippet
+    if fact.field_name == "spontaneous_application":
+        return text.strip() if extract_spontaneous_instruction(text) else ""
+    if fact.field_name == "application_instructions":
+        return extract_application_instructions(text)
+    return ""
+
+
+def _application_portal_url(evidence: list[EvidenceFact], official_domain: str) -> str:
+    instructions_by_page = {
+        fact.source_url
+        for fact in evidence
+        if fact.field_name in {
+            "application_instructions", "spontaneous_application",
+        }
+        and _evidence_is_on_official_domain(fact, official_domain)
+        and _explicit_instruction_text(fact)
+    }
+    for fact in evidence:
+        if fact.field_name != "application_url":
+            continue
+        url = normalize_url(fact.extracted_value)
+        eligible_url = _eligible_website(url)
+        if (
+            eligible_url
+            and fact.source_url in instructions_by_page
+            and _evidence_is_on_official_domain(fact, official_domain)
+        ):
+            return eligible_url
+    return ""
 
 
 def _contact_rejection_reason(
@@ -1798,20 +1785,6 @@ def _evidence_is_on_official_domain(fact: EvidenceFact, official_domain: str) ->
         and trusted_domain
         and (source_domain == trusted_domain or source_domain.endswith("." + trusted_domain))
     )
-
-
-def _application_portal_url(evidence: list[EvidenceFact], official_domain: str) -> str:
-    for fact in evidence:
-        if fact.field_name != "application_url":
-            continue
-        url = normalize_url(fact.extracted_value)
-        eligible_url = _eligible_website(url)
-        if (
-            eligible_url
-            and _evidence_is_on_official_domain(fact, official_domain)
-        ):
-            return eligible_url
-    return ""
 
 
 class _FrenchSpontaneousCommunicator:
@@ -2053,6 +2026,13 @@ def run_btp_outreach(
             ).all() if job.opportunity_type == SPONTANEOUS_APPLICATION),
             None,
         )
+        live_recovery = None
+        if existing_outreach and settings.email_mode == "live":
+            live_recovery = reconcile_pending_live_send(
+                session, settings, config, existing_outreach,
+            )
+            if live_recovery and live_recovery.get("status") == "sent":
+                report.sent += 1
         existing_applications = (
             mem.store.find_applications(
                 session,
@@ -2080,6 +2060,25 @@ def run_btp_outreach(
                 ).first() is not None
                 for application in existing_applications
             )
+            pending_live_recovery = bool(
+                live_recovery and live_recovery.get("status") == "recovery_required"
+            )
+            if pending_recovery:
+                existing_reason = (
+                    "prior Gmail draft outcome is uncertain; no new draft was attempted"
+                )
+                recovery_stage = "gmail_draft_recovery_required"
+            elif pending_live_recovery:
+                existing_reason = (
+                    "prior live-send outcome requires reconciliation; no resend was attempted"
+                )
+                recovery_stage = "gmail_live_send_recovery_required"
+            elif live_recovery and live_recovery.get("status") == "sent":
+                existing_reason = "prior live send was confirmed from Gmail Sent"
+                recovery_stage = "gmail_send_confirmed_recovered"
+            else:
+                existing_reason = "an application record already exists"
+                recovery_stage = ""
             previous_draft = any(
                 application.status == "drafted" for application in existing_applications
             )
@@ -2093,15 +2092,14 @@ def run_btp_outreach(
             report.existing += 1
             report.companies.append(_company_result(
                 candidate,
-                "draft_recovery_required" if pending_recovery else "existing_application",
+                (
+                    "draft_recovery_required" if pending_recovery
+                    else "live_send_recovery_required" if pending_live_recovery
+                    else "existing_application"
+                ),
                 official_domain=company.official_domain,
-                eligibility_reason=(
-                    "prior Gmail draft outcome is uncertain; no new draft was attempted"
-                    if pending_recovery else "an application record already exists"
-                ),
-                delivery_stage=(
-                    "gmail_draft_recovery_required" if pending_recovery else ""
-                ),
+                eligibility_reason=existing_reason,
+                delivery_stage=recovery_stage,
                 previous_application=True,
                 previous_draft=previous_draft,
             ))
@@ -2219,16 +2217,17 @@ def run_btp_outreach(
         candidate.readiness = "WEBSITE_VERIFIED"
         domain = host_domain(website)
         previously_visited_missing_evidence: list[str] = []
+        crawl_incomplete = False
         try:
             stored_rows = mem.store.get_evidence(session, company_id=company.id)
             if _research_is_fresh(company, stored_rows):
                 evidence = _evidence_facts(stored_rows)
             else:
-                research_url = (
-                    _eligible_website(company.recruitment_url)
-                    or _eligible_website(company.careers_url)
-                    or website
-                )
+                # Stored route fields can predate the evidence rules (for
+                # example, an unrelated award page classified as recruitment).
+                # Start from the verified employer site so navigation and
+                # sitemap discovery can find the current application route.
+                research_url = website
                 result = crawler.research(
                     research_url,
                     company_id=company.id,
@@ -2237,6 +2236,7 @@ def run_btp_outreach(
                 previously_visited_missing_evidence = list(
                     getattr(result, "revisited_missing_evidence", [])
                 )
+                crawl_incomplete = bool(result.blocked)
                 if (
                     result.blocked and not result.visited and not result.evidence
                     and not stored_rows
@@ -2254,6 +2254,7 @@ def run_btp_outreach(
                             "crawl was blocked or failed for: "
                             + ", ".join(result.blocked[:3])
                         ),
+                        eligibility_reason_code="crawl_incomplete",
                         delivery_stage="crawl_blocked_or_failed",
                         previously_visited_missing_evidence=(
                             previously_visited_missing_evidence
@@ -2266,19 +2267,25 @@ def run_btp_outreach(
                 for fact in evidence:
                     if fact.field_name != "relevant_page":
                         continue
-                    if fact.source_type in {"careers", "recruitment", "spontaneous"}:
-                        company.careers_url = company.careers_url or fact.extracted_value
                     has_submission_instruction = any(
                         instruction.field_name in {
                             "application_instructions", "spontaneous_application",
                         }
                         and instruction.source_url == fact.source_url
+                        and _explicit_instruction_text(instruction)
                         for instruction in evidence
                     )
                     if has_submission_instruction:
-                        company.recruitment_url = (
-                            company.recruitment_url or fact.extracted_value
-                        )
+                        company.careers_url = fact.extracted_value
+                        candidate.careers_url = fact.extracted_value
+                        company.recruitment_url = fact.extracted_value
+                        candidate.recruitment_url = fact.extracted_value
+                    elif (
+                        fact.source_type in {"careers", "recruitment", "spontaneous"}
+                        and not company.careers_url
+                    ):
+                        company.careers_url = fact.extracted_value
+                        candidate.careers_url = fact.extracted_value
         except Exception as exc:
             report.errors.append(f"website research failed for a listed company: {exc}")
             target.status = "research_error"
@@ -2289,8 +2296,11 @@ def run_btp_outreach(
 
         instructions = [
             fact for fact in evidence
-            if fact.field_name == "spontaneous_application"
-            and extract_spontaneous_instruction(fact.extracted_value or fact.snippet)
+            if fact.field_name in {
+                "application_instructions", "spontaneous_application",
+            }
+            and _evidence_is_on_official_domain(fact, domain)
+            and _explicit_instruction_text(fact)
         ]
         if not instructions:
             report.no_spontaneous_instructions += 1
@@ -2327,6 +2337,7 @@ def run_btp_outreach(
                 report.companies.append(_company_result(
                     candidate, "portal_or_form", application_url=portal_url,
                     eligibility_reason="official website exposes an actionable application route",
+                    eligibility_reason_code="explicit_application_portal_instructions",
                 ))
                 continue
             if not instructions:
@@ -2345,6 +2356,11 @@ def run_btp_outreach(
                             allow_general_contact=bool(config.email.get(
                                 "btp_allow_official_general_contact", False,
                             )),
+                        ),
+                        eligibility_reason_code=(
+                            "crawl_incomplete"
+                            if crawl_incomplete
+                            else "missing_application_instructions"
                         ),
                         delivery_stage="contact_qualification",
                         previously_visited_missing_evidence=(
@@ -2367,6 +2383,15 @@ def run_btp_outreach(
                     allow_general_contact=bool(config.email.get(
                         "btp_allow_official_general_contact", False,
                     )),
+                ),
+                eligibility_reason_code=(
+                    "crawl_incomplete"
+                    if crawl_incomplete and not instructions
+                    else (
+                        "missing_application_instructions"
+                        if not instructions
+                        else "application_instruction_contact_mismatch"
+                    )
                 ),
                 delivery_stage="contact_qualification",
                 previously_visited_missing_evidence=(
@@ -2628,6 +2653,7 @@ def _company_result(
     delivery_stage: str = "",
     previously_visited_missing_evidence: list[str] | None = None,
     eligibility_reason: str = "",
+    eligibility_reason_code: str = "",
     previous_application: bool = False,
     previous_draft: bool = False,
     cooldown: bool = False,
@@ -2666,6 +2692,7 @@ def _company_result(
         "contact_verification_method": contact_verification_method,
         "application_url": application_url,
         "eligibility_reason": eligibility_reason,
+        "eligibility_reason_code": eligibility_reason_code,
         "delivery_stage": delivery_stage,
         "previously_visited_missing_evidence": (
             previously_visited_missing_evidence or []

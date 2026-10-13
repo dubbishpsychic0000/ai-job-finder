@@ -83,7 +83,7 @@ def test_gmail_send_persists_status_and_message_id(db, config, profile, settings
     settings = _settings(settings)
     calls = []
 
-    def fake_gmail(settings_, to, subject, body, attachments):
+    def fake_gmail(settings_, to, subject, body, attachments, **_kwargs):
         calls.append(to)
         return True, "msg-gmail-12345", ""
 
@@ -207,10 +207,10 @@ def test_authorized_spontaneous_live_send_requires_provider_message_id(
     ).run(job, decision, "APPLY", job.contact_email, "fr"))
 
     assert calls == ["send"]
-    assert result["status"] == "deferred"
+    assert result["status"] == "recovery_required"
     assert result["sent"] is False
-    assert "without a message ID" in result["error"]
-    assert db.query(models.Email).one().status == "failed"
+    assert provider_mod.GMAIL_SEND_OUTCOME_UNCERTAIN in result["error"]
+    assert db.query(models.Email).one().delivery_state == "uncertain"
 
 
 # ---------------------------------------------------------------------------
@@ -254,6 +254,48 @@ def test_gmail_transport_returns_message_id_on_success(settings, monkeypatch):
     assert ok is True
     assert mid == "msg-api-999"
     assert err == ""
+
+
+def test_gmail_timeout_after_send_dispatch_is_uncertain(settings, monkeypatch):
+    settings = _settings(settings)
+
+    class _FakeSend:
+        def execute(self):
+            raise TimeoutError("simulated network timeout")
+
+    class _FakeMessages:
+        def send(self, **_kwargs):
+            return _FakeSend()
+
+    class _FakeUsers:
+        def messages(self):
+            return _FakeMessages()
+
+    monkeypatch.setattr(
+        gmail_oauth, "authenticated_service",
+        lambda _settings: SimpleNamespace(users=lambda: _FakeUsers()),
+    )
+
+    ok, message_id, error = provider_mod.send(
+        settings, to="jobs@employer.example", subject="Application", body="Hello",
+        attempt_key="send-attempt",
+    )
+
+    assert not ok
+    assert not message_id
+    assert error == provider_mod.GMAIL_SEND_OUTCOME_UNCERTAIN
+
+
+def test_live_send_mime_contains_stable_attempt_marker():
+    encoded = provider_mod._build_mime(
+        "jobs@employer.example", "Application", "Hello", [],
+        live_attempt_key="stable-live-attempt",
+    )
+    message = BytesParser(policy=policy.default).parsebytes(
+        base64.urlsafe_b64decode(encoded + "===")
+    )
+
+    assert message["X-WCA-Live-Attempt"] == "stable-live-attempt"
 
 
 @pytest.mark.parametrize(
@@ -377,6 +419,115 @@ def _mock_reconciliation_service(monkeypatch, settings, pages, messages):
         gmail_oauth, "authenticated_service",
         lambda _settings: SimpleNamespace(users=lambda: _Users()),
     )
+
+
+def _mock_live_reconciliation_service(monkeypatch, settings, pages, messages):
+    class _Request:
+        def __init__(self, response):
+            self.response = response
+
+        def execute(self):
+            if isinstance(self.response, Exception):
+                raise self.response
+            return self.response
+
+    class _Messages:
+        def list(self, *, pageToken=None, **_kwargs):
+            return _Request(pages.get(pageToken, {}))
+
+        def get(self, *, id, **_kwargs):
+            return _Request(messages.get(id, {}))
+
+    class _Users:
+        def messages(self):
+            return _Messages()
+
+    monkeypatch.setattr(
+        gmail_oauth, "authenticated_service",
+        lambda _settings: SimpleNamespace(users=lambda: _Users()),
+    )
+
+
+def _live_message(marker, *, message_id="gmail-id", recipient="jobs@employer.example",
+                  subject="Application"):
+    headers = [
+        {"name": "To", "value": recipient},
+        {"name": "Subject", "value": subject},
+    ]
+    if marker is not None:
+        headers.append({"name": "X-WCA-Live-Attempt", "value": marker})
+    return {
+        "id": message_id,
+        "payload": {"headers": headers},
+    }
+
+
+def test_live_sent_reconciliation_requires_exact_marker_recipient_and_subject(
+    settings, monkeypatch,
+):
+    settings = _settings(settings)
+    _mock_live_reconciliation_service(
+        monkeypatch, settings,
+        {None: {"messages": [{"id": "gmail-id"}]}},
+        {"gmail-id": _live_message("expected-key")},
+    )
+
+    result = provider_mod.reconcile_live_send(
+        settings, attempt_key="expected-key", recipient="jobs@employer.example",
+        subject="Application", started_at=datetime.now(timezone.utc),
+    )
+
+    assert result == provider_mod.LiveSendReconciliation(
+        "found", message_id="gmail-id", matches=1,
+    )
+
+
+@pytest.mark.parametrize(
+    ("messages", "expected"),
+    [
+        ({"one": _live_message("expected-key", message_id="one"),
+          "two": _live_message("expected-key", message_id="two")}, "multiple"),
+        ({"one": _live_message("other-key", message_id="one")}, "ambiguous"),
+        ({"one": _live_message("expected-key", message_id="one",
+                               recipient="other@employer.example")}, "not_found"),
+    ],
+)
+def test_live_sent_reconciliation_rejects_ambiguous_or_duplicate_matches(
+    settings, monkeypatch, messages, expected,
+):
+    settings = _settings(settings)
+    ids = list(messages)
+    _mock_live_reconciliation_service(
+        monkeypatch, settings,
+        {None: {"messages": [{"id": key} for key in ids]}},
+        messages,
+    )
+
+    result = provider_mod.reconcile_live_send(
+        settings, attempt_key="expected-key", recipient="jobs@employer.example",
+        subject="Application", started_at=datetime.now(timezone.utc),
+    )
+
+    assert result.status == expected
+
+
+def test_live_sent_reconciliation_incomplete_scan_is_not_a_no_match(
+    settings, monkeypatch,
+):
+    settings = _settings(settings)
+    _mock_live_reconciliation_service(
+        monkeypatch, settings,
+        {None: {"messages": [{"id": "one"}], "nextPageToken": "more"}},
+        {"one": _live_message("other-key", message_id="one")},
+    )
+
+    result = provider_mod.reconcile_live_send(
+        settings, attempt_key="expected-key", recipient="jobs@employer.example",
+        subject="Application", started_at=datetime.now(timezone.utc),
+        max_messages=1,
+    )
+
+    assert result.status == "incomplete"
 
 
 def _draft_message(marker=None, *, draft_id="gmail-id"):
@@ -889,8 +1040,14 @@ def test_gmail_created_draft_is_recovered_if_final_database_commit_fails(
 # OAuth hygiene
 # ---------------------------------------------------------------------------
 
-def test_scope_is_send_only():
-    assert gmail_oauth.GMAIL_SEND_SCOPE == "https://www.googleapis.com/auth/gmail.send"
+def test_live_scope_includes_send_and_sent_reconciliation_access(settings):
+    live = _settings(settings)
+
+    assert gmail_oauth.required_scopes(live) == [
+        gmail_oauth.GMAIL_COMPOSE_SCOPE,
+        gmail_oauth.GMAIL_SEND_SCOPE,
+        gmail_oauth.GMAIL_READONLY_SCOPE,
+    ]
 
 
 def test_load_client_config_reads_secret_without_logging(settings, caplog, tmp_path):
@@ -914,6 +1071,276 @@ def test_load_client_config_reads_secret_without_logging(settings, caplog, tmp_p
 
     assert "web" in cfg
     assert secret_value not in caplog.text
+
+
+def _allowed_live(monkeypatch):
+    monkeypatch.setattr(
+        "app.email.service.validate",
+        lambda **_kwargs: SimpleNamespace(allowed=True, reasons=[], checks={}),
+    )
+
+
+def _run_live(db, config, profile, settings, job, decision):
+    return asyncio.run(_engine(
+        db, config, profile, settings,
+        _draft_communicator("Je vous adresse ma candidature."),
+    ).run(job, decision, "APPLY", job.contact_email, "fr"))
+
+
+def test_live_prepared_intent_after_crash_before_dispatch_is_safe_to_retry(
+    db, config, profile, settings, monkeypatch,
+):
+    settings = _settings(settings)
+    _allowed_live(monkeypatch)
+    job = _job(db)
+    decision = _decision(db, job)
+    send_calls = []
+    monkeypatch.setattr(
+        provider_mod, "send",
+        lambda *_args, **_kwargs: (
+            send_calls.append("sent") or (True, "gmail-message", "")
+        ),
+    )
+    original_commit = db.commit
+    commits = 0
+
+    def fail_dispatch_commit():
+        nonlocal commits
+        commits += 1
+        if commits == 2:
+            raise RuntimeError("simulated crash before dispatch")
+        original_commit()
+
+    monkeypatch.setattr(db, "commit", fail_dispatch_commit)
+    with pytest.raises(RuntimeError, match="dispatch state could not be persisted"):
+        _run_live(db, config, profile, settings, job, decision)
+    assert send_calls == []
+    assert db.query(models.LiveSendAttempt).one().state == "prepared"
+
+    monkeypatch.setattr(db, "commit", original_commit)
+    result = _run_live(db, config, profile, settings, job, decision)
+
+    assert result["status"] == "sent"
+    assert send_calls == ["sent"]
+    assert sorted(
+        attempt.state for attempt in db.query(models.LiveSendAttempt).all()
+    ) == ["confirmed_sent", "definitively_failed"]
+
+
+def test_gmail_success_with_final_persistence_failure_recovers_from_sent(
+    db, config, profile, settings, monkeypatch,
+):
+    settings = _settings(settings)
+    _allowed_live(monkeypatch)
+    job = _job(db)
+    decision = _decision(db, job)
+    send_calls = []
+    monkeypatch.setattr(
+        provider_mod, "send",
+        lambda *_args, **_kwargs: (
+            send_calls.append("sent") or (True, "gmail-message", "")
+        ),
+    )
+    original_commit = db.commit
+    commits = 0
+
+    def fail_final_commit():
+        nonlocal commits
+        commits += 1
+        if commits == 3:
+            raise RuntimeError("simulated final persistence failure")
+        original_commit()
+
+    monkeypatch.setattr(db, "commit", fail_final_commit)
+    with pytest.raises(RuntimeError, match="reconciliation is required"):
+        _run_live(db, config, profile, settings, job, decision)
+    monkeypatch.setattr(db, "commit", original_commit)
+
+    reloaded = sessionmaker(bind=db.get_bind(), expire_on_commit=False)()
+    try:
+        monkeypatch.setattr(
+            provider_mod, "reconcile_live_send",
+            lambda *_args, **_kwargs: provider_mod.LiveSendReconciliation(
+                "found", "gmail-message", 1,
+            ),
+        )
+        persisted_job = reloaded.get(models.Job, job.id)
+        persisted_decision = reloaded.get(models.Decision, decision.id)
+        result = _run_live(
+            reloaded, config, profile, settings, persisted_job, persisted_decision,
+        )
+        assert result["status"] == "sent"
+        assert result["recovered"] is True
+        assert result["message_id"] == "gmail-message"
+        assert send_calls == ["sent"]
+        assert reloaded.query(models.LiveSendAttempt).one().state == "confirmed_sent"
+    finally:
+        reloaded.close()
+
+
+def test_timeout_with_one_exact_sent_match_confirms_without_resending(
+    db, config, profile, settings, monkeypatch,
+):
+    settings = _settings(settings)
+    _allowed_live(monkeypatch)
+    job = _job(db)
+    decision = _decision(db, job)
+    send_calls = []
+    monkeypatch.setattr(
+        provider_mod, "send",
+        lambda *_args, **_kwargs: (
+            send_calls.append("timeout")
+            or (False, "", provider_mod.GMAIL_SEND_OUTCOME_UNCERTAIN)
+        ),
+    )
+    first = _run_live(db, config, profile, settings, job, decision)
+    assert first["status"] == "recovery_required"
+    db.commit()
+
+    reloaded = sessionmaker(bind=db.get_bind(), expire_on_commit=False)()
+    try:
+        monkeypatch.setattr(
+            provider_mod, "reconcile_live_send",
+            lambda *_args, **_kwargs: provider_mod.LiveSendReconciliation(
+                "found", "gmail-message", 1,
+            ),
+        )
+        result = _run_live(
+            reloaded, config, profile, settings,
+            reloaded.get(models.Job, job.id),
+            reloaded.get(models.Decision, decision.id),
+        )
+        assert result["status"] == "sent"
+        assert result["recovered"] is True
+        assert send_calls == ["timeout"]
+    finally:
+        reloaded.close()
+
+
+@pytest.mark.parametrize("reconciliation_status", [
+    "not_found", "multiple", "incomplete", "unavailable", "ambiguous",
+])
+def test_uncertain_live_send_never_retries_without_exact_sent_match(
+    db, config, profile, settings, monkeypatch, reconciliation_status,
+):
+    settings = _settings(settings)
+    _allowed_live(monkeypatch)
+    job = _job(db)
+    decision = _decision(db, job)
+    send_calls = []
+    monkeypatch.setattr(
+        provider_mod, "send",
+        lambda *_args, **_kwargs: (
+            send_calls.append("send")
+            or (False, "", provider_mod.GMAIL_SEND_OUTCOME_UNCERTAIN)
+        ),
+    )
+    first = _run_live(db, config, profile, settings, job, decision)
+    assert first["status"] == "recovery_required"
+    db.commit()
+
+    reloaded = sessionmaker(bind=db.get_bind(), expire_on_commit=False)()
+    try:
+        monkeypatch.setattr(
+            provider_mod, "reconcile_live_send",
+            lambda *_args, **_kwargs: provider_mod.LiveSendReconciliation(
+                reconciliation_status,
+            ),
+        )
+        result = _run_live(
+            reloaded, config, profile, settings,
+            reloaded.get(models.Job, job.id),
+            reloaded.get(models.Decision, decision.id),
+        )
+        assert result["status"] == "recovery_required"
+        assert send_calls == ["send"]
+        assert reloaded.query(models.LiveSendAttempt).one().state == "uncertain"
+    finally:
+        reloaded.close()
+
+
+def test_pre_dispatch_gmail_failure_is_recorded_as_definitive_and_retryable(
+    db, config, profile, settings, monkeypatch,
+):
+    settings = _settings(settings)
+    _allowed_live(monkeypatch)
+    job = _job(db)
+    decision = _decision(db, job)
+    calls = []
+
+    def no_dispatch(*_args, **_kwargs):
+        calls.append("not-attempted")
+        return False, "", f"{provider_mod.GMAIL_SEND_NOT_ATTEMPTED} OAuth setup failed."
+
+    monkeypatch.setattr(provider_mod, "send", no_dispatch)
+    result = _run_live(db, config, profile, settings, job, decision)
+
+    attempt = db.query(models.LiveSendAttempt).one()
+    assert result["status"] == "failed"
+    assert attempt.state == "definitively_failed"
+    assert attempt.active_job_id is None
+    assert calls == ["not-attempted"]
+
+
+def test_live_gate_failure_creates_no_attempt_and_never_calls_provider(
+    db, config, profile, settings, monkeypatch,
+):
+    settings = _settings(settings)
+    job = _job(db)
+    decision = _decision(db, job)
+    monkeypatch.setattr(
+        provider_mod, "send",
+        lambda *_args, **_kwargs: pytest.fail("blocked application reached Gmail"),
+    )
+    result = asyncio.run(_engine(
+        db, config, profile, settings, _draft_communicator(
+            "I have 25 years of experience in civil engineering.",
+        ),
+    ).run(job, decision, "APPLY", job.contact_email, "fr"))
+
+    assert result["status"] == "blocked"
+    assert db.query(models.LiveSendAttempt).count() == 0
+
+
+def test_active_live_attempt_database_lock_blocks_competing_worker(
+    db, config, profile, settings, monkeypatch,
+):
+    settings = _settings(settings)
+    _allowed_live(monkeypatch)
+    job = _job(db)
+    decision = _decision(db, job)
+    monkeypatch.setattr(
+        provider_mod, "send",
+        lambda *_args, **_kwargs: (
+            False, "", provider_mod.GMAIL_SEND_OUTCOME_UNCERTAIN,
+        ),
+    )
+    first = _run_live(db, config, profile, settings, job, decision)
+    assert first["status"] == "recovery_required"
+    db.commit()
+
+    competing = sessionmaker(bind=db.get_bind(), expire_on_commit=False)()
+    try:
+        attempt = db.query(models.LiveSendAttempt).one()
+        duplicate = models.LiveSendAttempt(
+            attempt_key="competing-worker-attempt",
+            active_job_id=job.id,
+            job_id=job.id,
+            application_id=attempt.application_id,
+            email_id=attempt.email_id,
+            employer_name=attempt.employer_name,
+            recipient=attempt.recipient,
+            subject=attempt.subject,
+            message_fingerprint=attempt.message_fingerprint,
+            state="dispatching",
+        )
+        competing.add(duplicate)
+        with pytest.raises(IntegrityError):
+            competing.commit()
+        competing.rollback()
+        assert db.query(models.LiveSendAttempt).count() == 1
+    finally:
+        competing.close()
 
 
 def test_secret_and_token_never_logged_on_failure(settings, caplog, monkeypatch):

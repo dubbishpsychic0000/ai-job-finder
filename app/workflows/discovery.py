@@ -20,6 +20,7 @@ from app.config import ROOT_DIR, AgentConfig, CandidateProfile, Preferences, loa
 from app.connectors import registry
 from app.connectors.tavily_resilience import (
     GENERAL_TAVILY_DAILY_LIMIT,
+    ApiAttemptBudget,
     DailyBudget,
     TavilyKey,
     key_fingerprint,
@@ -278,6 +279,7 @@ class DiscoveryReport:
     # explainable without treating it as an error.
     source_reports: list[dict] = field(default_factory=list)
     alerts: list[str] = field(default_factory=list)
+    api_request_budget: dict = field(default_factory=dict)
 
 
 def _load_source_connectors(path: Path | None = None) -> list[tuple[dict, object]]:
@@ -291,7 +293,12 @@ def _load_source_connectors(path: Path | None = None) -> list[tuple[dict, object
     tavily_keys_str = os.getenv("TAVILY_API_KEYS") or os.getenv("TAVILY_API_KEY", "")
     tavily_keys = [k.strip() for k in tavily_keys_str.split(",") if k.strip()]
     tavily_resilient_keys = []
+    seen_key_fingerprints = set()
     for k in tavily_keys:
+        fingerprint = key_fingerprint(k, 64)
+        if fingerprint in seen_key_fingerprints:
+            continue
+        seen_key_fingerprints.add(fingerprint)
         budget_path = Path(f"data/tavily_budget_{key_fingerprint(k)}.json")
         budget_path.parent.mkdir(parents=True, exist_ok=True)
         tavily_resilient_keys.append(TavilyKey(
@@ -339,6 +346,115 @@ def _load_source_connectors(path: Path | None = None) -> list[tuple[dict, object
     return connectors
 
 
+def _tavily_budgets(connectors: list[tuple[dict, object]]) -> list[object]:
+    budgets = {}
+    for _source_cfg, connector in connectors:
+        if not callable(getattr(connector, "has_cached_result", None)):
+            continue
+        for key in getattr(connector, "keys", []):
+            budget = getattr(key, "budget", None)
+            if budget is not None:
+                budgets[getattr(budget, "identity", id(budget))] = budget
+    return list(budgets.values())
+
+
+def _allocate_source_queries(
+    connectors: list[tuple[dict, object]],
+    plan: list[dict],
+    max_requests_per_source: int,
+    *,
+    rotation_offset: int | None = None,
+    max_api_attempts: int | None = None,
+) -> tuple[list[list[dict]], list[int], list[int]]:
+    """Share uncached Tavily calls across sources while retaining cached reads."""
+    scheduled: list[list[dict]] = []
+    deferred_by_source: list[int] = []
+    stale_by_source: list[int] = []
+    budgeted_sources: list[int] = []
+    uncached_by_source: dict[int, list[int]] = {}
+    available = sum(budget.remaining() for budget in _tavily_budgets(connectors))
+    if max_api_attempts is not None:
+        available = min(available, max(0, int(max_api_attempts)))
+
+    for source_index, (_source_cfg, connector) in enumerate(connectors):
+        combos = plan[:max_requests_per_source] if max_requests_per_source else plan
+        scheduled.append([])
+        deferred_by_source.append(0)
+        stale_by_source.append(0)
+        if not callable(getattr(connector, "has_cached_result", None)) or not getattr(
+            connector, "keys", None
+        ):
+            scheduled[source_index] = list(combos)
+            continue
+        budgeted_sources.append(source_index)
+        uncached_indices = []
+        for combo_index, combo in enumerate(combos):
+            if connector.has_cached_result(combo["query"], combo["location"]):
+                scheduled[source_index].append(combo)
+            else:
+                uncached_indices.append(combo_index)
+                stale_check = getattr(connector, "has_stale_cached_result", None)
+                if callable(stale_check) and stale_check(
+                    combo["query"], combo["location"],
+                ):
+                    stale_by_source[source_index] += 1
+        uncached_by_source[source_index] = uncached_indices
+
+    if not budgeted_sources:
+        return scheduled, deferred_by_source, stale_by_source
+    offset = (
+        datetime.now(timezone.utc).hour // 2
+        if rotation_offset is None else rotation_offset
+    ) % len(budgeted_sources)
+    order = budgeted_sources[offset:] + budgeted_sources[:offset]
+    source_combos = {
+        index: (
+            plan[:max_requests_per_source] if max_requests_per_source else plan
+        )
+        for index in budgeted_sources
+    }
+    selected_indices = {index: set() for index in budgeted_sources}
+    max_queries = max(
+        (len(source_combos[index]) for index in budgeted_sources),
+        default=0,
+    )
+    for combo_index in range(max_queries):
+        for source_index in order:
+            if combo_index not in uncached_by_source[source_index]:
+                continue
+            if available <= 0:
+                break
+            selected_indices[source_index].add(combo_index)
+            available -= 1
+        if available <= 0:
+            break
+
+    for source_index in budgeted_sources:
+        selected = selected_indices[source_index]
+        combos = source_combos[source_index]
+        scheduled[source_index] = [
+            combo for index, combo in enumerate(combos)
+            if index not in uncached_by_source[source_index] or index in selected
+        ]
+        deferred_by_source[source_index] = (
+            len(uncached_by_source[source_index]) - len(selected)
+        )
+    return scheduled, deferred_by_source, stale_by_source
+
+
+def _remaining_tavily_requests(connector) -> int:
+    budgets = {}
+    for key in getattr(connector, "keys", []):
+        budget = getattr(key, "budget", None)
+        if budget is not None:
+            budgets[getattr(budget, "identity", id(budget))] = budget
+    remaining = sum(budget.remaining() for budget in budgets.values())
+    attempt_budget = getattr(connector, "attempt_budget", None)
+    if attempt_budget is not None:
+        remaining = min(remaining, attempt_budget.remaining())
+    return remaining
+
+
 def _resolve_paths(cfg: dict) -> dict:
     opts = dict(cfg)
     p = opts.get("path")
@@ -353,6 +469,10 @@ async def run_discovery(session: Session, config: AgentConfig, prefs: Preference
                         llm=None) -> DiscoveryReport:
     report = DiscoveryReport()
     discovery_cfg = config.discovery or {}
+    max_api_attempts = max(
+        0, int(discovery_cfg.get("max_api_requests_per_run", 17)),
+    )
+    api_attempt_budget = ApiAttemptBudget(max_api_attempts)
     max_per_country = int(discovery_cfg.get(
         "max_per_country", config.search_plan.get("max_combinations_per_country", 3)))
     max_queries = int(discovery_cfg.get("max_queries_per_run", 40))
@@ -364,6 +484,9 @@ async def run_discovery(session: Session, config: AgentConfig, prefs: Preference
     from app.workflows.adaptive_plan import build_adaptive_plan
 
     connectors = _load_source_connectors(sources_path)
+    for _source_cfg, connector in connectors:
+        if callable(getattr(connector, "has_cached_result", None)):
+            connector.attempt_budget = api_attempt_budget
     researcher = None
     if discovery_cfg.get("website_research", False):
         from app.discovery.website_researcher import WebsiteResearcher
@@ -424,7 +547,11 @@ async def run_discovery(session: Session, config: AgentConfig, prefs: Preference
                                                     sources_path=spath, profile=profile)
         report.social_signals = sreport.stored
 
-    for source_cfg, connector in connectors:
+    max_requests = int(discovery_cfg.get("max_requests_per_source", 0))
+    scheduled_queries, deferred_queries, stale_queries = _allocate_source_queries(
+        connectors, plan, max_requests, max_api_attempts=max_api_attempts,
+    )
+    for source_index, (source_cfg, connector) in enumerate(connectors):
         source_name = source_cfg.get("name", connector.name)
         source_report = {
             "name": source_name,
@@ -433,8 +560,22 @@ async def run_discovery(session: Session, config: AgentConfig, prefs: Preference
             "queries": 0,
             "fetched": 0,
             "normalized": 0,
+            "normalization_rejected": 0,
             "duplicates": 0,
+            "duplicate_reasons": {"exact": 0, "probable": 0, "same_run": 0},
             "new": 0,
+            "queries_cached": 0,
+            "queries_api": 0,
+            "queries_empty": 0,
+            "queries_failed": 0,
+            "queries_budget_deferred": deferred_queries[source_index],
+            "queries_stale_cache": stale_queries[source_index],
+            "api_attempts": 0,
+            "api_successes": 0,
+            "api_failed_attempts": 0,
+            "api_retry_attempts": 0,
+            "api_attempts_budget_deferred": 0,
+            "query_error_codes": {},
             "error": "",
             "rate_status": "ok",
             "health": "ready",
@@ -442,9 +583,14 @@ async def run_discovery(session: Session, config: AgentConfig, prefs: Preference
         source = mem.store.upsert_source(session, source_name,
                                          getattr(connector, "kind", "?"), str(source_cfg.get("path", "")))
         items_found = 0
-        max_requests = int(discovery_cfg.get("max_requests_per_source", 0))  # §25 per-source budget
-        combos = plan[:max_requests] if max_requests else plan
-        parallel = bool(discovery_cfg.get("parallel_fetch", False))  # §26 — concurrent searches
+        attempt_metrics = getattr(connector, "attempt_metrics", None)
+        metrics_before = attempt_metrics() if callable(attempt_metrics) else {}
+        combos = scheduled_queries[source_index]
+        budgeted_tavily = (
+            callable(getattr(connector, "has_cached_result", None))
+            and bool(getattr(connector, "keys", None))
+        )
+        parallel = bool(discovery_cfg.get("parallel_fetch", False)) and not budgeted_tavily
 
         def process(combo, results, source_name, source_report) -> int:
             """Normalize + dedup + store one combo's results; returns jobs found."""
@@ -463,6 +609,7 @@ async def run_discovery(session: Session, config: AgentConfig, prefs: Preference
             report.opportunities_fetched += len(processed)
             source_report["fetched"] += len(results)
             source_report["normalized"] += len(processed)
+            source_report["normalization_rejected"] += len(results) - len(processed)
             dup = find_duplicates(session, processed)
             seen_canonical = set()
             combo_new = 0
@@ -470,11 +617,13 @@ async def run_discovery(session: Session, config: AgentConfig, prefs: Preference
                 if idx in dup:
                     report.duplicates += 1
                     source_report["duplicates"] += 1
+                    source_report["duplicate_reasons"][dup[idx]] += 1
                     continue
                 canonical = opp.canonical_job_id()
                 if canonical in seen_canonical:  # same vacancy from another source this run
                     report.duplicates += 1
                     source_report["duplicates"] += 1
+                    source_report["duplicate_reasons"]["same_run"] += 1
                     continue
                 seen_canonical.add(canonical)
                 src_type = opp.effective_source_type()
@@ -563,10 +712,35 @@ async def run_discovery(session: Session, config: AgentConfig, prefs: Preference
             return len(processed)
 
         async def search(combo, _connector=connector):
-            try:
-                return await _connector.search(combo["query"], combo["location"])
-            except (TypeError, NotImplementedError):
-                return []
+            return await _connector.search(combo["query"], combo["location"])
+
+        def record_query_outcome(results, _connector=connector, source=source_report):
+            origin = getattr(_connector, "last_origin", "")
+            status = getattr(_connector, "last_status", "")
+            error_code = getattr(_connector, "last_error_code", "")
+            deferred_reason = getattr(_connector, "last_deferred_reason", "")
+            if origin == "cache":
+                source["queries_cached"] += 1
+            elif origin == "api":
+                source["queries_api"] += 1
+            if not results and status == "empty":
+                source["queries_empty"] += 1
+            if status in {"degraded", "unconfigured", "blocked"}:
+                if error_code in {
+                    "daily_request_budget_exhausted",
+                    "run_api_attempt_budget_exhausted",
+                } and not getattr(_connector, "last_call_attempts", 0):
+                    source["queries_budget_deferred"] += 1
+                else:
+                    source["queries_failed"] += 1
+            if (
+                deferred_reason
+                and deferred_reason != "budget_ledger_unavailable"
+            ):
+                source["api_attempts_budget_deferred"] += 1
+            if error_code:
+                codes = source["query_error_codes"]
+                codes[error_code] = codes.get(error_code, 0) + 1
 
         failure = ""
         try:
@@ -577,13 +751,40 @@ async def run_discovery(session: Session, config: AgentConfig, prefs: Preference
                 for combo, results in zip(combos, batch, strict=True):
                     if isinstance(results, BaseException):
                         raise results  # connector-level isolation below
+                    record_query_outcome(results)
                     items_found += process(combo, results, source_name, source_report)
             else:
                 for combo in combos:
+                    if (
+                        budgeted_tavily
+                        and not connector.has_cached_result(
+                            combo["query"], combo["location"],
+                        )
+                        and _remaining_tavily_requests(connector) <= 0
+                    ):
+                        ledger_unavailable = any(
+                            getattr(getattr(key, "budget", None), "_ledger_error", False)
+                            for key in getattr(connector, "keys", [])
+                        )
+                        if ledger_unavailable:
+                            source_report["queries_failed"] += 1
+                            codes = source_report["query_error_codes"]
+                            codes["budget_ledger_unavailable"] = (
+                                codes.get("budget_ledger_unavailable", 0) + 1
+                            )
+                            source_report["health"] = "degraded"
+                        else:
+                            source_report["queries_budget_deferred"] += 1
+                            source_report["rate_status"] = "limited"
+                        continue
                     report.combinations_attempted += 1
                     source_report["queries"] += 1
-                    items_found += process(combo, await search(combo), source_name, source_report)
+                    results = await search(combo)
+                    record_query_outcome(results)
+                    items_found += process(combo, results, source_name, source_report)
         except Exception as exc:  # connector-level isolation
+            if not source_report["error"]:
+                source_report["queries_failed"] += 1
             logger.exception("Discovery connector %s failed", source_name)
             report.source_errors.append(f"{source_name}: {exc}")
             mem.store.record_event(session, "discovery", f"connector failed: {exc}",
@@ -593,18 +794,90 @@ async def run_discovery(session: Session, config: AgentConfig, prefs: Preference
             if "429" in str(exc) or "rate limit" in str(exc).lower():
                 source_report["rate_status"] = "limited"
         finally:
-            health = getattr(connector, "last_status", "")
+            if callable(attempt_metrics):
+                metrics_after = attempt_metrics()
+                source_report["api_attempts"] = (
+                    metrics_after.get("attempts", 0)
+                    - metrics_before.get("attempts", 0)
+                )
+                source_report["api_successes"] = (
+                    metrics_after.get("successes", 0)
+                    - metrics_before.get("successes", 0)
+                )
+                source_report["api_failed_attempts"] = (
+                    metrics_after.get("failed_attempts", 0)
+                    - metrics_before.get("failed_attempts", 0)
+                )
+                source_report["api_retry_attempts"] = (
+                    metrics_after.get("retry_attempts", 0)
+                    - metrics_before.get("retry_attempts", 0)
+                )
             if failure:
+                health = "failed"
+            elif source_report["queries_failed"]:
                 health = "degraded"
+            elif source_report["queries_budget_deferred"]:
+                health = (
+                    "budget_deferred"
+                    if source_report["queries"] == 0 and source_report["fetched"] == 0
+                    else "partial_budget"
+                )
             elif not source_report["fetched"]:
-                health = health if health in {"unconfigured", "degraded", "blocked"} else "empty"
+                health = (
+                    "empty"
+                    if source_report["queries_empty"] or source_report["queries"]
+                    else "not_run"
+                )
+            else:
+                health = "ok"
             source_report["health"] = health or "ok"
             mem.store.mark_source_fetched(session, source, items_found, error=failure)
             report.source_reports.append(source_report)
 
-    if connectors and report.opportunities_fetched == 0:
-        report.alerts.append("all configured discovery sources returned zero opportunities")
+    raw_results = sum(item["fetched"] for item in report.source_reports)
+    normalization_rejected = sum(
+        item["normalization_rejected"] for item in report.source_reports
+    )
+    failed_queries = sum(item["queries_failed"] for item in report.source_reports)
+    empty_queries = sum(item["queries_empty"] for item in report.source_reports)
+    total_queries = sum(item["queries"] for item in report.source_reports)
+    budget_deferred_total = sum(
+        item["queries_budget_deferred"] for item in report.source_reports
+    )
+    if connectors and raw_results == 0 and total_queries == 0 and budget_deferred_total:
+        report.alerts.append(
+            f"job search did not run: {budget_deferred_total} uncached searches "
+            "were deferred by request budgets"
+        )
         mem.store.record_event(session, "discovery", report.alerts[-1], "warning", {})
+    elif connectors and raw_results == 0:
+        report.alerts.append(
+            f"job search returned no results after {total_queries} source queries: "
+            f"{failed_queries} failed, {empty_queries} successful empty; "
+            f"{budget_deferred_total} budget-deferred"
+        )
+        mem.store.record_event(session, "discovery", report.alerts[-1], "warning", {})
+    elif raw_results and report.opportunities_fetched == 0:
+        report.alerts.append(
+            f"normalization rejected all {normalization_rejected} provider results"
+        )
+        mem.store.record_event(session, "discovery", report.alerts[-1], "warning", {})
+    if report.new_jobs == 0 and report.duplicates:
+        report.alerts.append(
+            f"no new jobs: {report.duplicates} fetched opportunities were deduplicated; "
+            "inspect per-source duplicate reasons and freshness"
+        )
+    report.api_request_budget = api_attempt_budget.as_dict()
+    if report.api_request_budget["attempts"] >= report.api_request_budget["limit"]:
+        logger.info(
+            "Tavily per-run request cap reached after %d attempts",
+            report.api_request_budget["attempts"],
+        )
+    if budget_deferred_total:
+        report.alerts.append(
+            f"Tavily request budget deferred {budget_deferred_total} uncached searches; "
+            "see per-source budget and health fields"
+        )
     mem.store.record_event(session, "discovery",
                            f"found {report.new_jobs} new jobs ({report.opportunities_fetched} fetched, "
                            f"{report.duplicates} dupes)", "info", {"new": report.new_jobs})
