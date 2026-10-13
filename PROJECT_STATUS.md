@@ -43,7 +43,10 @@ initial capacity across configured country/language buckets before search
 facets and repetitions; canonical configured target roles remain first in the
 role vocabulary.
 
-The local working tree now includes a manual `discovery_only` Actions task. It
+The manual `discovery_only` Actions task was published in commit
+`4786f0b7ae74ecd26e0d69b5d47867afe4323986`. CI passed in
+[run 38473808222](https://github.com/dubbishpsychic0000/ai-job-finder/actions/runs/38473808222).
+The task
 restores only the production database snapshot, search profile/preferences,
 Tavily cache, and budget ledgers; the task caps search combinations at 12 and
 aggregate Tavily API attempts (including retries) at 8. It skips analysis,
@@ -51,17 +54,24 @@ action, BTP outreach, follow-ups, Gmail, WhatsApp, broad run artifacts/logs, and
 the normal private-vault persistence step. Its artifact is a sanitized summary,
 not a copy of candidate files or production database state.
 
-Do not publish or dispatch this task yet. Tavily budget reservations update
-only the ephemeral runner's restored ledger files, while discovery-only is
-deliberately excluded from all private-vault write-back paths. A subsequent
-workflow would therefore restore the prior daily counters and could spend
-against the same allowance again. This conflicts with preserving daily budget
-accounting while also forbidding private-vault writes. No production discovery
-run was dispatched; there are no production opportunity counts, provider
-usage, quota remainder, or representative current listings to report. No
-provider budget was consumed, and no Gmail, application, draft, messaging, or
-vault side effect occurred in this pass. Resolve the budget-ledger persistence
-boundary before enabling this task for live provider queries.
+One production run completed as a workflow in
+[run 38473922936](https://github.com/dubbishpsychic0000/ai-job-finder/actions/runs/38473922936),
+but its sanitized report is `BLOCKED` with reason
+`discovery_execution_failed`. It reported zero external results, normalized
+listings, duplicates, and new opportunities; zero Tavily attempts, successes,
+failures, and retries; and no source or opportunity breakdown. Therefore this
+run provides no production opportunity-supply evidence. The underlying
+exception was intentionally excluded from the report and the internal log was
+removed by the workflow, so diagnose that failure before any further run.
+
+The report confirms no Gmail access, applications, drafts, sent email,
+WhatsApp messages, production database writes, or private-vault writes; only
+the ephemeral database copy was writable. No Tavily provider attempts were
+made. However, successful future queries would update only the ephemeral
+runner's restored budget ledgers, while discovery-only is excluded from
+private-vault write-back. A subsequent workflow could therefore restore stale
+daily counters and spend against the same allowance again. Resolve this
+budget-ledger persistence boundary before another live-provider discovery run.
 
 Gmail mailbox reconciliation remains `NOT_CHECKED`. The supported OAuth flow
 is `wca gmail-auth`; in live mode it requests the existing `gmail.send` and
