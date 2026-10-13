@@ -103,6 +103,43 @@ Latest focused redirect/BTP/history run: **116 passed**; full suite:
 passed. Tests use deterministic fixtures; these results do not establish
 candidate-fit clearance or Gmail mailbox history.
 
+## Domestic sponsorship policy and MEGEC application
+
+The saved `sponsorship_required: true` preference now applies to overseas jobs,
+not Moroccan domestic jobs. The decision gate holds an overseas opportunity
+until explicit sponsorship evidence is present in its structured signal or
+posting text; explicit unavailable-sponsorship wording overrides a positive
+signal. Existing score, freshness, experience, and other decision rules retain
+precedence. The read-only history report no longer calls a Morocco target plus
+an international sponsorship requirement a preference conflict. It separately
+reports that this profile schema has no citizenship/residency field; no such
+status is inferred or included as a claim in outbound text.
+
+The Morocco-first preference was preserved in the private vault with
+`sponsorship_required` unchanged. MEGEC's official route was re-fetched during
+targeted preflight **38389168933** and still showed “Postuler :
+Contact@megec.com” at
+`https://www.megec.com/candidature-spontanee`. The French CV resolved at its
+configured private-vault path. The dry-run safety gate passed with zero sends
+and zero drafts. Fresh read-only production check **38389065571** showed no
+matching WCA application, draft, attempt, cooldown, or suppression at
+preflight time, with the database hash unchanged. Gmail mailbox history
+remains `NOT_CHECKED`; it is not full mailbox-wide duplicate clearance.
+
+The authorized live MEGEC run **38389327414** completed successfully on
+`8f3b0d469ae4cdcb0dc425055c8ebc107177a4d8`: WCA reports one send, Gmail
+returned a message ID, and delivery stage is `gmail_send_confirmed`. The
+existing database/vault persistence step completed. Post-send read-only
+verification **38389583316** found one application with outcome `sent` and
+one live-send record in `confirmed_sent`; the active lock, cooldown, and
+suppression now correctly block any duplicate. No retry was performed. Gmail
+mailbox history outside the WCA-tracked state remains `NOT_CHECKED`. The live
+run did not claim Moroccan citizenship/residency or sponsorship in the message.
+
+Policy validation: focused sponsorship/preflight/golden tests **31 passed**;
+full suite **429 passed, 1 skipped**; Ruff, Python compilation, and
+`git diff --check` passed.
+
 ## Local discovery and outreach safety hardening
 
 Spontaneous BTP outreach now requires explicit, same-page application or CV
