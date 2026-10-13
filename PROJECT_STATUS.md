@@ -2,6 +2,8 @@
 
 ## Phase 2 multilingual discovery and internship eligibility
 
+Implementation commit: `a3dd154d04394b41956cea05545f01b3104f2ab2`.
+
 Discovery now plans French and Arabic searches for Morocco and country-relevant
 language coverage for the configured European and Canadian markets. Curated
 localized civil-engineering/BTP terms and internship/PFE queries supplement
