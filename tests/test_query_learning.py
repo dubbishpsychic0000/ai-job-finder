@@ -113,6 +113,17 @@ def test_budget_caps_the_plan(db, config, prefs):
     assert len(adaptive) == remaining
 
 
+def test_tight_adaptive_budget_preserves_country_coverage(db, config, prefs):
+    cfg = config.model_copy(update={
+        "discovery": {**config.discovery, "max_daily_search_queries": 5}})
+    mem.store.record_query(db, "seed-lead", "France", source="x", jobs_found=1, relevant_jobs=1)
+
+    adaptive = build_adaptive_plan(db, prefs, cfg, max_queries_per_run=None)
+
+    assert len(adaptive) == 4
+    assert len({item["country"] for item in adaptive}) == 4
+
+
 # ---- discovery records the ledger (§24) -------------------------------------------
 
 

@@ -4,6 +4,7 @@ from __future__ import annotations
 import asyncio
 
 from app.agents.llm import NullLLM
+from app.config import Preferences
 from app.discovery.vocabulary import LANG_OF_COUNTRY, CandidateVocabulary
 from app.workflows.search_plan import SearchPlan
 
@@ -17,6 +18,7 @@ def test_vocabulary_roles_expand_target_roles(profile, prefs):
     assert "civil engineering technologist" in roles        # synonym
     assert "junior civil engineering technician" in roles   # junior variant
     assert "AutoCAD" in roles                                # skill-derived term
+    assert roles.index("technicien VRD") < roles.index("civil engineering technologist")
     lowered = [r.lower() for r in roles]
     assert len(roles) == len(set(lowered)), "vocabulary must be deduplicated"
 
@@ -78,6 +80,32 @@ def test_query_plan_includes_localized_terms(profile, prefs):
     de_local = [p for p in plan if p["country"] == "Germany" and p["intent"] == "local_language"]
     assert de_local, "Germany must get local_language queries"
     assert any(p["query"] == "bautechniker" for p in de_local)
+    fr_plan = SearchPlan(prefs, profile=profile).build(max_per_country=5, max_queries_per_run=60)
+    assert any(
+        item["country"] == "France" and item["query"].casefold() == "technicien vrd"
+        for item in fr_plan
+    )
+
+
+def test_morocco_plan_covers_french_arabic_and_internships(profile):
+    prefs = Preferences(
+        target_countries=["Morocco"],
+        target_roles=["civil engineering technician"],
+    )
+    plan = SearchPlan(prefs, profile=profile).build(max_queries_per_run=200)
+
+    assert {"fr", "ar"} <= {item["lang"] for item in plan}
+    assert any(item["intent"] == "internship" for item in plan)
+
+
+def test_tight_global_budget_keeps_all_countries(profile, prefs):
+    countries = prefs.countries
+    plan = SearchPlan(prefs, profile=profile).build(
+        max_per_country=2,
+        max_queries_per_run=len(countries),
+    )
+
+    assert {item["country"] for item in plan} == set(countries)
 
 
 def test_plan_for_country_scoped(profile, prefs):

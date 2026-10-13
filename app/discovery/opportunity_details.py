@@ -20,9 +20,9 @@ APPLICATION_METHODS = {
 _TYPE_PATTERNS = (
     ("IMMIGRATION_OPPORTUNITY", r"\b(immigration|visa|work permit|permis de travail)\b"),
     ("SCHOLARSHIP", r"\b(scholarship|bourse)\b"),
-    ("GRADUATE_PROGRAM", r"\b(graduate program(?:me)?|programme jeune diplômé)\b"),
+    ("GRADUATE_PROGRAM", r"\b(graduate program(?:me)?|programme jeune diplômé|jeune diplômé|recent graduates?)\b"),
     ("APPRENTICESHIP", r"\b(apprenticeship|apprenti(?:ssage)?)\b"),
-    ("INTERNSHIP", r"\b(internship|intern\b|stage|stagiaire)\b"),
+    ("INTERNSHIP", r"\b(internship|intern\b|stage|stagiaire|pfe|afstudeerstage|praktikum|prácticas|estágio|تدريب)\b"),
     ("TRAINING", r"\b(training|formation|bootcamp|cours)\b"),
     ("RECRUITMENT_EVENT", r"\b(job fair|recruitment event|forum emploi|salon emploi)\b"),
     ("RECRUITER_OPPORTUNITY", r"\b(recruiter|recruitment agency|cabinet de recrutement|intérim)\b"),

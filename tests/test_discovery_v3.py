@@ -43,6 +43,9 @@ def test_details_and_digest_are_queue_backed(db):
 
 def test_type_and_route_detection_do_not_make_up_email_routes():
     assert classify_opportunity("Stage Technicien VRD") == "INTERNSHIP"
+    assert classify_opportunity("Civil engineering internship") == "INTERNSHIP"
+    assert classify_opportunity("PFE génie civil") == "INTERNSHIP"
+    assert classify_opportunity("Graduate program for recent graduates") == "GRADUATE_PROGRAM"
     method, url = detect_application_method(text="Apply online today", url="https://example.test/app")
     assert (method, url) == ("ONLINE_FORM", "https://example.test/app")
     assert detect_application_method(text="A great job", has_verified_email=False)[0] == "UNKNOWN"

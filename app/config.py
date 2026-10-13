@@ -7,7 +7,7 @@ from __future__ import annotations
 
 from functools import lru_cache
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 import yaml
 from pydantic import BaseModel, Field
@@ -74,6 +74,7 @@ class RunnerSettings(BaseSettings):
 class CandidateProfile(BaseModel):
     name: str
     title: str = ""
+    student_status: Literal["unknown", "current_student", "not_student"] = "unknown"
     phone: str = ""
     summary: str = ""
     education: list[dict[str, Any]] = Field(default_factory=list)

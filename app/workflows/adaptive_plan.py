@@ -20,7 +20,7 @@ from app.discovery.country_ranking import rank_countries
 from app.discovery.query_learning import budget_remaining, repeats_for
 from app.discovery.vocabulary import CandidateVocabulary
 from app.memory.store import aggregate_query_stat
-from app.workflows.search_plan import SearchPlan
+from app.workflows.search_plan import SearchPlan, _fair_cap
 
 
 def build_adaptive_plan(session: Session, prefs: Preferences, config: AgentConfig,
@@ -72,11 +72,16 @@ def build_adaptive_plan(session: Session, prefs: Preferences, config: AgentConfi
                 present.add(key)
             exploration_counts[country] = exploration_counts.get(country, 0) + 1
 
-    if remaining is not None:
-        expanded = expanded[:max(0, remaining)]
-
     expanded.sort(key=lambda pair: (ranking.get(pair[1]["country"], 99), pair[0]))
     plan = [item for _idx, item in expanded]
-    if max_queries_per_run:
-        plan = plan[:max_queries_per_run]
-    return plan
+    limits = [
+        max(0, limit) for limit in (remaining, max_queries_per_run)
+        if limit is not None
+    ]
+    cap = min(limits) if limits else None
+    ranked_countries = [
+        country for country, _index in sorted(
+            ranking.items(), key=lambda pair: pair[1],
+        )
+    ]
+    return _fair_cap(plan, cap, ranked_countries)

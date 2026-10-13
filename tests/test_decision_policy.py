@@ -6,7 +6,7 @@ from __future__ import annotations
 import pytest
 
 from app.agents.decision_agent import DecisionAgent
-from app.config import Preferences
+from app.config import CandidateProfile, Preferences
 
 
 class _FakeLLM:
@@ -48,14 +48,14 @@ def _attach_analysis(db, job):
     db.flush()
 
 
-def _decide(db, job, config, llm, overall, preferences=None):
+def _decide(db, job, config, llm, overall, preferences=None, profile=None):
     import asyncio
 
 
     # compute the band from the real config thresholds
     dims = {"match": 70.0, "mobility": 70.0, "compensation": 70.0, "stability": 70.0}
     band = config.threshold_for(overall)
-    agent = DecisionAgent(llm, config, preferences=preferences)
+    agent = DecisionAgent(llm, config, profile=profile, preferences=preferences)
     _attach_analysis(db, job)
     return asyncio.run(agent.decide(db, job, overall, dims, band))
 
@@ -152,6 +152,86 @@ def test_explicitly_unavailable_sponsorship_overrides_positive_signal(db, config
 
     assert result.decision == "HOLD"
     assert "international_sponsorship_not_verified" in result.rules_fired
+
+
+def test_student_only_internship_with_unknown_status_is_held(db, config):
+    job = _job(db, status="analyzed")
+    job.opportunity_type = "INTERNSHIP"
+    job.description = "Applicants must be currently enrolled at a university."
+
+    result = _decide(db, job, config, _FakeLLM(), overall=88)
+
+    assert result.decision == "HOLD"
+    assert "student_enrollment_unverified" in result.rules_fired
+
+
+def test_enrollment_language_does_not_gate_noninternship_jobs(db, config):
+    job = _job(db, status="analyzed")
+    job.opportunity_type = "JOB"
+    job.description = "Applicants must be currently enrolled at a university."
+
+    result = _decide(db, job, config, _FakeLLM(), overall=88)
+
+    assert result.decision == "APPLY"
+    assert "student_enrollment_unverified" not in result.rules_fired
+
+
+@pytest.mark.parametrize("description", [
+    "Stage réservé aux étudiants.",
+    "Bewerber müssen aktuell eingeschrieben sein.",
+    "Debe estar matriculado en una universidad.",
+    "Applicants must be currently enrolled at a university.",
+])
+def test_explicit_multilingual_enrollment_requirements_are_held(
+    db, config, description,
+):
+    job = _job(db, status="analyzed")
+    job.opportunity_type = "INTERNSHIP"
+    job.description = description
+
+    result = _decide(db, job, config, _FakeLLM(), overall=88)
+
+    assert result.decision == "HOLD"
+    assert "student_enrollment_unverified" in result.rules_fired
+
+
+def test_student_only_internship_accepts_confirmed_current_student(db, config):
+    job = _job(db, status="analyzed")
+    job.opportunity_type = "INTERNSHIP"
+    job.description = "Applicants must be currently enrolled at a university."
+    profile = CandidateProfile(name="Test Candidate", student_status="current_student")
+
+    result = _decide(
+        db, job, config, _FakeLLM(), overall=88, profile=profile,
+    )
+
+    assert result.decision == "APPLY"
+    assert not any(rule.startswith("student_enrollment_") for rule in result.rules_fired)
+
+
+def test_student_only_internship_excludes_known_nonstudent(db, config):
+    job = _job(db, status="analyzed")
+    job.opportunity_type = "INTERNSHIP"
+    job.description = "Students only; applicants must be currently enrolled."
+    profile = CandidateProfile(name="Test Candidate", student_status="not_student")
+
+    result = _decide(
+        db, job, config, _FakeLLM(), overall=88, profile=profile,
+    )
+
+    assert result.decision == "IGNORE"
+    assert "student_enrollment_required" in result.rules_fired
+
+
+def test_internship_open_to_recent_graduates_needs_no_student_status(db, config):
+    job = _job(db, status="analyzed")
+    job.opportunity_type = "INTERNSHIP"
+    job.description = "Internship open to current students and recent graduates."
+
+    result = _decide(db, job, config, _FakeLLM(), overall=88)
+
+    assert result.decision == "APPLY"
+    assert not any(rule.startswith("student_enrollment_") for rule in result.rules_fired)
 
 
 @pytest.mark.parametrize("score,min_score,min_conf,expected", [

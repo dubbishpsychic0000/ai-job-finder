@@ -1,5 +1,84 @@
 # Project status
 
+## Phase 2 multilingual discovery and internship eligibility
+
+Discovery now plans French and Arabic searches for Morocco and country-relevant
+language coverage for the configured European and Canadian markets. Curated
+localized civil-engineering/BTP terms and internship/PFE queries supplement
+the existing role, sponsorship, and other search intents. Internship and
+graduate-program classification recognizes common localized and international
+terms.
+
+The global and adaptive query budgets now distribute their first selections
+across target countries and languages before using remaining capacity on
+high-value search intents. Adaptive scheduling retains country coverage under
+tight daily limits without discarding learned query repetitions. Existing
+provider-attempt limits and outbound thresholds are unchanged.
+
+Candidate profiles default `student_status` to `unknown`. An internship that
+explicitly requires current enrollment is held when status is unknown and
+excluded when the profile explicitly says the candidate is not a student;
+confirmed current students can pass this specific gate. Roles open to recent
+graduates are not treated as student-only. The system does not infer current
+enrollment or recent-graduate status from education dates.
+
+Focused validation: **51 tests passed** across vocabulary/search planning,
+adaptive query learning, decision policy, opportunity classification, and the
+golden decision set. The full suite passed **441 tests, 1 skipped**. Ruff,
+Python compilation, and `git diff --check` passed. No live discovery, provider
+calls, drafts, sends, production workflow, or outbound-limit changes were made
+for this Phase 2 pass.
+
+## Phase 2.1 production-readiness check
+
+The full implementation diff is limited to the 11 Phase 2 files listed in
+this status entry; no candidate files, CVs, credentials, OAuth tokens, or
+private-vault contents are included. The student-status gate only applies to
+internships whose text explicitly requires current enrollment. Unknown status
+holds that placement, and the profile does not infer enrollment, graduation,
+citizenship, residency, or work authorization. Query selection allocates
+initial capacity across configured country/language buckets before search
+facets and repetitions; canonical configured target roles remain first in the
+role vocabulary.
+
+The configured GitHub Actions workflow does **not** expose a discovery-only
+dispatch task: its available tasks are `pipeline`, `btp_outreach`, and
+`history_preflight`. The scheduled/manual pipeline includes analysis, actions,
+post-run messaging, and vault persistence; `email_mode=dry_run` is not a
+discovery-only guarantee. The existing `wca discover` CLI is discovery-only
+with respect to outbound email, but it is not wired to a production Actions
+task and the local database is not authoritative production state. No
+production discovery run was dispatched. Consequently, this pass has no
+production opportunity counts, source/provider usage, quota remainder,
+eligibility rates, or representative current listings to report. No provider
+budget was consumed and no Gmail, application, draft, messaging, or vault
+side effect occurred. The smallest safe next implementation is a dedicated
+manual `discovery_only` Actions task that restores only the minimum necessary
+production profile/state and source credentials, invokes `wca discover`, and
+explicitly skips analysis, action, notification, and outbound steps; its
+provider budget and persistence behavior should be bounded and defined before
+dispatch.
+
+Gmail mailbox reconciliation remains `NOT_CHECKED`. The supported OAuth flow
+is `wca gmail-auth`; in live mode it requests the existing `gmail.send` and
+`gmail.compose` scopes plus optional `gmail.readonly`, and uses the configured
+client secret with a browser consent flow on `http://localhost:18320/`.
+Authorization saves to the configured git-ignored token path, replacing that
+token file. Obtain interactive owner consent and securely preserve the current
+token before invoking it; no credentials were read, printed, reauthorized, or
+overwritten in this pass. After consent, verify scope presence with
+`wca gmail-status`. Current read-only recovery code uses that scope to reconcile
+specific pending/uncertain sends and drafts; it does not perform a full
+mailbox-wide audit against all WCA applications and drafts. That broader
+comparison still requires a bounded read-only reconciliation task before any
+duplicate-clearance claim or retry.
+
+No scale-up is supported by measured production discovery evidence. Keep the
+current configured daily outbound cap unchanged; a 20/day proposal is
+unsupported until verified fresh eligible supply, automatic-email route
+proportion, duplicate/cooldown suppression, route-verification, eligibility,
+and provider/recovery-failure rates have been measured.
+
 ## Read-only employer-history preflight
 
 The manual `history_preflight` task restores only `state/agent.db`,

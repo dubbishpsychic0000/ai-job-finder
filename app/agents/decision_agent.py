@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from datetime import datetime, timezone
 
 from sqlalchemy.orm import Session
@@ -54,6 +55,21 @@ _SPONSORSHIP_UNAVAILABLE_PHRASES = (
     "cannot sponsor",
     "will not sponsor",
 )
+_STUDENT_ENROLLMENT_REQUIRED = (
+    r"\b(?:must|need to|are required to)\s+(?:be\s+)?(?:currently\s+)?(?:enrolled|registered)\b",
+    r"\b(?:current students?|students?)\s+only\b",
+    r"\bstudent status\s+(?:is\s+)?required\b",
+    r"\bonly applicants? who (?:are|remain) (?:currently\s+)?(?:enrolled|registered)\b",
+    r"\bstage réservé aux étudiants\b",
+    r"\bstage reserve aux etudiants\b",
+    r"\b(?:doit|doivent) être actuellement inscrit(?:e|s)?\b",
+    r"\b(?:doit|doivent) etre actuellement inscrit(?:e|s)?\b",
+    r"\binscription universitaire obligatoire\b",
+    r"\b(?:muss|müssen) (?:aktuell )?eingeschrieben sein\b",
+    r"\b(?:debe|deben) estar matriculad[oa]s?\b",
+    r"\b(?:deve|devem) estar matriculad[oa]s?\b",
+    r"\bmoet(?:en)? ingeschreven zijn\b",
+)
 
 
 def _has_sponsorship_evidence(job) -> bool:
@@ -87,6 +103,9 @@ class DecisionAgent:
         self.sponsorship_required = bool(
             preferences and preferences.sponsorship_required
         )
+        self.student_status = str(
+            getattr(profile, "student_status", "unknown") or "unknown"
+        ).strip().casefold()
 
     def hard_rules(self, session: Session, job, overall: float, band: str) -> tuple[str | None, list[str]]:
         """Return (blocking_decision, fired_rules). None means no rule blocked."""
@@ -106,6 +125,21 @@ class DecisionAgent:
             and not _has_sponsorship_evidence(job)
         ):
             fired.append("international_sponsorship_not_verified")
+
+        description = str(getattr(job, "description", "") or "").casefold()
+        requires_enrollment = (
+            str(getattr(job, "opportunity_type", "")).upper() == "INTERNSHIP"
+            and any(
+                re.search(pattern, description)
+                for pattern in _STUDENT_ENROLLMENT_REQUIRED
+            )
+        )
+        if requires_enrollment and self.student_status != "current_student":
+            fired.append(
+                "student_enrollment_unverified"
+                if self.student_status == "unknown"
+                else "student_enrollment_required"
+            )
 
         if overall < rules.get("ignore_below", 50):
             fired.append("low_score")
@@ -138,6 +172,10 @@ class DecisionAgent:
         if any(rule.startswith("stale_posting_") or rule.startswith("experience_requires_")
                for rule in fired):
             return "IGNORE", fired
+        if "student_enrollment_required" in fired:
+            return "IGNORE", fired
+        if "student_enrollment_unverified" in fired:
+            return "HOLD", fired
         if "international_sponsorship_not_verified" in fired:
             return "HOLD", fired
         return None, fired

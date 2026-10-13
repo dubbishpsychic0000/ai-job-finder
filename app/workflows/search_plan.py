@@ -11,7 +11,11 @@ connectors and discovery stay source-compatible, and add `intent` + `weight`.
 from __future__ import annotations
 
 from app.config import Preferences
-from app.discovery.vocabulary import LANG_OF_COUNTRY, CandidateVocabulary
+from app.discovery.vocabulary import (
+    LANG_OF_COUNTRY,
+    LANGS_OF_COUNTRY,
+    CandidateVocabulary,
+)
 
 # intent -> (weight, query builder(term, country, lang))
 # Weights drive the ranking that the per-run budget is spent on: the most
@@ -40,6 +44,113 @@ COMBINATION_INTENTS = (
     ("seniority", 0.78, lambda role, value: f'{role} {value}'),
     ("internship", 0.68, lambda role, value: f'{role} {value}'),
 )
+
+INTERNSHIP_SEARCHES = {
+    "ar": [
+        "تدريب الهندسة المدنية",
+        "تدريب مشروع نهاية الدراسة الهندسة المدنية",
+        "تدريب تقني الأشغال العمومية",
+    ],
+    "de": [
+        "praktikum bauingenieurwesen",
+        "abschlusspraktikum bauingenieurwesen",
+        "bautechniker praktikum",
+    ],
+    "en": [
+        "civil engineering technician internship",
+        "civil engineering PFE internship",
+        "graduate civil engineering technician trainee",
+    ],
+    "es": [
+        "prácticas de ingeniería civil",
+        "prácticas fin de carrera ingeniería civil",
+        "técnico de obras prácticas",
+    ],
+    "fr": [
+        "stage génie civil",
+        "stage PFE génie civil",
+        "stage de fin d'études génie civil",
+        "stage pré-embauche technicien BTP",
+    ],
+    "nl": [
+        "stage civiele techniek",
+        "afstudeerstage civiele techniek",
+        "junior bouwtechnicus trainee",
+    ],
+    "pt": [
+        "estágio de engenharia civil",
+        "estágio de fim de curso engenharia civil",
+        "técnico de obras estágio",
+    ],
+}
+
+
+def _fair_cap(
+    items: list[dict],
+    limit: int | None,
+    countries: list[str],
+) -> list[dict]:
+    if not limit or limit >= len(items):
+        return items
+    if limit <= 0:
+        return []
+
+    ranked = list(enumerate(items))
+    buckets: dict[tuple[str, str], list[tuple[int, dict]]] = {}
+    bucket_queries: dict[tuple[str, str], set[str]] = {}
+    for index, item in ranked:
+        bucket_key = (item["country"].casefold(), item.get("lang", ""))
+        query = item["query"].casefold()
+        if query not in bucket_queries.setdefault(bucket_key, set()):
+            buckets.setdefault(bucket_key, []).append((index, item))
+            bucket_queries[bucket_key].add(query)
+
+    # Guarantee each target country and language gets a small initial slice;
+    # spend the remaining cap on the globally highest-weight combinations.
+    selected_indexes: set[int] = set()
+    country_languages: list[list[tuple[str, str]]] = []
+    for country in countries:
+        prefix = country.casefold()
+        langs = list(dict.fromkeys(
+            lang for (bucket_country, lang) in buckets if bucket_country == prefix
+        ))
+        country_languages.append([(prefix, lang) for lang in langs])
+    initial_slice = min(3, max(1, limit // max(1, len(country_languages))))
+    max_languages = max((len(group) for group in country_languages), default=0)
+
+    def select_round(language_index: int, slice_index: int) -> None:
+        for language_buckets in country_languages:
+            if language_index >= len(language_buckets):
+                continue
+            bucket = buckets.get(language_buckets[language_index], [])
+            if slice_index >= len(bucket) or len(selected_indexes) >= limit:
+                continue
+            index, _item = bucket[slice_index]
+            selected_indexes.add(index)
+
+    for language_index in range(max_languages):
+        select_round(language_index, 0)
+    # Keep the established discovery facets represented when there is enough
+    # budget after the first country/language pass.
+    covered_intents = {
+        items[index].get("intent") for index in selected_indexes
+    }
+    for index, item in ranked:
+        intent = item.get("intent")
+        if intent in {
+            "sponsorship", "international", "work_permit", "relocation",
+            "skill", "software", "industry", "seniority", "internship",
+        } and intent not in covered_intents and len(selected_indexes) < limit:
+            selected_indexes.add(index)
+            covered_intents.add(intent)
+    for language_index in range(max_languages):
+        for slice_index in range(1, initial_slice):
+            select_round(language_index, slice_index)
+    for index, _item in ranked:
+        if len(selected_indexes) >= limit:
+            break
+        selected_indexes.add(index)
+    return [item for index, item in ranked if index in selected_indexes]
 
 
 class SearchPlan:
@@ -70,6 +181,35 @@ class SearchPlan:
                     "query": query, "location": country, "country": country,
                     "lang": lang, "intent": LOCAL_INTENT[0], "weight": LOCAL_INTENT[1],
                 }))
+            languages = LANGS_OF_COUNTRY.get(country, (lang,))
+            for local_lang in languages:
+                local_terms = self.vocab.localized_terms(local_lang)
+                for term in local_terms[:max_per_country]:
+                    query = term
+                    if (query.lower(), country.lower()) in local_seen:
+                        continue
+                    local_seen.add((query.lower(), country.lower()))
+                    items.append((LOCAL_INTENT[1], {
+                        "query": query,
+                        "location": country,
+                        "country": country,
+                        "lang": local_lang,
+                        "intent": LOCAL_INTENT[0],
+                        "weight": LOCAL_INTENT[1],
+                    }))
+                for query in INTERNSHIP_SEARCHES.get(local_lang, []):
+                    if (query.lower(), country.lower()) in local_seen:
+                        continue
+                    local_seen.add((query.lower(), country.lower()))
+                    items.append((0.92, {
+                        "query": query,
+                        "location": country,
+                        "country": country,
+                        "lang": local_lang,
+                        "intent": "internship",
+                        "opportunity_type": "INTERNSHIP",
+                        "weight": 0.92,
+                    }))
             items.sort(key=lambda pair: pair[0], reverse=True)
             return [item for _w, item in items]
 
@@ -129,7 +269,7 @@ class SearchPlan:
         plan.sort(key=lambda item: item["weight"], reverse=True)
         opportunistic.sort(key=lambda item: item["weight"], reverse=True)
         if max_queries_per_run:
-            plan = plan[:max_queries_per_run]
+            plan = _fair_cap(plan, max_queries_per_run, self.prefs.countries)
             plan.extend(opportunistic[: max(0, max_queries_per_run - len(plan))])
         else:
             plan.extend(opportunistic)

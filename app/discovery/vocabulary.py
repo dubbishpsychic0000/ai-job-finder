@@ -36,6 +36,19 @@ LANG_OF_COUNTRY = {
     "Netherlands": "nl",
 }
 
+# Search locally first while covering the second language commonly used by
+# international employers and public job indexes in each target market.
+LANGS_OF_COUNTRY = {
+    "Morocco": ("fr", "ar"),
+    "France": ("fr", "en"),
+    "Belgium": ("fr", "nl", "en"),
+    "Canada": ("fr", "en"),
+    "Germany": ("de", "en"),
+    "Spain": ("es", "en"),
+    "Portugal": ("pt", "en"),
+    "Netherlands": ("nl", "en"),
+}
+
 JUNIOR_PREFIXES = ("junior ", "assistant ", "entry-level ", "trainee ", "apprentice ")
 
 # Canonical role (lowercased) -> occupation synonyms / alternative titles.
@@ -94,10 +107,20 @@ ROLE_SYNONYMS: dict[str, list[str]] = {
 
 # Language -> extra localized role terms (complements preferences.localized_roles).
 LOCALIZED_SYNONYMS: dict[str, list[str]] = {
+    "en": [
+        "civil engineering technician",
+        "junior civil engineering technician",
+        "assistant site engineer",
+        "construction works technician",
+        "quantity surveying technician",
+        "civil engineering internship",
+        "graduate civil engineering technician",
+    ],
     "ar": [
         "الهندسة المدنية", "مهندس مدني", "تقني الهندسة المدنية", "تقني البناء",
         "تقني الأشغال العمومية", "رئيس الورش", "مراقب الأشغال", "دراسة المشاريع",
-        "تدريب", "تدريب نهاية الدراسة",
+        "تقني طرق", "تقني مختبر مواد البناء", "تدريب الهندسة المدنية",
+        "تدريب نهاية الدراسة", "تدريب مشروع نهاية الدراسة",
     ],
     "fr": [
         "technicien chantier",
@@ -105,27 +128,46 @@ LOCALIZED_SYNONYMS: dict[str, list[str]] = {
         "technicien voirie",
         "dessinateur projeteur",
         "assistant conducteur de travaux",
+        "technicien méthodes construction",
+        "métreur bâtiment",
+        "stage génie civil",
+        "stage PFE génie civil",
+        "stage de fin d'études génie civil",
+        "stage pré-embauche BTP",
+        "technicien génie civil débutant",
     ],
     "de": [
         "bauzeichner",
         "tiefbauzeichner",
         "bauleiter assistant",
         "vermessungstechniker bau",
+        "bautechniker junior",
+        "praktikum bauingenieurwesen",
+        "abschlusspraktikum bauingenieurwesen",
     ],
     "es": [
         "técnico de obras",
         "técnico auxiliar de obra",
         "auxiliar de ingeniería civil",
+        "técnico de construcción junior",
+        "prácticas de ingeniería civil",
+        "prácticas fin de carrera ingeniería civil",
     ],
     "pt": [
         "técnico de construção",
         "técnico de vias",
         "desenhador de projetos civis",
+        "técnico de obras júnior",
+        "estágio de engenharia civil",
+        "estágio de fim de curso engenharia civil",
     ],
     "nl": [
         "bouwkundig tekenaar",
         "tekenaar civiele techniek",
         "medewerker wegenbouw",
+        "junior bouwtechnicus",
+        "stage civiele techniek",
+        "afstudeerstage civiele techniek",
     ],
 }
 
@@ -166,13 +208,14 @@ class CandidateVocabulary:
     def roles(self, with_skills: bool = True) -> list[str]:
         """English/role search terms: canonical roles + synonyms + junior variants + skills."""
         terms: list[str] = []
+        terms.extend(role.strip() for role in self.prefs.target_roles)
         for role in self.prefs.target_roles:
             r = role.strip().lower()
-            terms.append(role.strip())
             for syn in ROLE_SYNONYMS.get(r, []):
                 terms.append(syn)
                 for prefix in JUNIOR_PREFIXES:
                     terms.append(f"{prefix}{syn}")
+        for role in self.prefs.target_roles:
             for prefix in JUNIOR_PREFIXES:
                 terms.append(f"{prefix}{role.strip()}")
         for category in (self.vocabulary.get("categories") or {}).values():
