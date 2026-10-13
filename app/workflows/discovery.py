@@ -280,6 +280,7 @@ class DiscoveryReport:
     source_reports: list[dict] = field(default_factory=list)
     alerts: list[str] = field(default_factory=list)
     api_request_budget: dict = field(default_factory=dict)
+    new_opportunity_origins: dict[int, str] = field(default_factory=dict)
 
 
 def _load_source_connectors(path: Path | None = None) -> list[tuple[dict, object]]:
@@ -418,16 +419,37 @@ def _allocate_source_queries(
         (len(source_combos[index]) for index in budgeted_sources),
         default=0,
     )
+    used_query_keys: set[tuple[str, str, str]] = set()
     for combo_index in range(max_queries):
-        for source_index in order:
+        rotated_order = order[combo_index % len(order):] + order[:combo_index % len(order)]
+        for source_index in rotated_order:
             if combo_index not in uncached_by_source[source_index]:
                 continue
             if available <= 0:
                 break
+            combo = source_combos[source_index][combo_index]
+            key = (
+                str(combo["query"]).casefold(),
+                str(combo["location"]).casefold(),
+                str(combo.get("lang", "")).casefold(),
+            )
+            if key in used_query_keys:
+                continue
             selected_indices[source_index].add(combo_index)
+            used_query_keys.add(key)
             available -= 1
-        if available <= 0:
-            break
+    if available > 0:
+        for combo_index in range(max_queries):
+            rotated_order = order[combo_index % len(order):] + order[:combo_index % len(order)]
+            for source_index in rotated_order:
+                if (
+                    available <= 0
+                    or combo_index not in uncached_by_source[source_index]
+                    or combo_index in selected_indices[source_index]
+                ):
+                    continue
+                selected_indices[source_index].add(combo_index)
+                available -= 1
 
     for source_index in budgeted_sources:
         selected = selected_indices[source_index]
@@ -455,6 +477,48 @@ def _remaining_tavily_requests(connector) -> int:
     return remaining
 
 
+def _cap_scheduled_queries(
+    scheduled: list[list[dict]],
+    limit: int,
+    connectors: list[tuple[dict, object]],
+) -> tuple[list[list[dict]], list[int]]:
+    """Cap searches, preferring uncached unique combinations across sources."""
+    cap = max(0, int(limit))
+    selected = [[] for _ in scheduled]
+    candidates = []
+    for source_index, combos in enumerate(scheduled):
+        connector = connectors[source_index][1]
+        cache_check = getattr(connector, "has_cached_result", None)
+        for combo_index, combo in enumerate(combos):
+            is_cached = bool(
+                callable(cache_check)
+                and cache_check(combo["query"], combo["location"])
+            )
+            candidates.append((
+                is_cached,
+                combo_index,
+                source_index,
+                combo,
+            ))
+    candidates.sort(key=lambda item: (item[0], item[1], item[2]))
+    seen_combinations: set[tuple[str, str, str]] = set()
+    for _cached, _combo_index, source_index, combo in candidates:
+        key = (
+            str(combo["query"]).casefold(),
+            str(combo["location"]).casefold(),
+            str(combo.get("lang", "")).casefold(),
+        )
+        if key in seen_combinations or sum(map(len, selected)) >= cap:
+            continue
+        selected[source_index].append(combo)
+        seen_combinations.add(key)
+    deferred = [
+        len(combos) - len(selected[index])
+        for index, combos in enumerate(scheduled)
+    ]
+    return selected, deferred
+
+
 def _resolve_paths(cfg: dict) -> dict:
     opts = dict(cfg)
     p = opts.get("path")
@@ -466,16 +530,27 @@ def _resolve_paths(cfg: dict) -> dict:
 async def run_discovery(session: Session, config: AgentConfig, prefs: Preferences,
                         sources_path: Path | None = None,
                         profile: CandidateProfile | None = None,
-                        llm=None) -> DiscoveryReport:
+                        llm=None,
+                        *,
+                        max_queries_override: int | None = None,
+                        max_api_attempts_override: int | None = None,
+                        max_total_source_queries: int | None = None) -> DiscoveryReport:
     report = DiscoveryReport()
     discovery_cfg = config.discovery or {}
     max_api_attempts = max(
         0, int(discovery_cfg.get("max_api_requests_per_run", 17)),
     )
+    if max_api_attempts_override is not None:
+        max_api_attempts = min(max_api_attempts, max(0, int(max_api_attempts_override)))
     api_attempt_budget = ApiAttemptBudget(max_api_attempts)
     max_per_country = int(discovery_cfg.get(
         "max_per_country", config.search_plan.get("max_combinations_per_country", 3)))
     max_queries = int(discovery_cfg.get("max_queries_per_run", 40))
+    if max_queries_override is not None:
+        requested_cap = max(0, int(max_queries_override))
+        max_queries = (
+            min(max_queries, requested_cap) if max_queries > 0 else requested_cap
+        )
     vocab = CandidateVocabulary(profile=profile, prefs=prefs)
     # Optional LLM vocabulary expansion (discovery.vocab_llm) — cached on disk.
     if llm is not None and discovery_cfg.get("vocab_llm", False):
@@ -551,6 +626,11 @@ async def run_discovery(session: Session, config: AgentConfig, prefs: Preference
     scheduled_queries, deferred_queries, stale_queries = _allocate_source_queries(
         connectors, plan, max_requests, max_api_attempts=max_api_attempts,
     )
+    run_budget_deferred = [0] * len(scheduled_queries)
+    if max_total_source_queries is not None:
+        scheduled_queries, run_budget_deferred = _cap_scheduled_queries(
+            scheduled_queries, max_total_source_queries, connectors,
+        )
     for source_index, (source_cfg, connector) in enumerate(connectors):
         source_name = source_cfg.get("name", connector.name)
         source_report = {
@@ -569,6 +649,7 @@ async def run_discovery(session: Session, config: AgentConfig, prefs: Preference
             "queries_empty": 0,
             "queries_failed": 0,
             "queries_budget_deferred": deferred_queries[source_index],
+            "queries_run_budget_deferred": run_budget_deferred[source_index],
             "queries_stale_cache": stale_queries[source_index],
             "api_attempts": 0,
             "api_successes": 0,
@@ -576,6 +657,10 @@ async def run_discovery(session: Session, config: AgentConfig, prefs: Preference
             "api_retry_attempts": 0,
             "api_attempts_budget_deferred": 0,
             "query_error_codes": {},
+            "queries_by_country": {},
+            "queries_by_language": {},
+            "fetched_api_results": 0,
+            "fetched_cache_results": 0,
             "error": "",
             "rate_status": "ok",
             "health": "ready",
@@ -592,8 +677,15 @@ async def run_discovery(session: Session, config: AgentConfig, prefs: Preference
         )
         parallel = bool(discovery_cfg.get("parallel_fetch", False)) and not budgeted_tavily
 
-        def process(combo, results, source_name, source_report) -> int:
+        def process(
+            combo, results, source_name, source_report, _connector=connector,
+        ) -> int:
             """Normalize + dedup + store one combo's results; returns jobs found."""
+            origin = getattr(_connector, "last_origin", "")
+            if origin == "api":
+                source_report["fetched_api_results"] += len(results)
+            elif origin == "cache":
+                source_report["fetched_cache_results"] += len(results)
             for o in results:
                 raw = dict(o.raw or {})
                 raw.update({
@@ -703,6 +795,7 @@ async def run_discovery(session: Session, config: AgentConfig, prefs: Preference
                     job.application_method, job.application_url = method, application_url
                     mem.store.enqueue_notification(session, "JOB_FOUND", job_id=job.id,
                                                    payload={"opportunity_id": mem.store.opportunity_id(job)})
+                    report.new_opportunity_origins[job.id] = origin or "unknown"
                     report.new_jobs += 1
                     combo_new += 1
                     source_report["new"] += 1
@@ -713,6 +806,14 @@ async def run_discovery(session: Session, config: AgentConfig, prefs: Preference
 
         async def search(combo, _connector=connector):
             return await _connector.search(combo["query"], combo["location"])
+
+        def record_query_coverage(combo, _source_report=source_report) -> None:
+            country_counts = _source_report["queries_by_country"]
+            country = str(combo.get("country", ""))
+            country_counts[country] = country_counts.get(country, 0) + 1
+            language_counts = _source_report["queries_by_language"]
+            language = str(combo.get("lang", "unknown"))
+            language_counts[language] = language_counts.get(language, 0) + 1
 
         def record_query_outcome(results, _connector=connector, source=source_report):
             origin = getattr(_connector, "last_origin", "")
@@ -751,6 +852,7 @@ async def run_discovery(session: Session, config: AgentConfig, prefs: Preference
                 for combo, results in zip(combos, batch, strict=True):
                     if isinstance(results, BaseException):
                         raise results  # connector-level isolation below
+                    record_query_coverage(combo)
                     record_query_outcome(results)
                     items_found += process(combo, results, source_name, source_report)
             else:
@@ -779,6 +881,7 @@ async def run_discovery(session: Session, config: AgentConfig, prefs: Preference
                         continue
                     report.combinations_attempted += 1
                     source_report["queries"] += 1
+                    record_query_coverage(combo)
                     results = await search(combo)
                     record_query_outcome(results)
                     items_found += process(combo, results, source_name, source_report)

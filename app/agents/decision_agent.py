@@ -83,6 +83,13 @@ def _has_sponsorship_evidence(job) -> bool:
     )
 
 
+def requires_current_student_enrollment(description: str) -> bool:
+    value = str(description or "").casefold()
+    return any(
+        re.search(pattern, value) for pattern in _STUDENT_ENROLLMENT_REQUIRED
+    )
+
+
 class DecisionResult:
     def __init__(self, decision: str, overall: float, dimensions: dict, reason: str,
                  rules_fired: list[str], ai_reason: str = ""):
@@ -129,10 +136,7 @@ class DecisionAgent:
         description = str(getattr(job, "description", "") or "").casefold()
         requires_enrollment = (
             str(getattr(job, "opportunity_type", "")).upper() == "INTERNSHIP"
-            and any(
-                re.search(pattern, description)
-                for pattern in _STUDENT_ENROLLMENT_REQUIRED
-            )
+            and requires_current_student_enrollment(description)
         )
         if requires_enrollment and self.student_status != "current_student":
             fired.append(

@@ -43,23 +43,25 @@ initial capacity across configured country/language buckets before search
 facets and repetitions; canonical configured target roles remain first in the
 role vocabulary.
 
-The configured GitHub Actions workflow does **not** expose a discovery-only
-dispatch task: its available tasks are `pipeline`, `btp_outreach`, and
-`history_preflight`. The scheduled/manual pipeline includes analysis, actions,
-post-run messaging, and vault persistence; `email_mode=dry_run` is not a
-discovery-only guarantee. The existing `wca discover` CLI is discovery-only
-with respect to outbound email, but it is not wired to a production Actions
-task and the local database is not authoritative production state. No
-production discovery run was dispatched. Consequently, this pass has no
-production opportunity counts, source/provider usage, quota remainder,
-eligibility rates, or representative current listings to report. No provider
-budget was consumed and no Gmail, application, draft, messaging, or vault
-side effect occurred. The smallest safe next implementation is a dedicated
-manual `discovery_only` Actions task that restores only the minimum necessary
-production profile/state and source credentials, invokes `wca discover`, and
-explicitly skips analysis, action, notification, and outbound steps; its
-provider budget and persistence behavior should be bounded and defined before
-dispatch.
+The local working tree now includes a manual `discovery_only` Actions task. It
+restores only the production database snapshot, search profile/preferences,
+Tavily cache, and budget ledgers; the task caps search combinations at 12 and
+aggregate Tavily API attempts (including retries) at 8. It skips analysis,
+action, BTP outreach, follow-ups, Gmail, WhatsApp, broad run artifacts/logs, and
+the normal private-vault persistence step. Its artifact is a sanitized summary,
+not a copy of candidate files or production database state.
+
+Do not publish or dispatch this task yet. Tavily budget reservations update
+only the ephemeral runner's restored ledger files, while discovery-only is
+deliberately excluded from all private-vault write-back paths. A subsequent
+workflow would therefore restore the prior daily counters and could spend
+against the same allowance again. This conflicts with preserving daily budget
+accounting while also forbidding private-vault writes. No production discovery
+run was dispatched; there are no production opportunity counts, provider
+usage, quota remainder, or representative current listings to report. No
+provider budget was consumed, and no Gmail, application, draft, messaging, or
+vault side effect occurred in this pass. Resolve the budget-ledger persistence
+boundary before enabling this task for live provider queries.
 
 Gmail mailbox reconciliation remains `NOT_CHECKED`. The supported OAuth flow
 is `wca gmail-auth`; in live mode it requests the existing `gmail.send` and

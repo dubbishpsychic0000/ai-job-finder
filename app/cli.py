@@ -112,6 +112,123 @@ def cmd_discover(args) -> None:
     console.print(table)
 
 
+def cmd_discovery_only(args) -> None:
+    """Run bounded discovery against the ephemeral copy of production state."""
+    import sqlite3
+
+    from sqlalchemy import func, select
+
+    from app import models
+    from app.config import load_yaml
+    from app.workflows.discovery import DEFAULT_SOURCES_PATH
+    from app.workflows.discovery_only import (
+        blocked_report,
+        build_sanitized_report,
+        daily_budget_summary,
+        run_bounded_discovery,
+        validate_budget_ledgers,
+    )
+
+    report_path = Path(args.report)
+    report = None
+    root = ROOT_DIR
+    data_dir = root / "data"
+    database_path = get_settings().sqlite_path
+    try:
+        status_path = data_dir / "discovery_only_inputs_status.json"
+        status = json.loads(status_path.read_text(encoding="utf-8"))
+        if status.get("ready") is not True:
+            report = blocked_report(
+                str(status.get("reason_code") or "production_inputs_not_restored"),
+            )
+        else:
+            profile_path = root / "candidate" / "profile.yaml"
+            preferences_path = root / "candidate" / "preferences.yaml"
+            keys_path = root / "secrets" / "tavily_keys.txt"
+            if not profile_path.is_file() or not preferences_path.is_file():
+                report = blocked_report("candidate_search_preferences_missing")
+            elif not database_path.is_file():
+                report = blocked_report("production_database_snapshot_missing")
+            else:
+                key_text = (
+                    keys_path.read_text(encoding="utf-8")
+                    if keys_path.is_file() else ""
+                )
+                keys = [
+                    key.strip()
+                    for key in key_text.replace("\r", "").replace("\n", ",").split(",")
+                    if key.strip()
+                ]
+                ledgers_valid, restored_ledger_count = validate_budget_ledgers(
+                    data_dir, keys,
+                )
+                if keys and not ledgers_valid:
+                    report = blocked_report("provider_budget_ledger_missing_or_invalid")
+                else:
+                    uri = f"file:{database_path.resolve().as_posix()}?mode=ro"
+                    try:
+                        with sqlite3.connect(uri, uri=True) as connection:
+                            integrity = connection.execute("PRAGMA quick_check").fetchone()
+                            tables = {
+                                row[0] for row in connection.execute(
+                                    "SELECT name FROM sqlite_master WHERE type='table'",
+                                )
+                            }
+                        required_tables = {
+                            "jobs", "companies", "sources", "query_stats",
+                            "discoveries", "notifications",
+                        }
+                        if not integrity or integrity[0] != "ok":
+                            report = blocked_report("production_database_integrity_check_failed")
+                        elif not required_tables <= tables:
+                            report = blocked_report("production_database_schema_incomplete")
+                    except sqlite3.Error:
+                        report = blocked_report("production_database_unreadable")
+                    if report is None:
+                        config = get_config()
+                        profile = get_profile(profile_path)
+                        preferences = get_preferences(preferences_path)
+                        with session_scope() as session:
+                            previous_max_id = session.scalar(
+                                select(func.max(models.Job.id)),
+                            ) or 0
+                            discovery_report = asyncio.run(
+                                run_bounded_discovery(
+                                    session, config, preferences, profile,
+                                ),
+                            )
+                            session.flush()
+                            new_jobs = list(session.scalars(
+                                select(models.Job)
+                                .where(models.Job.id > previous_max_id)
+                                .order_by(models.Job.id),
+                            ))
+                        report = build_sanitized_report(
+                            discovery_report,
+                            new_jobs,
+                            config,
+                            daily_budget_summary(data_dir, keys),
+                            sources_config=load_yaml(DEFAULT_SOURCES_PATH),
+                        )
+                        report["provider"]["restored_budget_ledger_count"] = (
+                            restored_ledger_count
+                        )
+    except (OSError, ValueError, TypeError):
+        report = blocked_report("discovery_inputs_invalid_or_incomplete")
+    except Exception:
+        logging.getLogger(__name__).exception(
+            "Bounded discovery task failed; details excluded from report",
+        )
+        report = blocked_report("discovery_execution_failed")
+
+    report_path.parent.mkdir(parents=True, exist_ok=True)
+    report_path.write_text(
+        json.dumps(report or blocked_report("discovery_report_unavailable"),
+                   ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+
+
 def cmd_btp_outreach(args) -> None:
     """Prepare bounded, safety-gated French spontaneous-application drafts."""
     from app.workflows.btp_outreach import BtpOutreachSafetyError, run_btp_outreach
@@ -391,6 +508,14 @@ def main(argv: list[str] | None = None) -> None:
     discover_mode = discover.add_mutually_exclusive_group()
     discover_mode.add_argument("--real", action="store_true", help="explicitly select production public sources")
     discover_mode.add_argument("--demo", action="store_true", help="use offline demo fixtures only")
+    discovery_only = sub.add_parser(
+        "discovery-only",
+        help="run bounded discovery and write a sanitized report without outreach",
+    )
+    discovery_only.add_argument(
+        "--report", type=Path,
+        default=ROOT_DIR / "data" / "discovery_only_report.json",
+    )
     btp = sub.add_parser(
         "btp-outreach",
         help="prepare draft-only spontaneous applications to nearby Moroccan BTP companies",
@@ -444,6 +569,7 @@ def main(argv: list[str] | None = None) -> None:
         "init": cmd_init,
         "run-once": cmd_run_once,
         "discover": cmd_discover,
+        "discovery-only": cmd_discovery_only,
         "btp-outreach": cmd_btp_outreach,
         "history-preflight": cmd_history_preflight,
         "analyze": cmd_analyze,

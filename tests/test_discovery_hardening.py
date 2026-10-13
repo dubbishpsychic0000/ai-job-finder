@@ -27,6 +27,7 @@ from app.workflows import discovery as discovery_workflow
 from app.workflows.discovery import (
     CompanyUrlKind,
     _allocate_source_queries,
+    _cap_scheduled_queries,
     _classify_company_urls,
     _direct_company_career_url,
     _trusted_employer_url,
@@ -187,6 +188,65 @@ def test_tavily_failed_retries_are_charged_and_share_aggregate_cap(
         "retry_attempts": 1,
         "remaining": 0,
     }
+
+
+def test_total_source_query_cap_selects_unique_uncached_combinations_first():
+    class Connector:
+        def __init__(self, cached=()):
+            self.cached = set(cached)
+
+        def has_cached_result(self, query, location):
+            return (query, location) in self.cached
+
+    plan = [
+        {"query": f"query-{index}", "location": "Morocco", "lang": "fr"}
+        for index in range(6)
+    ]
+    connectors = [
+        ({}, Connector()),
+        ({}, Connector()),
+        ({}, Connector()),
+    ]
+    scheduled = [plan.copy(), plan.copy(), plan.copy()]
+
+    selected, deferred = _cap_scheduled_queries(scheduled, 5, connectors)
+    queries = [
+        item["query"] for source_queries in selected for item in source_queries
+    ]
+
+    assert len(queries) == 5
+    assert len(set(queries)) == 5
+    assert sum(deferred) == 18 - 5
+
+
+def test_api_allocator_spreads_bounded_calls_over_unique_plan_combinations(tmp_path):
+    key = "shared-budget-key"
+    budget = DailyBudget(tmp_path / "budget.json", limit=20)
+
+    class Connector:
+        def __init__(self):
+            self.keys = [TavilyKey(key, budget, key_fingerprint(key))]
+
+        @staticmethod
+        def has_cached_result(_query, _location):
+            return False
+
+    connectors = [({}, Connector()), ({}, Connector()), ({}, Connector())]
+    plan = [
+        {"query": f"query-{index}", "location": "Morocco", "lang": "ar"}
+        for index in range(6)
+    ]
+
+    scheduled, deferred, _stale = _allocate_source_queries(
+        connectors, plan, 0, rotation_offset=0, max_api_attempts=4,
+    )
+    selected_queries = [
+        combo["query"] for source_queries in scheduled for combo in source_queries
+    ]
+
+    assert len(selected_queries) == 4
+    assert len(set(selected_queries)) == 4
+    assert sum(deferred) == 14
 
 
 def test_tavily_duplicate_keys_are_deduplicated_before_attempt(tmp_path, monkeypatch):
