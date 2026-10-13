@@ -286,17 +286,36 @@ def _load_profile_context(profile_path: Path, preferences_path: Path) -> dict:
     }
     has_morocco = "morocco" in target_countries or "maroc" in target_countries
     sponsorship_required = preferences.get("sponsorship_required")
-    conflict = bool(not has_morocco or sponsorship_required is True)
+    conflict = not has_morocco
+    profile_domestic_status_available = any(
+        profile.get(key) not in (None, "", [], {})
+        for key in (
+            "country_of_residence", "residence_country",
+            "citizenship", "nationality", "country_of_citizenship",
+        )
+    )
     return {
         "status": "READ",
         "reason_code": "profile_and_preferences_read_without_serializing_personal_values",
         "morocco_preference_conflict": (
             "REVIEW_REQUIRED" if conflict else "NO_CONFLICT_RECORDED"
         ),
+        "sponsorship_scope": (
+            "INTERNATIONAL_JOBS_ONLY"
+            if sponsorship_required is True else "NOT_REQUIRED"
+        ),
+        "candidate_residency_or_citizenship": (
+            "PROFILE_FIELD_AVAILABLE"
+            if profile_domestic_status_available else "UNKNOWN"
+        ),
+        "candidate_residency_reason_code": (
+            "profile_field_requires_review"
+            if profile_domestic_status_available
+            else "candidate_residency_or_citizenship_not_recorded_in_profile"
+        ),
         "conflict_reasons": [
             reason for reason, applies in (
                 ("morocco_not_in_target_countries", not has_morocco),
-                ("sponsorship_required", sponsorship_required is True),
             ) if applies
         ],
         "known_profile_fields": [

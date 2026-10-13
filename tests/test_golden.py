@@ -32,7 +32,9 @@ def _refresh_demo_posting_dates(db):
 
 def _analyze(db, config, prefs, profile):
     llm = NullLLM(profile)
-    report = asyncio.run(run_analysis(db, config, profile, llm, prefs.countries))
+    report = asyncio.run(
+        run_analysis(db, config, profile, llm, prefs.countries, preferences=prefs)
+    )
     return {db.get(models.Job, d["job_id"]): d for d in report.analyzed}
 
 
@@ -56,7 +58,9 @@ def test_golden_decisions(db, config, prefs, profile):
     assert dec("Civil Engineering Technician", "EllisDon") == "APPLY", "LMIA-sponsored CA role should APPLY"
     assert dec("Técnico de Obras Civiles") == "IGNORE", "es-only role should IGNORE"
     assert dec("Técnico de Engenharia Civil") == "IGNORE", "pt-only role should IGNORE"
-    assert dec("Technicien VRD", "Colas") in ("ASK_EMPLOYER", "APPLY", "INVESTIGATE")
+    assert dec("Technicien VRD", "Colas") == "HOLD", (
+        "an overseas role without explicit sponsorship evidence must remain unqualified"
+    )
     # the senior (12y) VRD posting must be blocked by the experience hard rule
     assert dec("Technicien VRD", "Eiffage") == "IGNORE"
 

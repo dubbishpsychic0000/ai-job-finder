@@ -356,11 +356,36 @@ def test_portal_readiness_lists_manual_fields_without_personal_values(tmp_path):
     assert "mobility_choice" in tgcc["missing_applicant_inputs"]
     assert report["candidate_preference_review"]["conflict_reasons"] == [
         "morocco_not_in_target_countries",
-        "sponsorship_required",
     ]
+    assert report["candidate_preference_review"]["sponsorship_scope"] == (
+        "INTERNATIONAL_JOBS_ONLY"
+    )
+    assert report["candidate_preference_review"]["candidate_residency_or_citizenship"] == (
+        "UNKNOWN"
+    )
     serialized = json.dumps(report)
     assert "Candidate" not in serialized
     assert "+212600000000" not in serialized
+
+
+def test_morocco_target_has_no_domestic_sponsorship_preference_conflict(tmp_path):
+    inputs = _prepare_inputs(tmp_path)
+    inputs[3].write_text(
+        "target_countries: [Morocco, France]\n"
+        "sponsorship_required: true\n",
+        encoding="utf-8",
+    )
+
+    report = _run(inputs)
+
+    review = report["candidate_preference_review"]
+    assert review["morocco_preference_conflict"] == "NO_CONFLICT_RECORDED"
+    assert review["conflict_reasons"] == []
+    assert review["sponsorship_scope"] == "INTERNATIONAL_JOBS_ONLY"
+    assert review["candidate_residency_or_citizenship"] == "UNKNOWN"
+    assert review["candidate_residency_reason_code"] == (
+        "candidate_residency_or_citizenship_not_recorded_in_profile"
+    )
 
 
 def test_cli_history_preflight_does_not_initialize_database(tmp_path, monkeypatch, capsys):

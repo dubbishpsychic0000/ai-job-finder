@@ -6,6 +6,7 @@ from __future__ import annotations
 import pytest
 
 from app.agents.decision_agent import DecisionAgent
+from app.config import Preferences
 
 
 class _FakeLLM:
@@ -47,14 +48,14 @@ def _attach_analysis(db, job):
     db.flush()
 
 
-def _decide(db, job, config, llm, overall):
+def _decide(db, job, config, llm, overall, preferences=None):
     import asyncio
 
 
     # compute the band from the real config thresholds
     dims = {"match": 70.0, "mobility": 70.0, "compensation": 70.0, "stability": 70.0}
     band = config.threshold_for(overall)
-    agent = DecisionAgent(llm, config)
+    agent = DecisionAgent(llm, config, preferences=preferences)
     _attach_analysis(db, job)
     return asyncio.run(agent.decide(db, job, overall, dims, band))
 
@@ -84,6 +85,73 @@ def test_hard_low_score_rule_ignores_before_model(db, config):
     job = _job(db)
     result = _decide(db, job, config, _FakeLLM(), overall=40)
     assert result.decision == "IGNORE"
+
+
+@pytest.mark.parametrize("country", ["Morocco", "Maroc"])
+def test_domestic_morocco_job_does_not_require_visa_sponsorship(db, config, country):
+    job = _job(db, status="analyzed", country=country)
+    job.sponsorship_signal = "unknown"
+    preferences = Preferences(
+        target_countries=["Morocco", "France"],
+        sponsorship_required=True,
+    )
+
+    result = _decide(
+        db, job, config, _FakeLLM(), overall=88, preferences=preferences,
+    )
+
+    assert result.decision == "APPLY"
+
+
+def test_international_job_without_explicit_sponsorship_evidence_is_held(db, config):
+    job = _job(db, status="analyzed", country="France")
+    job.sponsorship_signal = "unknown"
+    preferences = Preferences(
+        target_countries=["Morocco", "France"],
+        sponsorship_required=True,
+    )
+
+    result = _decide(
+        db, job, config, _FakeLLM(), overall=88, preferences=preferences,
+    )
+
+    assert result.decision == "HOLD"
+    assert "international_sponsorship_not_verified" in result.rules_fired
+    assert "model wants to apply" not in result.reason
+
+
+def test_international_job_with_explicit_sponsorship_evidence_is_not_blocked(
+    db, config,
+):
+    job = _job(db, status="analyzed", country="France")
+    job.sponsorship_signal = "high"
+    preferences = Preferences(
+        target_countries=["Morocco", "France"],
+        sponsorship_required=True,
+    )
+
+    result = _decide(
+        db, job, config, _FakeLLM(), overall=88, preferences=preferences,
+    )
+
+    assert result.decision == "APPLY"
+
+
+def test_explicitly_unavailable_sponsorship_overrides_positive_signal(db, config):
+    job = _job(db, status="analyzed", country="France")
+    job.sponsorship_signal = "high"
+    job.description = "Visa sponsorship is not available."
+    preferences = Preferences(
+        target_countries=["Morocco", "France"],
+        sponsorship_required=True,
+    )
+
+    result = _decide(
+        db, job, config, _FakeLLM(), overall=88, preferences=preferences,
+    )
+
+    assert result.decision == "HOLD"
+    assert "international_sponsorship_not_verified" in result.rules_fired
 
 
 @pytest.mark.parametrize("score,min_score,min_conf,expected", [

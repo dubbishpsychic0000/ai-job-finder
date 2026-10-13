@@ -18,7 +18,7 @@ from sqlalchemy.orm import Session
 
 from app import memory as mem
 from app.agents.llm import LLMProvider
-from app.config import AgentConfig
+from app.config import AgentConfig, Preferences
 
 logger = logging.getLogger(__name__)
 
@@ -34,6 +34,38 @@ Rules of thumb:
 - IGNORE: low band or a blocking rule fired.
 DECISION_AGENT"""
 
+_SPONSORSHIP_AVAILABLE_PHRASES = (
+    "visa sponsorship",
+    "work permit sponsorship",
+    "sponsorship available",
+    "sponsorship is available",
+    "sponsorship possible",
+    "willing to sponsor",
+    "will sponsor",
+    "lmia sponsorship",
+)
+_SPONSORSHIP_UNAVAILABLE_PHRASES = (
+    "no sponsorship",
+    "sponsorship not available",
+    "sponsorship is not available",
+    "sponsorship unavailable",
+    "sponsorship is unavailable",
+    "does not sponsor",
+    "cannot sponsor",
+    "will not sponsor",
+)
+
+
+def _has_sponsorship_evidence(job) -> bool:
+    description = str(getattr(job, "description", "") or "").casefold()
+    if any(phrase in description for phrase in _SPONSORSHIP_UNAVAILABLE_PHRASES):
+        return False
+    if str(getattr(job, "sponsorship_signal", "")).casefold() == "high":
+        return True
+    return (
+        any(phrase in description for phrase in _SPONSORSHIP_AVAILABLE_PHRASES)
+    )
+
 
 class DecisionResult:
     def __init__(self, decision: str, overall: float, dimensions: dict, reason: str,
@@ -47,10 +79,14 @@ class DecisionResult:
 
 
 class DecisionAgent:
-    def __init__(self, llm: LLMProvider, config: AgentConfig, profile=None):
+    def __init__(self, llm: LLMProvider, config: AgentConfig, profile=None,
+                 preferences: Preferences | None = None):
         self.llm = llm
         self.config = config
         self.profile = profile
+        self.sponsorship_required = bool(
+            preferences and preferences.sponsorship_required
+        )
 
     def hard_rules(self, session: Session, job, overall: float, band: str) -> tuple[str | None, list[str]]:
         """Return (blocking_decision, fired_rules). None means no rule blocked."""
@@ -61,6 +97,15 @@ class DecisionAgent:
             return "IGNORE", ["already_processed"]
         if mem.store.find_job_by_key(session, job.dedup_key) and job.status == "new":
             pass  # duplicate guard lives in discovery; keep decision pure
+
+        country = str(getattr(job, "country", "") or "").strip().casefold()
+        is_domestic_morocco = country in {"morocco", "maroc"}
+        if (
+            self.sponsorship_required
+            and not is_domestic_morocco
+            and not _has_sponsorship_evidence(job)
+        ):
+            fired.append("international_sponsorship_not_verified")
 
         if overall < rules.get("ignore_below", 50):
             fired.append("low_score")
@@ -93,6 +138,8 @@ class DecisionAgent:
         if any(rule.startswith("stale_posting_") or rule.startswith("experience_requires_")
                for rule in fired):
             return "IGNORE", fired
+        if "international_sponsorship_not_verified" in fired:
+            return "HOLD", fired
         return None, fired
 
     async def decide(self, session: Session, job, overall: float, dimensions: dict[str, float],

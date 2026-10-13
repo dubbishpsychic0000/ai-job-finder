@@ -233,7 +233,9 @@ def cmd_analyze(_args) -> None:
     config, prefs, profile = get_config(), get_preferences(), get_profile()
     llm = get_llm(profile)
     with session_scope() as s:
-        report = asyncio.run(run_analysis(s, config, profile, llm, prefs.countries))
+        report = asyncio.run(
+            run_analysis(s, config, profile, llm, prefs.countries, preferences=prefs)
+        )
     console.print(report.analyzed)
 
 

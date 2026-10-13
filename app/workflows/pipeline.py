@@ -64,7 +64,9 @@ def run_pipeline(session: Session | None = None, *, sources_path: Path | None = 
                 "api_request_budget": getattr(discovery, "api_request_budget", {}),
                 "alerts": discovery.alerts,
             }
-            analysis = asyncio.run(run_analysis(s, config, profile, llm, prefs.countries))
+            analysis = asyncio.run(
+                run_analysis(s, config, profile, llm, prefs.countries, preferences=prefs)
+            )
             result.analysis = {
                 "analyzed": len(analysis.analyzed),
                 "decisions": dict(Counter(d["decision"] for d in analysis.analyzed)),

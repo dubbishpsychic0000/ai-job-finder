@@ -17,7 +17,7 @@ from app.agents.decision_agent import DecisionAgent
 from app.agents.job_analyzer import JobAnalyzer
 from app.agents.llm import LLMProvider
 from app.agents.mobility_agent import MobilityAgent
-from app.config import AgentConfig, CandidateProfile
+from app.config import AgentConfig, CandidateProfile, Preferences
 from app.discovery.email_verification import EmailVerificationService
 from app.discovery.opportunity_details import classify_opportunity, detect_application_method
 from app.scoring.engine import compute_scores
@@ -93,12 +93,15 @@ async def analyze_job(session: Session, job, analyzer: JobAnalyzer, matcher: Can
 
 
 async def run_analysis(session: Session, config: AgentConfig, profile: CandidateProfile,
-                       llm: LLMProvider, target_countries: list[str]) -> AnalysisReport:
+                       llm: LLMProvider, target_countries: list[str],
+                       preferences: Preferences | None = None) -> AnalysisReport:
     report = AnalysisReport()
     analyzer = JobAnalyzer(llm)
     matcher = CandidateMatcher(llm, profile)
     mobility = MobilityAgent(llm)
-    decision_agent = DecisionAgent(llm, config, profile=profile)
+    decision_agent = DecisionAgent(
+        llm, config, profile=profile, preferences=preferences,
+    )
 
     jobs = [
         job for job in mem.store.get_jobs_by_status(session, ["new"])
@@ -106,8 +109,10 @@ async def run_analysis(session: Session, config: AgentConfig, profile: Candidate
     ]
     for job in jobs:
         try:
-            summary = await analyze_job(session, job, analyzer, matcher, mobility,
-                                        decision_agent, profile, config, target_countries)
+            summary = await analyze_job(
+                session, job, analyzer, matcher, mobility, decision_agent,
+                profile, config, target_countries,
+            )
             if summary:
                 report.analyzed.append(summary)
         except Exception as exc:
