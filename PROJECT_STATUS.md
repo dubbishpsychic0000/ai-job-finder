@@ -75,13 +75,18 @@ application, WCA-tracked draft, unresolved live-send or draft attempt,
 cooldown, or BTP suppression row was found. The earlier immutable history
 report provides the corresponding reason codes and reports unchanged DB hash.
 Gmail mailbox history remains `NOT_CHECKED`; do not interpret this as
-mailbox-wide duplicate clearance. The target run stopped with `no cv` /
-`missing_cv`: the restored `candidate/cv` directory did not contain a supported
-French attachment, so candidate fit could not be verified and the existing
-application engine blocked. No email or draft was created. The user's
-Morocco-priority clarification does not remove the saved profile's
-`morocco_not_in_target_countries` and `sponsorship_required` preference
-conflicts; they remain review items.
+mailbox-wide duplicate clearance. Investigation confirmed that the exact
+568,646-byte French PDF already exists at the private-vault
+`candidate/cv/CV_Omar_Benhamid_FR.pdf` path and matches the local source bytes.
+The previous `no cv` result came from the targeted restore step copying the
+vault CV directory into a pre-existing `candidate/cv` directory, nesting the
+file one level too deep. The targeted restore now copies the directory
+contents into the configured location and has a regression assertion. The
+owner requested Morocco be prioritized; the private preferences were updated
+to list Morocco first while retaining `sponsorship_required: true`. MEGEC's
+published page does not establish sponsorship availability, so a Moroccan
+application must remain blocked unless that requirement is satisfied without
+relaxing it. No email or draft has been created.
 
 Latest focused redirect/BTP/history run: **116 passed**; full suite:
 **423 passed, 1 skipped**. Ruff, Python compilation, and `git diff --check`

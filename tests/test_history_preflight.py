@@ -407,6 +407,9 @@ def test_github_workflow_skips_providers_notifications_and_vault_persistence():
     targeted_restore = by_name["Restore targeted BTP preflight inputs only"]
     assert "secrets/" not in targeted_restore["run"]
     assert "candidate/cv/" in targeted_restore["run"]
+    assert "cp -a /tmp/wca-target-vault/candidate/cv/. candidate/cv/" in (
+        targeted_restore["run"]
+    )
     for name in (
         "Restore candidate data, OAuth secrets, and state (private vault)",
         "Build .env from vault and secrets",

@@ -151,7 +151,8 @@ jobs:
           cp /tmp/wca-target-vault/state/btp_outreach_state.json data/btp_outreach_state.json
           cp /tmp/wca-target-vault/candidate/profile.yaml candidate/profile.yaml
           cp /tmp/wca-target-vault/candidate/preferences.yaml candidate/preferences.yaml
-          cp -a /tmp/wca-target-vault/candidate/cv candidate/cv
+          mkdir -p candidate/cv
+          cp -a /tmp/wca-target-vault/candidate/cv/. candidate/cv/
           rm -rf /tmp/wca-target-vault
 
       - name: Restore candidate data, OAuth secrets, and state (private vault)
