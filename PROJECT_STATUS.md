@@ -42,11 +42,29 @@ does not submit web forms. The history task independently skips normal vault
 restoration, `.env` creation, outreach, WhatsApp hooks, and state persistence,
 including on failure; it uploads only the sanitized report.
 
-Latest focused history-preflight/BTP/discovery/integration run: **121 passed**;
-full suite **422 passed, 1 skipped**. Ruff, Python compilation, workflow YAML
-parsing, and `git diff --check` passed. These are local deterministic tests.
-The hosted production preflight remains pending; no employer is cleared from
-local state.
+Targeted official-site crawls for MEGEC and El Ouatik initially failed because
+both careers URLs redirect to their trailing-slash forms, while the crawler
+rejected all redirects. Website research now has an opt-in, bounded redirect
+mode that follows at most four HTTPS redirects on the same employer domain
+(including its `www` variant), rejecting cross-domain, HTTP, credentialed, and
+nonstandard-port destinations. It is enabled only for allowlisted targeted
+preflight and BTP research; general crawling retains its existing redirect
+behavior.
+
+The published read-only history run **38381116469** completed on commit
+`08c9e6430aadcc4f15755f7160db0933a517a975`; it read the restored production
+database without modification and found no WCA-tracked matching records for
+the selected employers. Gmail mailbox history was `NOT_CHECKED`, so this was
+not full mailbox-wide duplicate clearance. Published targeted MEGEC and El
+Ouatik runs **38381320878** and **38381614655** failed closed on the redirect
+handling limitation and created no drafts or sends. The redirect correction
+has passed local validation but still requires publication and a new
+non-sending targeted preflight before any live run.
+
+Latest focused redirect/BTP/history run: **116 passed**; full suite:
+**423 passed, 1 skipped**. Ruff, Python compilation, and `git diff --check`
+passed. Tests use deterministic fixtures; these results do not establish live
+route eligibility or submission clearance.
 
 ## Local discovery and outreach safety hardening
 

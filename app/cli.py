@@ -182,6 +182,7 @@ def cmd_btp_outreach(args) -> None:
                     state_path=None,
                     session=s,
                     allow_redirects=False,
+                    allow_safe_same_site_redirects=True,
                 )
             report = run_btp_outreach(
                 s,

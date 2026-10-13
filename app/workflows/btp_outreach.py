@@ -2301,6 +2301,7 @@ def run_btp_outreach(
         state_path=state_path,
         session=session,
         allow_redirects=False,
+        allow_safe_same_site_redirects=target_employer is not None,
     )
     finder = website_finder
     if finder is None:

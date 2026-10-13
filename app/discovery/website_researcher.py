@@ -170,11 +170,13 @@ class WebsiteResearcher:
     def __init__(self, *, max_pages: int = 12, per_host_delay: float = 0.25,
                  state_path: Path | None = None, session=None, fetcher=None,
                  robots_fetcher=None, refresh_after_days: int = 7,
-                 allow_redirects: bool = True):
+                 allow_redirects: bool = True,
+                 allow_safe_same_site_redirects: bool = False):
         self.max_pages = max(1, max_pages)
         self.per_host_delay = max(0.0, per_host_delay)
         self.refresh_after_days = max(1, refresh_after_days)
         self.allow_redirects = allow_redirects
+        self.allow_safe_same_site_redirects = allow_safe_same_site_redirects
         self.state_path = state_path
         self.db_session = session if session is not None and hasattr(session, "add") else None
         self.session = requests.Session() if self.db_session is not None else (session or requests.Session())
@@ -476,6 +478,39 @@ class WebsiteResearcher:
         return True
 
     def _fetch(self, url):
+        if self.allow_safe_same_site_redirects and not self.allow_redirects:
+            origin_domain = host_domain(url)
+            current_url = url
+            try:
+                for _ in range(5):
+                    response = self.session.get(
+                        current_url,
+                        headers={"User-Agent": USER_AGENT},
+                        timeout=15,
+                        allow_redirects=False,
+                    )
+                    if response.status_code in {401, 403, 429}:
+                        return None
+                    if 300 <= response.status_code < 400:
+                        location = response.headers.get("Location", "")
+                        redirect_url = urljoin(current_url, location)
+                        parsed = urlparse(redirect_url)
+                        if (
+                            not location
+                            or parsed.scheme != "https"
+                            or parsed.username
+                            or parsed.password
+                            or host_domain(redirect_url) != origin_domain
+                            or parsed.port not in (None, 443)
+                        ):
+                            return None
+                        current_url = parsed._replace(fragment="").geturl()
+                        continue
+                    response.raise_for_status()
+                    return response
+            except (requests.RequestException, ValueError):
+                return None
+            return None
         try:
             response = self.session.get(
                 url,

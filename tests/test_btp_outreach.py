@@ -197,6 +197,8 @@ def test_cmd_targeted_preflight_rolls_back_and_uses_no_state_cache(monkeypatch, 
     assert captured["target_employer"] == "megec"
     assert captured["preflight_only"] is True
     assert captured["researcher"].state_path is None
+    assert captured["researcher"].allow_safe_same_site_redirects is True
+    assert captured["researcher"].allow_redirects is False
     assert session.rollback_calls == 1
 
 

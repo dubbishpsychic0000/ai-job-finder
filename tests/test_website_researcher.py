@@ -149,6 +149,62 @@ def test_email_classification_and_domain_validation():
     assert classify_email("jobs@other.ma", "acme.ma")[0] == "third_party"
 
 
+def test_safe_same_site_redirects_follow_only_https_canonical_host():
+    class RedirectResponse(Response):
+        def __init__(self, status_code, location=""):
+            super().__init__()
+            self.status_code = status_code
+            self.headers["Location"] = location
+
+    class FakeSession:
+        def __init__(self, responses):
+            self.responses = iter(responses)
+            self.requested = []
+
+        def get(self, url, **kwargs):
+            assert kwargs["allow_redirects"] is False
+            self.requested.append(url)
+            return next(self.responses)
+
+    session = FakeSession([
+        RedirectResponse(301, "https://www.megec.com/candidature-spontanee/"),
+        Response("<title>Candidature spontanée</title>"),
+    ])
+    crawler = WebsiteResearcher(
+        session=session,
+        per_host_delay=0,
+        allow_redirects=False,
+        allow_safe_same_site_redirects=True,
+    )
+
+    response = crawler._fetch("https://www.megec.com/candidature-spontanee")
+
+    assert response is not None
+    assert session.requested == [
+        "https://www.megec.com/candidature-spontanee",
+        "https://www.megec.com/candidature-spontanee/",
+    ]
+
+    for location in (
+        "https://example.net/private",
+        "http://www.megec.com/candidature-spontanee/",
+        "https://www.megec.com:8443/candidature-spontanee/",
+    ):
+        blocked_session = FakeSession([RedirectResponse(302, location)])
+        blocked_crawler = WebsiteResearcher(
+            session=blocked_session,
+            per_host_delay=0,
+            allow_redirects=False,
+            allow_safe_same_site_redirects=True,
+        )
+        assert blocked_crawler._fetch(
+            "https://www.megec.com/candidature-spontanee"
+        ) is None
+        assert blocked_session.requested == [
+            "https://www.megec.com/candidature-spontanee",
+        ]
+
+
 def test_evidence_persistence_and_spontaneous_route(db):
     pages = {
         "https://acme.ma/": Response('<a href="/contact">Contact</a>'),
