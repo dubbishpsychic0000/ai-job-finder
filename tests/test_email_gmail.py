@@ -18,9 +18,11 @@ from email.parser import BytesParser
 from types import SimpleNamespace
 
 import pytest
+from rich.console import Console
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import sessionmaker
 
+import app.cli as cli
 from app import models
 from app.agents.communication_agent import CommunicationAgent
 from app.email import gmail_oauth
@@ -445,6 +447,10 @@ def _mock_live_reconciliation_service(monkeypatch, settings, pages, messages):
     monkeypatch.setattr(
         gmail_oauth, "authenticated_service",
         lambda _settings: SimpleNamespace(users=lambda: _Users()),
+    )
+    monkeypatch.setattr(
+        gmail_oauth, "granted_scopes",
+        lambda _settings: {gmail_oauth.GMAIL_READONLY_SCOPE},
     )
 
 
@@ -1040,14 +1046,149 @@ def test_gmail_created_draft_is_recovered_if_final_database_commit_fails(
 # OAuth hygiene
 # ---------------------------------------------------------------------------
 
-def test_live_scope_includes_send_and_sent_reconciliation_access(settings):
+def test_live_send_requires_send_and_compose_with_optional_reconciliation_scope(settings):
     live = _settings(settings)
 
     assert gmail_oauth.required_scopes(live) == [
         gmail_oauth.GMAIL_COMPOSE_SCOPE,
         gmail_oauth.GMAIL_SEND_SCOPE,
+    ]
+    assert gmail_oauth.optional_scopes(live) == [
         gmail_oauth.GMAIL_READONLY_SCOPE,
     ]
+    assert gmail_oauth.authorization_scopes(live) == [
+        gmail_oauth.GMAIL_COMPOSE_SCOPE,
+        gmail_oauth.GMAIL_SEND_SCOPE,
+        gmail_oauth.GMAIL_READONLY_SCOPE,
+    ]
+
+
+def test_live_credentials_accept_send_and_compose_without_readonly(
+    settings, monkeypatch,
+):
+    live = _settings(settings)
+
+    class _Credentials:
+        scopes = (
+            gmail_oauth.GMAIL_SEND_SCOPE,
+            gmail_oauth.GMAIL_COMPOSE_SCOPE,
+        )
+        valid = True
+        expired = False
+        refresh_token = "not-used"
+
+    credentials = _Credentials()
+    monkeypatch.setattr(
+        gmail_oauth, "_credentials_from_file", lambda _path: credentials,
+    )
+
+    assert gmail_oauth.get_credentials(live) is credentials
+
+
+def test_live_status_distinguishes_required_and_optional_scope(
+    settings, monkeypatch, tmp_path,
+):
+    token_path = tmp_path / "gmail_token.json"
+    token_path.write_text(json.dumps({
+        "scopes": [
+            gmail_oauth.GMAIL_SEND_SCOPE,
+            gmail_oauth.GMAIL_COMPOSE_SCOPE,
+        ],
+    }), encoding="utf-8")
+    live = _settings(settings, gmail_token_path=str(token_path))
+    monkeypatch.setattr("app.config.get_settings", lambda: live)
+    monkeypatch.setattr(
+        gmail_oauth, "client_secret_path", lambda _settings: tmp_path / "client.json",
+    )
+    monkeypatch.setattr(gmail_oauth, "token_path", lambda _settings: token_path)
+    cli.console = Console(record=True, width=200)
+
+    cli.cmd_gmail_status(None)
+    output = cli.console.export_text()
+
+    assert "scopes required to send:" in output
+    assert gmail_oauth.GMAIL_SEND_SCOPE in output
+    assert gmail_oauth.GMAIL_COMPOSE_SCOPE in output
+    assert f"optional automatic-reconciliation scope (missing): {gmail_oauth.GMAIL_READONLY_SCOPE}" in output
+
+
+def test_live_send_without_read_scope_keeps_uncertain_attempt_blocked_and_allows_other_job(
+    db, config, profile, settings, monkeypatch, tmp_path,
+):
+    live = _settings(
+        settings,
+        gmail_token_path=str(tmp_path / "gmail_token.json"),
+    )
+    token_path = tmp_path / "gmail_token.json"
+    token_path.write_text(json.dumps({
+        "scopes": [
+            gmail_oauth.GMAIL_SEND_SCOPE,
+            gmail_oauth.GMAIL_COMPOSE_SCOPE,
+        ],
+    }), encoding="utf-8")
+    _allowed_live(monkeypatch)
+
+    uncertain_job = _job(db, title="Uncertain First Application",
+                         email="first@uncertain.example")
+    uncertain_decision = _decision(db, uncertain_job)
+    send_calls = []
+    monkeypatch.setattr(
+        provider_mod, "send",
+        lambda *_args, **_kwargs: (
+            send_calls.append("uncertain")
+            or (False, "", provider_mod.GMAIL_SEND_OUTCOME_UNCERTAIN)
+        ),
+    )
+
+    first = _run_live(
+        db, config, profile, live, uncertain_job, uncertain_decision,
+    )
+    assert first["status"] == "recovery_required"
+    assert db.query(models.LiveSendAttempt).one().state == "uncertain"
+
+    reloaded = sessionmaker(bind=db.get_bind(), expire_on_commit=False)()
+    try:
+        def forbidden_reconciliation_service(_settings):
+            raise AssertionError("missing readonly scope must skip Sent API access")
+
+        monkeypatch.setattr(
+            gmail_oauth, "authenticated_service", forbidden_reconciliation_service,
+        )
+        persisted_job = reloaded.get(models.Job, uncertain_job.id)
+        persisted_decision = reloaded.get(models.Decision, uncertain_decision.id)
+        blocked_retry = _run_live(
+            reloaded, config, profile, live, persisted_job, persisted_decision,
+        )
+        assert blocked_retry["status"] == "recovery_required"
+        assert reloaded.query(models.LiveSendAttempt).one().state == "uncertain"
+        assert send_calls == ["uncertain"]
+
+        separate_job = _job(
+            reloaded, title="Independent Eligible Application",
+            email="second@independent.example",
+        )
+        separate_decision = _decision(reloaded, separate_job)
+
+        def send_independent(*_args, **_kwargs):
+            send_calls.append("independent")
+            return True, "independent-message-id", ""
+
+        monkeypatch.setattr(provider_mod, "send", send_independent)
+        independent_result = _run_live(
+            reloaded, config, profile, live, separate_job, separate_decision,
+        )
+
+        assert independent_result["status"] == "sent"
+        assert independent_result["message_id"] == "independent-message-id"
+        assert send_calls == ["uncertain", "independent"]
+        attempts = reloaded.query(models.LiveSendAttempt).order_by(
+            models.LiveSendAttempt.id,
+        ).all()
+        assert [attempt.state for attempt in attempts] == [
+            "uncertain", "confirmed_sent",
+        ]
+    finally:
+        reloaded.close()
 
 
 def test_load_client_config_reads_secret_without_logging(settings, caplog, tmp_path):

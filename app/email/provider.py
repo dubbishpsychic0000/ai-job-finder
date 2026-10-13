@@ -262,6 +262,8 @@ def reconcile_live_send(settings, *, attempt_key: str, recipient: str,
     try:
         from app.email import gmail_oauth
 
+        if gmail_oauth.GMAIL_READONLY_SCOPE not in gmail_oauth.granted_scopes(settings):
+            return LiveSendReconciliation("unavailable")
         service = gmail_oauth.authenticated_service(settings)
         start = started_at.astimezone(timezone.utc) if started_at.tzinfo else started_at.replace(
             tzinfo=timezone.utc,

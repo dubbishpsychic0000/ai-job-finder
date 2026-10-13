@@ -299,7 +299,13 @@ def cmd_gmail_status(_args) -> None:
     token = gmail_oauth.token_path(settings)
     console.print(f"client secret: {'present' if secret.exists() else 'MISSING'} ({secret})")
     console.print(f"token:         {'present' if token.exists() else 'MISSING'} ({token})")
-    console.print(f"scopes needed: {' '.join(gmail_oauth.required_scopes(settings))}")
+    console.print(f"scopes required to send: {' '.join(gmail_oauth.required_scopes(settings))}")
+    optional = gmail_oauth.optional_scopes(settings)
+    if optional:
+        granted = gmail_oauth.granted_scopes(settings)
+        for scope in optional:
+            state = "granted" if scope in granted else "missing"
+            console.print(f"optional automatic-reconciliation scope ({state}): {scope}")
 
 
 def cmd_email_policy(_args) -> None:

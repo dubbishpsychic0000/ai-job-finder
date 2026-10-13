@@ -1,8 +1,8 @@
 """Gmail OAuth — scoped draft, send, and Sent-mail recovery credentials.
 
 Security invariants enforced here:
-  * live mode requests `gmail.send`, `gmail.compose` (daily-cap draft fallback),
-    and `gmail.readonly` (Sent-mail reconciliation after uncertain sends);
+  * live sending requires `gmail.send` and `gmail.compose` (daily-cap draft
+    fallback); `gmail.readonly` is optional and enables automatic Sent recovery;
   * the OAuth client secret lives in `secrets/client_secret.json` and the refresh
     token in `secrets/gmail_token.json` — both git-ignored;
   * secrets and tokens are NEVER logged, printed, or passed to any LLM prompt;
@@ -81,17 +81,49 @@ def _restrict_permissions(path: Path) -> None:
 
 
 def required_scopes(settings) -> list[str]:
-    """Minimal scopes for the active email mode.
+    """Scopes required to perform the active email operation.
 
     draft  -> gmail.compose (create Drafts, never sends them)
-    live   -> send, draft fallback, and read-only Sent reconciliation
+    live   -> gmail.send and gmail.compose (daily-cap draft fallback)
     dry_run-> never touches Gmail; send scope is a harmless placeholder.
     """
     if getattr(settings, "email_mode", "draft") == "draft":
         return [GMAIL_COMPOSE_SCOPE]
     if getattr(settings, "email_mode", "draft") == "live":
-        return list(GMAIL_ALL_SCOPES)
+        return [GMAIL_COMPOSE_SCOPE, GMAIL_SEND_SCOPE]
     return [GMAIL_SEND_SCOPE]
+
+
+def optional_scopes(settings) -> list[str]:
+    """Scopes that add recovery capability but are not required to send."""
+    if getattr(settings, "email_mode", "draft") == "live":
+        return [GMAIL_READONLY_SCOPE]
+    return []
+
+
+def authorization_scopes(settings) -> list[str]:
+    """Scopes requested by an explicit OAuth authorization flow."""
+    return list(dict.fromkeys(required_scopes(settings) + optional_scopes(settings)))
+
+
+def granted_scopes(settings) -> set[str]:
+    """Read scope metadata from the local token without exposing token contents."""
+    path = token_path(settings)
+    if not path.exists():
+        return set()
+    try:
+        with path.open("r", encoding="utf-8") as fh:
+            token = json.load(fh)
+    except (OSError, json.JSONDecodeError):
+        return set()
+    if not isinstance(token, dict):
+        return set()
+    scopes = token.get("scopes", [])
+    if isinstance(scopes, str):
+        return set(scopes.split())
+    if isinstance(scopes, list):
+        return {scope for scope in scopes if isinstance(scope, str)}
+    return set()
 
 
 def _credentials_from_file(path: Path):
@@ -153,8 +185,7 @@ def save_credentials(settings: RunnerSettings, creds) -> None:
     with path.open("w", encoding="utf-8") as fh:
         json.dump(json.loads(creds.to_json()), fh)
     _restrict_permissions(path)
-    logger.info("Gmail token stored at %s (git-ignored, scopes=%s)", path,
-                ",".join(required_scopes(settings)))
+    logger.info("Gmail token stored at %s (git-ignored)", path)
 
 
 def authorize(settings: RunnerSettings) -> str:
@@ -177,14 +208,14 @@ def authorize(settings: RunnerSettings) -> str:
 
     client_config = load_client_config(settings)
     flow = InstalledAppFlow.from_client_config(
-        client_config, scopes=required_scopes(settings), redirect_uri=redirect_uri,
+        client_config, scopes=authorization_scopes(settings), redirect_uri=redirect_uri,
     )
     creds = flow.run_local_server(port=OAUTH_PORT, prompt="consent")
     save_credentials(settings, creds)
     return token_path(settings).as_posix()
 
 def authenticated_service(settings: RunnerSettings):
-    """Build a Gmail API service authenticated with the send-only token."""
+    """Build a Gmail API service with credentials for the active email mode."""
     try:
         from googleapiclient.discovery import build
     except ImportError as exc:  # pragma: no cover

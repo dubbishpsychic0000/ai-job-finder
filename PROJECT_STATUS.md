@@ -211,8 +211,12 @@ workflow forces `EMAIL_MODE=draft` for `schedule` events and only populates the
 live authorization flag in the manual `btp_outreach` dispatch path. This aligns
 with the existing workflow and keeps the safety gate in the service layer.
 
-Validation on the current checkout: full suite **391 passed, 1 skipped**; `ruff
-check app/cli.py tests/test_btp_outreach.py` passed; `git diff --check` passed.
+Live Gmail sending requires `gmail.send` and `gmail.compose`. The broader
+`gmail.readonly` scope is optional and only enables automatic Sent-mail
+reconciliation after an uncertain send. Without it, an uncertain attempt stays
+persisted and blocked for operator review; it is never retried automatically.
+`gmail-status` reports required send scopes separately from the optional
+reconciliation scope and whether that optional grant is present.
 
 The current hardening pass addresses silent zero-result behavior, Tavily quota
 waste, unsafe email provenance, and accidental CI cache/budget resets. Search
