@@ -57,14 +57,36 @@ database without modification and found no WCA-tracked matching records for
 the selected employers. Gmail mailbox history was `NOT_CHECKED`, so this was
 not full mailbox-wide duplicate clearance. Published targeted MEGEC and El
 Ouatik runs **38381320878** and **38381614655** failed closed on the redirect
-handling limitation and created no drafts or sends. The redirect correction
-has passed local validation but still requires publication and a new
-non-sending targeted preflight before any live run.
+handling limitation and created no drafts or sends.
+
+The redirect correction was published as commit
+`00ab25cca0052216ba5451fa8b6ab7dbc5d13928`. MEGEC's targeted non-sending run
+**38383879263** completed successfully and followed only its bounded
+same-domain HTTPS canonical redirect. The official page,
+“Candidature spontanée — MEGEC”
+(`https://www.megec.com/candidature-spontanee/`), invites beginner and
+experienced technicians in civil engineering and related construction
+specialties and explicitly says “Postuler : Contact@megec.com”. WCA verified
+this as an `level_a_explicit_email_instruction` route, distinct from a generic
+contact address.
+
+The same run reloaded production WCA state: no matching company/alias,
+application, WCA-tracked draft, unresolved live-send or draft attempt,
+cooldown, or BTP suppression row was found. The earlier immutable history
+report provides the corresponding reason codes and reports unchanged DB hash.
+Gmail mailbox history remains `NOT_CHECKED`; do not interpret this as
+mailbox-wide duplicate clearance. The target run stopped with `no cv` /
+`missing_cv`: the restored `candidate/cv` directory did not contain a supported
+French attachment, so candidate fit could not be verified and the existing
+application engine blocked. No email or draft was created. The user's
+Morocco-priority clarification does not remove the saved profile's
+`morocco_not_in_target_countries` and `sponsorship_required` preference
+conflicts; they remain review items.
 
 Latest focused redirect/BTP/history run: **116 passed**; full suite:
 **423 passed, 1 skipped**. Ruff, Python compilation, and `git diff --check`
-passed. Tests use deterministic fixtures; these results do not establish live
-route eligibility or submission clearance.
+passed. Tests use deterministic fixtures; these results do not establish
+candidate-fit clearance or Gmail mailbox history.
 
 ## Local discovery and outreach safety hardening
 
