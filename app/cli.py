@@ -36,6 +36,20 @@ from app.database import init_db, session_scope
 console = Console()
 
 
+def _load_new_discovery_jobs(session, previous_max_id: int) -> list:
+    from sqlalchemy import select
+    from sqlalchemy.orm import joinedload
+
+    from app import models
+
+    return list(session.scalars(
+        select(models.Job)
+        .options(joinedload(models.Job.company))
+        .where(models.Job.id > previous_max_id)
+        .order_by(models.Job.id),
+    ))
+
+
 def _print_json(data: dict) -> None:
     sys.stdout.write(json.dumps(data, ensure_ascii=False, indent=2) + "\n")
 
@@ -280,11 +294,9 @@ def cmd_discovery_only(args) -> None:
                                 ),
                             )
                             session.flush()
-                            new_jobs = list(session.scalars(
-                                select(models.Job)
-                                .where(models.Job.id > previous_max_id)
-                                .order_by(models.Job.id),
-                            ))
+                            new_jobs = _load_new_discovery_jobs(
+                                session, previous_max_id,
+                            )
                         budget_persistence_failed = any(
                             {
                                 "provider_budget_persistence_unavailable",

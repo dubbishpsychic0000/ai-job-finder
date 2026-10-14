@@ -374,6 +374,44 @@ def test_discovery_report_is_sanitized_and_distinguishes_cached_new_listing():
     assert "candidate fit was not evaluated" in opportunity["discovery_relevance"]
 
 
+def test_sanitized_report_can_serialize_new_jobs_after_session_closes(db):
+    from app import models
+    from app.cli import _load_new_discovery_jobs
+
+    company = models.Company(name="Example Employer", normalized_name="example-employer")
+    db.add(company)
+    db.flush()
+    job = models.Job(
+        source="fixture",
+        external_id="detached-job",
+        dedup_key="detached-job",
+        title="Civil Engineering Technician",
+        company_id=company.id,
+        country="Morocco",
+        url="https://example.com/jobs/civil-technician",
+    )
+    db.add(job)
+    db.commit()
+    job_id = job.id
+
+    loaded_jobs = _load_new_discovery_jobs(db, 0)
+    db.expunge_all()
+
+    output = discovery_only.build_sanitized_report(
+        DiscoveryReport(
+            opportunities_fetched=1,
+            new_jobs=1,
+            new_opportunity_origins={job_id: "api"},
+        ),
+        loaded_jobs,
+        AgentConfig(),
+        {"limit_per_key": 17, "remaining_by_key": [17]},
+    )
+
+    assert output["counts"]["unique_new_opportunities"] == 1
+    assert output["opportunities"][0]["employer"] == "Example Employer"
+
+
 def test_zero_result_report_distinguishes_empty_from_deferred_queries():
     report = DiscoveryReport(
         combinations_attempted=1,

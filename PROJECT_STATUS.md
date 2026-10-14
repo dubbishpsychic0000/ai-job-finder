@@ -172,9 +172,36 @@ Morocco-only source routing, international broad/ATS routing, source-scope
 cache isolation, filtered-result diagnostics, and the existing durable-budget,
 retry, duplicate-key, and BTP-reserve guarantees. Focused tests passed
 **110 tests**; the full suite passed **473 tests, 1 skipped**. Ruff, Python
-compilation, and `git diff --check` passed. The change has not yet been
-published or evaluated in production; durable Tavily ledger reservations,
-daily limits, the BTP reserve, and the 10/day outbound limit are unchanged.
+compilation, and `git diff --check` passed. The routing change was published
+as commit
+[`507da615ba9ee8cad996c5eafa157f036be37164`](https://github.com/dubbishpsychic0000/ai-job-finder/commit/507da615ba9ee8cad996c5eafa157f036be37164);
+[CI run 38520602510](https://github.com/dubbishpsychic0000/ai-job-finder/actions/runs/38520602510)
+passed.
+
+The one bounded production evaluation,
+[run 38520712850](https://github.com/dubbishpsychic0000/ai-job-finder/actions/runs/38520712850),
+uploaded its sanitized report but failed with `BLOCKED`,
+`discovery_report_serialization_failed` during `report_serialization`
+(`DetachedInstanceError`). The diagnostic artifact cannot be used to report
+actual opportunity, country/language, source, or provider-result counts: its
+fallback contains zero-valued counts, while reporting 8 private-vault ledger
+commits. The commits are reservation-boundary writes, not proof of exactly
+eight provider requests (quota exhaustion can also write a ledger); no further
+provider-attempt count or listing results are available from the sanitized
+artifact. Its side-effect record reports no Gmail access, applications,
+drafts, email, WhatsApp, or production-database writes; all 8 private-vault
+writes were budget-ledger writes. No representative listing URLs or
+eligibility conclusions are available.
+
+Code inspection locates the serialization failure in the post-discovery
+report path: newly inserted `Job` rows were loaded inside `session_scope`,
+then serialized after the session closed; the sanitizer accesses the lazy
+`Job.company` relationship. The follow-up loads that relationship eagerly,
+with a regression test that detaches the loaded job before sanitizing it. The
+follow-up passed the full suite (**474 passed, 1 skipped**), Ruff, Python
+compilation, and `git diff --check`; publication and CI are pending. No second
+production evaluation has been dispatched. Durable Tavily reservations,
+daily limits, the BTP reserve, and the 10/day outbound limit remain unchanged.
 
 Gmail mailbox reconciliation remains `NOT_CHECKED`. The supported OAuth flow
 is `wca gmail-auth`; in live mode it requests the existing `gmail.send` and
