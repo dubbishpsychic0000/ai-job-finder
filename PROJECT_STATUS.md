@@ -100,9 +100,7 @@ The workflow now fails when its report is `BLOCKED` even if the CLI wrote a
 valid report. Focused deterministic tests cover sanitized diagnostics, missing
 and corrupt inputs, durable-before-request ordering, failed reservation,
 crash recovery, write scope, stale concurrent pushes, UTC-day boundaries,
-exhaustion, duplicate keys, and outbound-path exclusions. Do not dispatch
-another production discovery run until this change is published, CI passes,
-and the committed workflow and ledger path are re-audited.
+exhaustion, duplicate keys, and outbound-path exclusions.
 
 Validation on the final implementation: **53 focused tests passed**;
 the full suite passed **466 tests, 1 skipped**. Ruff, Python compilation,
@@ -110,6 +108,33 @@ and `git diff --check` passed. The original production exception remains
 unidentifiable because its raw diagnostic was deleted before this reporting
 schema existed; no specific runtime cause is inferred from the deterministic
 failure-path fixture.
+
+The fix was published to `main` as
+`c2c1fd40456db3815c296385d85026576003919d`; CI passed in
+[run 38514087042](https://github.com/dubbishpsychic0000/ai-job-finder/actions/runs/38514087042).
+The committed workflow was re-audited: the discovery-only task's restore and
+execution steps were the only selected operational paths; history/BTP,
+application, WhatsApp, general artifact/log, and general vault-persistence
+steps were skipped. Its sanitized report was the only uploaded run artifact.
+
+One bounded follow-up discovery-only run completed successfully in
+[run 38514263381](https://github.com/dubbishpsychic0000/ai-job-finder/actions/runs/38514263381),
+but found **0 external results, 0 normalized listings, 0 duplicates, and 0
+new opportunities**. All 8 allowed Tavily attempts were live and successful
+(0 retries, 0 failed attempts, 0 rate-limit errors); the remaining queries
+were budget-deferred. The report records 12 search combinations, 148
+source-level deferred queries, and no cache-derived results. It searched
+Belgium, France, Canada, Portugal, and Germany across nl/en/fr/pt/de, but
+produced no country/source/opportunity-type results, so no representative job
+links or eligibility assessment are available. Seven unique key ledgers were
+restored; 8 per-attempt reservation commits were durably written before
+dispatch, with 94 aggregate daily attempts remaining afterward and the
+exhausted key preserved. The run reports 0 Gmail access, applications,
+drafts, email sends, WhatsApp messages, and production database writes; its
+8 private-vault writes were exclusively the intended Tavily budget ledgers.
+The ephemeral database was writable only within the runner. This measures
+insufficient discoverable supply for any live-limit increase; retain the
+10/day outbound cap.
 
 Gmail mailbox reconciliation remains `NOT_CHECKED`. The supported OAuth flow
 is `wca gmail-auth`; in live mode it requests the existing `gmail.send` and
