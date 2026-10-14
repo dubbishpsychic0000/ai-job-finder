@@ -140,6 +140,7 @@ def cmd_discovery_only(args) -> None:
     from app.workflows.discovery import DEFAULT_SOURCES_PATH
     from app.workflows.discovery_only import (
         blocked_report,
+        bounded_source_allowed,
         build_sanitized_report,
         daily_budget_summary,
         run_bounded_discovery,
@@ -198,7 +199,10 @@ def cmd_discovery_only(args) -> None:
                     source for source in sources_config.get("connectors", [])
                     if source.get("enabled", True)
                 ]
-                if any(source.get("kind") != "tavily" for source in enabled_sources):
+                if any(
+                    not bounded_source_allowed(source)
+                    for source in enabled_sources
+                ):
                     report = blocked_report(
                         "unsupported_connector_enabled_for_bounded_discovery",
                         phase=phase,

@@ -88,6 +88,19 @@ class ApplicationEngine:
         is_spontaneous = (
             getattr(job, "opportunity_type", "") == "SPONTANEOUS_APPLICATION"
         )
+        public_competition = getattr(job, "public_competition", None)
+        if (
+            getattr(job, "source", "") == "emploi_public_ma"
+            or (
+                isinstance(public_competition, dict)
+                and public_competition.get("source") == "emploi_public_ma"
+            )
+        ):
+            return {
+                "sent": False,
+                "status": "blocked",
+                "reason": "competition_owner_approval_required",
+            }
         if not is_spontaneous and not is_verified_individual_vacancy(job):
             return {
                 "sent": False,

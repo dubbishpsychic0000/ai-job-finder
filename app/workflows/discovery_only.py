@@ -22,6 +22,13 @@ _QUALIFICATION_PATTERNS = (
 )
 _EMAIL = re.compile(r"\b[\w.+-]+@[\w.-]+\.[A-Za-z]{2,}\b")
 _PHONE = re.compile(r"(?<!\w)(?:\+?\d[\d ().-]{7,}\d)(?!\w)")
+
+
+def bounded_source_allowed(source: dict) -> bool:
+    kind = source.get("kind")
+    return kind == "tavily" or (
+        kind == "emploi_public" and source.get("name") == "emploi_public_ma"
+    )
 async def run_bounded_discovery(
     session,
     config: AgentConfig,
@@ -36,7 +43,7 @@ async def run_bounded_discovery(
         phase_callback("source_initialization")
     source_configuration = load_yaml(DEFAULT_SOURCES_PATH)
     if any(
-        source.get("enabled", True) and source.get("kind") != "tavily"
+        source.get("enabled", True) and not bounded_source_allowed(source)
         for source in source_configuration.get("connectors", [])
     ):
         raise RuntimeError("unsupported_connector_enabled_for_bounded_discovery")
@@ -286,6 +293,113 @@ def _qualification_evidence(description: str) -> list[str]:
     return results
 
 
+def _safe_public_competition(value: object) -> dict | None:
+    if not isinstance(value, dict) or value.get("source") != "emploi_public_ma":
+        return None
+    route = value.get("submission_route") or {}
+    if not isinstance(route, dict):
+        route = {}
+    requirements = value.get("requirements_original") or {}
+    if not isinstance(requirements, dict):
+        requirements = {}
+    checklist = value.get("eligibility_checklist")
+    safe_checklist = None
+    if isinstance(checklist, dict):
+        items = checklist.get("items") or {}
+        if not isinstance(items, dict):
+            items = {}
+        safe_checklist = {
+            "status": _clean_text(checklist.get("status"), 40),
+            "candidate_eligibility": _clean_text(
+                checklist.get("candidate_eligibility"), 40,
+            ),
+            "submission_owner_approval": _clean_text(
+                checklist.get("submission_owner_approval"), 40,
+            ),
+            "notice_documents_not_fetched": bool(
+                checklist.get("notice_documents_not_fetched"),
+            ),
+            "items": {
+                key: {
+                    "requirement_from_accessible_notice": _clean_text(
+                        item.get("requirement_from_accessible_notice"), 500,
+                    ),
+                    "candidate_evidence_status": _clean_text(
+                        item.get("candidate_evidence_status"), 40,
+                    ),
+                    "review_status": _clean_text(item.get("review_status"), 40),
+                }
+                for key, item in items.items()
+                if key in {"diploma", "specialty", "experience", "nationality", "age"}
+                and isinstance(item, dict)
+            },
+        }
+    notice_documents = value.get("notice_documents")
+    if not isinstance(notice_documents, list):
+        notice_documents = []
+    return {
+        "portal_id": _clean_text(value.get("portal_id"), 36),
+        "stage": _clean_text(value.get("stage"), 40),
+        "status": _clean_text(value.get("status"), 40),
+        "verification_status": _clean_text(
+            value.get("verification_status"), 24,
+        ),
+        "reason_code": _clean_text(value.get("reason_code"), 80),
+        "evidence_url": _public_url(value.get("evidence_url")),
+        "observed_at": _clean_text(value.get("observed_at"), 64),
+        "language": _clean_text(value.get("language"), 8),
+        "title": _clean_text(value.get("title_original"), 180),
+        "administration": _clean_text(
+            value.get("administration_original"), 180,
+        ),
+        "grade": _clean_text(value.get("grade_original"), 64),
+        "location": _clean_text(value.get("location_original"), 120),
+        "post_count": (
+            value.get("post_count")
+            if isinstance(value.get("post_count"), int)
+            and not isinstance(value.get("post_count"), bool)
+            else None
+        ),
+        "requirements": {
+            key: _clean_text(val, 1000)
+            for key, val in requirements.items()
+            if key in {"diploma", "specialty", "experience", "nationality", "age"}
+        },
+        "deadline": {
+            "source_text": _clean_text(value.get("deadline_original"), 100),
+            "at": _clean_text(value.get("deadline_at"), 64),
+        },
+        "posted_at": {
+            "source_text": _clean_text(value.get("posted_at_original"), 100),
+            "at": _clean_text(value.get("posted_at"), 64),
+            "evidence_url": _public_url(
+                value.get("evidence_url") if value.get("posted_at") else "",
+            ),
+        },
+        "submission_route": {
+            "kind": _clean_text(route.get("kind"), 32),
+            "conflict": bool(route.get("conflict")),
+            "instructions": _clean_text(route.get("instructions_raw"), 200),
+            "destination": _clean_text(route.get("destination_raw"), 200),
+            "url": _public_url(route.get("destination_url")),
+        },
+        "notice_documents": [
+            {
+                "label": _clean_text(document.get("label"), 100),
+                "url": _public_url(document.get("url")),
+                "fetched": False,
+            }
+            for document in notice_documents
+            if isinstance(document, dict)
+        ][:8],
+        "notice_documents_not_fetched": bool(
+            value.get("notice_documents_not_fetched"),
+        ),
+        "eligibility_checklist": safe_checklist,
+        "submission_owner_approval": "REQUIRED_NOT_GRANTED",
+    }
+
+
 def build_sanitized_report(
     report: DiscoveryReport,
     jobs: list,
@@ -343,6 +457,7 @@ def build_sanitized_report(
             },
             "queries_attempted": int(item.get("queries", 0)),
             "queries_live_api": int(item.get("queries_api", 0)),
+            "queries_direct": int(item.get("queries_direct", 0)),
             "queries_cached": int(item.get("queries_cached", 0)),
             "queries_empty": int(item.get("queries_empty", 0)),
             "live_empty_responses": int(item.get("live_empty_responses", 0)),
@@ -353,6 +468,57 @@ def build_sanitized_report(
             "queries_run_limit_deferred": int(item.get("queries_run_budget_deferred", 0)),
             "stale_cache_entries": int(item.get("queries_stale_cache", 0)),
             "external_results": int(item.get("fetched", 0)),
+            "public_page_requests": int(item.get("public_page_requests", 0)),
+            "public_page_requests_by_language": {
+                _clean_text(language, 20): int(count)
+                for language, count in (
+                    item.get("public_page_requests_by_language") or {}
+                ).items()
+            },
+            "public_competition_status_counts": {
+                str(status): int(count)
+                for status, count in (
+                    item.get("public_competition_status_counts") or {}
+                ).items()
+                if str(status).isalnum() or "_" in str(status)
+            },
+            "procedural_notices": int(item.get("procedural_notices", 0)),
+            "procedural_notices_matching_existing": int(
+                item.get("procedural_notices_matching_existing", 0),
+            ),
+            "procedural_notices_without_matching_vacancy": int(
+                item.get("procedural_notices_without_matching_vacancy", 0),
+            ),
+            "public_competition_results_by_country": {
+                _clean_text(country, 80): int(count)
+                for country, count in (
+                    item.get("public_competition_results_by_country") or {}
+                ).items()
+            },
+            "public_competition_results_by_language": {
+                _clean_text(language, 20): int(count)
+                for language, count in (
+                    item.get("public_competition_results_by_language") or {}
+                ).items()
+            },
+            "verified_individual_vacancies_by_query": {
+                _clean_text(query, 180): int(count)
+                for query, count in (
+                    item.get("verified_individual_vacancies_by_query") or {}
+                ).items()
+            },
+            "verified_individual_vacancies_by_country": {
+                _clean_text(country, 80): int(count)
+                for country, count in (
+                    item.get("verified_individual_vacancies_by_country") or {}
+                ).items()
+            },
+            "verified_individual_vacancies_by_language": {
+                _clean_text(language, 20): int(count)
+                for language, count in (
+                    item.get("verified_individual_vacancies_by_language") or {}
+                ).items()
+            },
             "results_from_live_api": int(item.get("fetched_api_results", 0)),
             "results_from_cache": int(item.get("fetched_cache_results", 0)),
             "provider_results_returned": int(
@@ -540,7 +706,7 @@ def build_sanitized_report(
                 "disabled_in_source_config"
                 if not source.get("enabled", True)
                 else "blocked_by_discovery_only_allowlist"
-                if source.get("kind") != "tavily"
+                if not bounded_source_allowed(source)
                 else "not_initialized"
             ),
             "result_state": "not_attempted",
@@ -661,7 +827,10 @@ def build_sanitized_report(
             "listing_url": listing_url,
             "country": country,
             "country_basis": (
-                "verified_ats_detail_location" if verified_vacancy
+                "verified_official_competition_detail"
+                if verified_vacancy
+                and isinstance(getattr(job, "public_competition", None), dict)
+                else "verified_ats_detail_location" if verified_vacancy
                 else "connector_or_search_location_not_independently_verified"
             ),
             "location": _clean_text(job.location, 120),
@@ -736,6 +905,9 @@ def build_sanitized_report(
                 "candidate fit was not evaluated."
             ),
             "eligibility": "NOT_EVALUATED",
+            "public_competition": _safe_public_competition(
+                getattr(job, "public_competition", None),
+            ),
         })
 
     budget = report.api_request_budget or {}

@@ -25,14 +25,26 @@ connectors:
     allocation_priority: 95
     results_per_query: 8
 
-  # Moroccan platforms are discovered through their publicly indexed pages;
-  # the agent does not scrape or log into these sites. Disable any source
-  # independently if its terms, robots policy, or availability changes.
+  # Moroccan job boards are discovered through indexed pages. The dedicated
+  # Emploi-Public adapter below separately checks robots.txt and reads only
+  # bounded public listing/detail HTML (never authentication or submission).
+  # Disable any source if its terms, robots policy, or availability changes.
   - {kind: tavily, name: tavily_rekrute, mode: real, enabled: true, applies_to_countries: [Morocco], allocation_priority: 80, domains: [rekrute.com], result_source_type: job_board, results_per_query: 8}
   - {kind: tavily, name: tavily_emploi_ma, mode: real, enabled: true, applies_to_countries: [Morocco], allocation_priority: 80, domains: [emploi.ma], result_source_type: job_board, results_per_query: 8}
   - {kind: tavily, name: tavily_amaljob, mode: real, enabled: true, applies_to_countries: [Morocco], allocation_priority: 80, domains: [amaljob.com], result_source_type: job_board, results_per_query: 8}
   - {kind: tavily, name: tavily_anapec, mode: real, enabled: true, applies_to_countries: [Morocco], allocation_priority: 90, domains: [anapec.org], result_source_type: government, results_per_query: 8}
   - {kind: tavily, name: tavily_emploi_public_ma, mode: real, enabled: true, applies_to_countries: [Morocco], allocation_priority: 90, domains: [emploi-public.ma], result_source_type: government, results_per_query: 8}
+
+  # Official public recruitment announcements. This bounded HTML adapter reads
+  # only listing and individual detail pages; it never downloads dossiers.
+  - kind: emploi_public
+    name: emploi_public_ma
+    mode: real
+    enabled: true
+    applies_to_countries: [Morocco]
+    allocation_priority: 100
+    max_pages: 2
+    max_detail_pages: 12
   - {kind: tavily, name: tavily_marocannonces, mode: real, enabled: true, applies_to_countries: [Morocco], allocation_priority: 75, domains: [marocannonces.com], result_source_type: job_board, results_per_query: 8}
   - {kind: tavily, name: tavily_dreamjob, mode: real, enabled: true, applies_to_countries: [Morocco], allocation_priority: 75, domains: [dreamjob.ma], result_source_type: job_board, results_per_query: 8}
   - {kind: tavily, name: tavily_indeed_morocco, mode: real, enabled: true, applies_to_countries: [Morocco], allocation_priority: 80, domains: [ma.indeed.com], result_source_type: job_board, results_per_query: 8}

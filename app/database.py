@@ -101,6 +101,7 @@ def _upgrade_schema() -> None:
         "entity_state": "VARCHAR(40) DEFAULT 'RESEARCH_REQUIRED'",
         "entity_reason_code": "VARCHAR(64) DEFAULT 'legacy_record_unverified'",
         "entity_evidence_url": "VARCHAR(1024) DEFAULT ''",
+        "public_competition": "JSON",
     })
 
     _add_missing_columns(insp, "companies", {

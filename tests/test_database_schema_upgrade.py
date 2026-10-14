@@ -26,6 +26,7 @@ def test_schema_upgrade_adds_missing_columns_idempotently(tmp_path, monkeypatch)
         "closing_at", "last_verified_at", "posted_at_source",
         "posted_at_evidence_url", "entity_type", "entity_state",
         "entity_reason_code", "entity_evidence_url",
+        "public_competition",
     } <= {
         column["name"] for column in inspector.get_columns("jobs")
     }
@@ -48,6 +49,7 @@ def test_phase_24_job_columns_are_migrated_before_orm_reads(tmp_path, monkeypatc
             "entity_state",
             "entity_reason_code",
             "entity_evidence_url",
+            "public_competition",
         ):
             connection.execute(text(f"ALTER TABLE jobs DROP COLUMN {name}"))
 

@@ -104,12 +104,44 @@ _GENERIC_LISTING_TITLES = {
 def classify_entity(opportunity) -> tuple[str, str, str]:
     """Conservatively classify a result separately from its employment type.
 
-    Only an identified record from a structured official ATS feed is treated
-    as a verified individual vacancy. Search-result pages and snippets remain
+    Official ATS records and the dedicated public-competition adapter may
+    provide structured verification. Search-result pages and snippets remain
     unverified even when their URLs appear job-shaped.
     """
     title = str(getattr(opportunity, "title", "") or "")
     url = str(getattr(opportunity, "url", "") or "")
+    raw = getattr(opportunity, "raw", None)
+    raw = raw if isinstance(raw, dict) else {}
+    competition = raw.get("public_competition")
+    if isinstance(competition, dict):
+        status = str(competition.get("status") or "UNKNOWN")
+        if status == "OPEN_ANNOUNCEMENT":
+            return (
+                "INDIVIDUAL_VACANCY",
+                "VACANCY_VERIFIED" if competition.get("verification_status") == "verified"
+                else "VACANCY_UNVERIFIED",
+                str(competition.get("reason_code") or "public_competition_unverified"),
+            )
+        if status == "CLOSED_ANNOUNCEMENT":
+            return (
+                "INDIVIDUAL_VACANCY",
+                "VACANCY_CLOSED",
+                str(competition.get("reason_code") or "public_competition_closed"),
+            )
+        if status in {
+            "EXAM_CONVOCATION", "RESULTS_PUBLICATION", "CANCELLATION",
+            "OTHER_PROCEDURAL_NOTICE",
+        }:
+            return (
+                "UNKNOWN",
+                "RESEARCH_REQUIRED",
+                f"public_competition_{status.casefold()}",
+            )
+        return (
+            "INDIVIDUAL_VACANCY",
+            "VACANCY_STATUS_UNKNOWN",
+            str(competition.get("reason_code") or "public_competition_status_unknown"),
+        )
     try:
         parsed_url = urlsplit(url)
     except ValueError:
@@ -167,8 +199,6 @@ def classify_entity(opportunity) -> tuple[str, str, str]:
             "ats_detail_requires_live_evidence",
         )
 
-    raw = getattr(opportunity, "raw", None)
-    raw = raw if isinstance(raw, dict) else {}
     ats_name = str(raw.get("ats") or "").casefold()
     external_id = str(getattr(opportunity, "external_id", "") or "")
     company = str(getattr(opportunity, "company", "") or "").strip()
@@ -223,7 +253,7 @@ def _supported_ats_posting_url(url: str) -> bool:
 
 
 def is_verified_individual_vacancy(job) -> bool:
-    """Require the full provenance tuple before permitting application actions."""
+    """Require source-specific provenance before any downstream analysis."""
     url = str(getattr(job, "entity_evidence_url", "") or "")
     try:
         parsed = urlsplit(url)
@@ -250,6 +280,78 @@ def is_verified_individual_vacancy(job) -> bool:
             closing_at = closing_at.replace(tzinfo=timezone.utc)
         if closing_at <= (now or datetime.now(timezone.utc)):
             return False
+    competition = getattr(job, "public_competition", None)
+    if (
+        getattr(job, "source", "") == "emploi_public_ma"
+        and isinstance(competition, dict)
+    ):
+        route = competition.get("submission_route")
+        if not isinstance(route, dict):
+            return False
+        route_kind = str(route.get("kind") or "")
+        route_url = str(route.get("destination_url") or "")
+        try:
+            route_parts = urlsplit(route_url)
+            valid_route_url = bool(
+                route_parts.scheme == "https"
+                and route_parts.hostname
+                and route_parts.username is None
+                and route_parts.password is None
+                and route_parts.port in {None, 443}
+            )
+        except ValueError:
+            valid_route_url = False
+        route_is_supported = (
+            route_kind == "ONLINE_PORTAL"
+            and valid_route_url
+            and getattr(job, "application_method", "") == "COMPANY_PORTAL"
+            and str(getattr(job, "application_url", "") or "")
+            == route_url
+        ) or (
+            route_kind == "EMAIL"
+            and bool(str(route.get("destination_email") or ""))
+            and getattr(job, "application_method", "") == "EMAIL"
+        ) or (
+            route_kind == "POSTAL"
+            and bool(str(route.get("destination_raw") or ""))
+            and getattr(job, "application_method", "") == "UNKNOWN"
+        )
+        metadata_observed = competition.get("observed_at")
+        try:
+            metadata_observed_at = (
+                datetime.fromisoformat(str(metadata_observed))
+                if metadata_observed else None
+            )
+        except ValueError:
+            metadata_observed_at = None
+        if metadata_observed_at is not None and metadata_observed_at.tzinfo is None:
+            metadata_observed_at = metadata_observed_at.replace(tzinfo=timezone.utc)
+        return (
+            getattr(job, "entity_type", "") == "INDIVIDUAL_VACANCY"
+            and getattr(job, "entity_state", "") == "VACANCY_VERIFIED"
+            and getattr(job, "entity_reason_code", "")
+            == "official_public_competition_verified_open"
+            and getattr(job, "source_type", "") == "government"
+            and getattr(job, "verification_status", "") == "verified"
+            and observed_at is not None
+            and metadata_observed_at == observed_at
+            and (now - metadata_observed_at).total_seconds() <= 86400
+            and str(getattr(job, "url", "") or "") == url
+            and parsed.scheme == "https"
+            and host in {"emploi-public.ma", "www.emploi-public.ma"}
+            and competition.get("source") == "emploi_public_ma"
+            and competition.get("stage") == "OPEN_ANNOUNCEMENT"
+            and competition.get("status") == "OPEN_ANNOUNCEMENT"
+            and not bool(route.get("conflict"))
+            and route_is_supported
+            and bool(str(getattr(job, "title", "") or "").strip())
+            and bool(str(getattr(job, "description", "") or "").strip())
+            and bool(str(getattr(job, "location", "") or "").strip())
+            and bool(getattr(getattr(job, "company", None), "name", ""))
+            and closing_at is not None
+            and closing_at > (now or datetime.now(timezone.utc))
+            and str(competition.get("evidence_url") or "") == url
+        )
     return (
         getattr(job, "entity_type", "") == "INDIVIDUAL_VACANCY"
         and getattr(job, "entity_state", "") == "VACANCY_VERIFIED"

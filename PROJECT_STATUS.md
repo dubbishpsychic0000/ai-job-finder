@@ -1028,3 +1028,51 @@ so its result counts and post-run durable budget have not yet been parsed and
 are intentionally not reported here. Before dispatch, the latest inspected
 artifact showed 41 aggregate daily attempts remaining and no intervening
 provider run. No second evaluation was dispatched.
+
+## Phase 2.7 Emploi-Public public competitions
+
+The government connector previously covered RSS/JSON feeds only; Emploi-Public
+was merely a Tavily search scope, with no official detail-page parser or
+competition-specific verification. Consequently, indexed links could not
+establish a current public competition through deterministic source evidence.
+Inspection of a French detail page also found conflicting submission
+instructions (an online administration portal and an email deposit address).
+That conflict is direct evidence of an unresolved route, not proof that either
+route is valid; the inspected page remains unverified and no application was
+attempted.
+
+Added a Morocco-only Emploi-Public adapter that checks the portal's robots
+policy, restricts requests to canonical HTTPS competition-detail UUID paths,
+caps listing/detail requests, parses French and Arabic competition evidence,
+and does not fetch robots-disallowed document links. Verification requires an
+explicit active announcement stage, identifiable role and administration,
+location, substantive description, future deadline, and consistent explicit
+submission route. Posting-date evidence is stored independently from status;
+missing or malformed posting dates do not make an otherwise supported
+announcement closed. Inaccessible, redirected, ambiguous, expired, and
+procedural pages receive explicit safe outcomes. Procedural notices can update
+matching records by portal UUID but do not create candidate jobs.
+
+The existing candidate fields and enums are reused, with one idempotent
+`public_competition` JSON-column migration for source-specific stage,
+requirements, evidence and owner-review data that scalar fields cannot
+represent. Discovery reports sanitize the persisted evidence and include
+source, country, language, request, verification and procedural-notice
+outcomes. Only a verified open competition may enter the deterministic
+eligibility checklist, which remains `HOLD`: candidate eligibility is not
+assessed, owner approval is required but not granted, and the normal action
+workflow plus `ApplicationEngine` both block submission. No automated
+application, draft, email, WhatsApp message, production candidate write, or
+MEGEC retry is part of this integration.
+
+Validation: the complete test suite passed (**521 passed, 1 skipped**),
+including offline French/Arabic fixtures, robots/redirect behavior, evidence
+and date handling, procedural notices, persistence, legacy-schema migration,
+and downstream submission blocks. After the final defensive sanitizer and
+idempotent-record-update edits, Ruff, Python compilation, and
+`git diff --check` passed. No bounded evaluation was run: the previous discovery
+artifact could not be retrieved, so the post-run durable provider balance is
+unknown. Direct portal retrieval is separately bounded and does not consume or
+borrow Tavily reservations. Remaining limits include the portal's changing
+HTML, uncertain Arabic field variants, and contradictory submission routes;
+unknown or inconsistent evidence fails closed.

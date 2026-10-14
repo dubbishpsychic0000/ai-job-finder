@@ -103,6 +103,7 @@ class Job(Base):
     entity_state: Mapped[str] = mapped_column(String(40), default="RESEARCH_REQUIRED", index=True)
     entity_reason_code: Mapped[str] = mapped_column(String(64), default="legacy_record_unverified")
     entity_evidence_url: Mapped[str] = mapped_column(String(1024), default="")
+    public_competition: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
 
 
 class OpportunitySource(Base):

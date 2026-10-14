@@ -349,6 +349,8 @@ def _load_source_connectors(
             opts["source_name"] = c.get("name", kind)
             if proxy:
                 opts["proxy"] = proxy
+        elif kind == "emploi_public":
+            opts["source_name"] = c.get("name", kind)
         if kind == "tavily" and tavily_resilient_keys:
             # Use resilient wrapper with all keys
             from app.connectors.tavily_resilience import ResilientTavily, TavilyCache
@@ -707,6 +709,163 @@ def _apply_vacancy_evidence(session: Session, job: Job, evidence) -> None:
         job.application_url = ""
 
 
+def _public_competition(opp) -> dict:
+    raw = getattr(opp, "raw", None)
+    raw = raw if isinstance(raw, dict) else {}
+    metadata = raw.get("public_competition")
+    return metadata if isinstance(metadata, dict) else {}
+
+
+def _competition_observed_at(metadata: dict) -> datetime | None:
+    try:
+        observed_at = datetime.fromisoformat(str(metadata.get("observed_at") or ""))
+    except ValueError:
+        return None
+    if observed_at.tzinfo is None:
+        observed_at = observed_at.replace(tzinfo=timezone.utc)
+    return observed_at
+
+
+def _apply_public_competition_evidence(
+    session: Session, job: Job, opp,
+) -> str:
+    metadata = _public_competition(opp)
+    status = str(metadata.get("status") or "UNKNOWN")
+    observed_at = _competition_observed_at(metadata)
+    detail_available = metadata.get("reason_code") not in {
+        "detail_page_unavailable", "detail_page_limit_reached",
+    }
+    if detail_available:
+        job.title = opp.title or job.title
+        job.description = opp.description or job.description
+        job.location = opp.location if opp.location != "Morocco" else job.location
+    job.url = opp.url or job.url
+    job.country = opp.country or job.country or "Morocco"
+    job.last_verified_at = observed_at
+    job.entity_type = "INDIVIDUAL_VACANCY"
+    job.entity_evidence_url = opp.url
+    job.public_competition = metadata
+    if opp.closing_at is not None:
+        job.closing_at = opp.closing_at
+    if opp.posted_at is not None:
+        job.posted_at = opp.posted_at
+        job.posted_at_source = opp.posted_at_source
+        job.posted_at_evidence_url = opp.posted_at_evidence_url
+        job.freshness = freshness_label(opp.posted_at)
+    if opp.company:
+        company = mem.store.get_or_create_company(
+            session, opp.company, country=job.country,
+        )
+        job.company_id = company.id
+    job.source_type = "government"
+    route = metadata.get("submission_route") or {}
+    if status == "OPEN_ANNOUNCEMENT":
+        job.entity_state = "VACANCY_VERIFIED"
+        job.entity_reason_code = "official_public_competition_verified_open"
+        job.verification_status = "verified"
+        if route.get("kind") == "ONLINE_PORTAL":
+            job.application_method = "COMPANY_PORTAL"
+            job.application_url = str(route.get("destination_url") or "")
+        elif route.get("kind") == "EMAIL":
+            job.application_method = "EMAIL"
+            job.application_url = ""
+        else:
+            job.application_method = "UNKNOWN"
+            job.application_url = ""
+        if job.status in {"closed", "verification_required"}:
+            job.status = "new"
+    elif status == "CLOSED_ANNOUNCEMENT":
+        job.entity_state = "VACANCY_CLOSED"
+        job.entity_reason_code = str(
+            metadata.get("reason_code") or "official_public_competition_closed",
+        )
+        job.verification_status = "closed"
+        job.status = "closed"
+        job.application_method = "UNKNOWN"
+        job.application_url = ""
+    else:
+        job.entity_state = "VACANCY_STATUS_UNKNOWN"
+        job.entity_reason_code = str(
+            metadata.get("reason_code") or "public_competition_status_unknown",
+        )
+        job.verification_status = "unverified"
+        job.status = "verification_required"
+        job.application_method = "UNKNOWN"
+        job.application_url = ""
+    return status
+
+
+def _persist_public_competition_notice(
+    session: Session, opp, metadata: dict, source_name: str,
+) -> bool:
+    """Store procedural evidence and update, but never create, a candidate job."""
+    portal_id = str(metadata.get("portal_id") or "")
+    stage = str(metadata.get("stage") or "")
+    observed_at = _competition_observed_at(metadata)
+    existing = None
+    if portal_id:
+        existing = session.execute(
+            select(Job).where(
+                Job.source == source_name,
+                Job.external_id == portal_id,
+            ).limit(1),
+        ).scalar_one_or_none()
+    notice = {
+        "stage": stage,
+        "status": str(metadata.get("status") or "UNKNOWN"),
+        "observed_at": observed_at.isoformat() if observed_at else "",
+        "evidence_url": str(metadata.get("evidence_url") or opp.url),
+        "reason_code": str(metadata.get("reason_code") or "official_procedural_notice"),
+    }
+    if existing is not None:
+        updated = dict(existing.public_competition or {})
+        updated["latest_procedural_notice"] = notice
+        updated["stage"] = stage
+        updated["observed_at"] = notice["observed_at"]
+        updated["evidence_url"] = notice["evidence_url"]
+        if stage in {"CANCELLATION", "EXAM_CONVOCATION", "RESULTS_PUBLICATION"}:
+            updated["status"] = "CLOSED_ANNOUNCEMENT"
+            updated["verification_status"] = "closed"
+            existing.entity_type = "INDIVIDUAL_VACANCY"
+            existing.entity_state = "VACANCY_CLOSED"
+            existing.entity_reason_code = (
+                "official_cancellation_notice"
+                if stage == "CANCELLATION" else "official_application_stage_ended"
+            )
+            existing.verification_status = "closed"
+            existing.status = "closed"
+            existing.application_method = "UNKNOWN"
+            existing.application_url = ""
+        else:
+            updated["status"] = "UNKNOWN"
+            updated["verification_status"] = "unverified"
+            existing.entity_state = "VACANCY_STATUS_UNKNOWN"
+            existing.entity_reason_code = (
+                "official_procedural_notice_requires_reverification"
+            )
+            existing.verification_status = "unverified"
+            existing.status = "verification_required"
+            existing.application_method = "UNKNOWN"
+            existing.application_url = ""
+        existing.public_competition = updated
+        existing.last_verified_at = observed_at
+        existing.entity_evidence_url = notice["evidence_url"]
+    mem.store.record_discovery(
+        session,
+        kind="PUBLIC_COMPETITION_NOTICE",
+        url=notice["evidence_url"],
+        title=str(metadata.get("title_original") or opp.title),
+        company_name=str(metadata.get("administration_original") or ""),
+        source=source_name,
+        source_type="government",
+        discovery_channel="direct",
+        evidence={"notice": notice, "portal_id": portal_id},
+        reason=notice["reason_code"],
+        canonical_key=f"{source_name}:{portal_id}:{stage}",
+    )
+    return existing is not None
+
+
 def _cap_scheduled_queries(
     scheduled: list[list[dict]],
     limit: int,
@@ -881,6 +1040,7 @@ async def run_discovery(session: Session, config: AgentConfig, prefs: Preference
     detail_verifications = 0
     detail_evidence_cache = {}
     reverified_job_ids: set[int] = set()
+    seen_competition_notices: set[tuple[str, str, str]] = set()
 
     def verify_detail(url: str, source_report: dict):
         nonlocal detail_verifications
@@ -964,6 +1124,16 @@ async def run_discovery(session: Session, config: AgentConfig, prefs: Preference
             "detail_verifications_reused": 0,
             "detail_verification_attempts": 0,
             "verification_reason_codes": {},
+            "public_page_requests": 0,
+            "public_competition_status_counts": {},
+            "public_competition_results_by_country": {},
+            "public_competition_results_by_language": {},
+            "verified_individual_vacancies_by_query": {},
+            "verified_individual_vacancies_by_country": {},
+            "verified_individual_vacancies_by_language": {},
+            "procedural_notices": 0,
+            "procedural_notices_matching_existing": 0,
+            "procedural_notices_without_matching_vacancy": 0,
             "new_by_entity_type": {},
             "new_by_entity_state": {},
             "provider_results_by_country": {},
@@ -977,6 +1147,7 @@ async def run_discovery(session: Session, config: AgentConfig, prefs: Preference
             "key_budget_events": {},
             "queries_cached": 0,
             "queries_api": 0,
+            "queries_direct": 0,
             "queries_empty": 0,
             "live_empty_responses": 0,
             "cached_empty_results": 0,
@@ -1054,11 +1225,74 @@ async def run_discovery(session: Session, config: AgentConfig, prefs: Preference
             seen_canonical = set()
             combo_new = 0
             for idx, opp in enumerate(processed):
+                competition = _public_competition(opp)
+                if competition.get("stage") in {
+                    "EXAM_CONVOCATION", "RESULTS_PUBLICATION", "CANCELLATION",
+                    "OTHER_PROCEDURAL_NOTICE",
+                }:
+                    status = str(competition.get("status") or "UNKNOWN")
+                    source_report["public_competition_status_counts"][status] = (
+                        source_report["public_competition_status_counts"].get(status, 0) + 1
+                    )
+                    for field, key in (
+                        (
+                            "public_competition_results_by_country",
+                            str(opp.country or "Morocco"),
+                        ),
+                        (
+                            "public_competition_results_by_language",
+                            str(opp.language or combo.get("lang") or "unknown"),
+                        ),
+                    ):
+                        values = source_report[field]
+                        values[key] = values.get(key, 0) + 1
+                    notice_key = (
+                        str(competition.get("portal_id") or ""),
+                        str(competition.get("stage") or ""),
+                        str(competition.get("observed_at") or ""),
+                    )
+                    if notice_key not in seen_competition_notices:
+                        seen_competition_notices.add(notice_key)
+                        matched = _persist_public_competition_notice(
+                            session, opp, competition, source_name,
+                        )
+                        source_report["procedural_notices"] += 1
+                        field = (
+                            "procedural_notices_matching_existing"
+                            if matched else "procedural_notices_without_matching_vacancy"
+                        )
+                        source_report[field] += 1
+                    continue
                 if idx in dup:
                     report.duplicates += 1
                     source_report["duplicates"] += 1
                     source_report["duplicate_reasons"][dup[idx]] += 1
                     entity_type, _entity_state, _entity_reason = classify_entity(opp)
+                    competition = _public_competition(opp)
+                    if competition and competition.get("portal_id"):
+                        existing_job = session.execute(
+                            select(Job).where(
+                                Job.source == source_name,
+                                Job.external_id == str(competition["portal_id"]),
+                            ).limit(1),
+                        ).scalar_one_or_none()
+                        if (
+                            existing_job is not None
+                            and existing_job.id not in reverified_job_ids
+                        ):
+                            reverified_job_ids.add(existing_job.id)
+                            status = _apply_public_competition_evidence(
+                                session, existing_job, opp,
+                            )
+                            source_report["existing_candidates_reverified"] += 1
+                            outcome = {
+                                "OPEN_ANNOUNCEMENT": "existing_candidates_verified",
+                                "CLOSED_ANNOUNCEMENT": "existing_candidates_closed",
+                            }.get(status, "existing_candidates_unknown")
+                            source_report[outcome] += 1
+                            reasons = source_report["verification_reason_codes"]
+                            reason = existing_job.entity_reason_code
+                            reasons[reason] = reasons.get(reason, 0) + 1
                     if entity_type == "INDIVIDUAL_VACANCY":
                         coordinates = supported_ats_detail(opp.url)
                         if coordinates is not None:
@@ -1098,7 +1332,90 @@ async def run_discovery(session: Session, config: AgentConfig, prefs: Preference
                 observed_at = None
                 verified_route = ""
                 evidence = None
-                if entity_type == "INDIVIDUAL_VACANCY":
+                if competition:
+                    observed_at = _competition_observed_at(competition)
+                    status = str(competition.get("status") or "UNKNOWN")
+                    entity_reason = str(
+                        competition.get("reason_code") or "public_competition_unverified",
+                    )
+                    if status == "OPEN_ANNOUNCEMENT":
+                        entity_type = "INDIVIDUAL_VACANCY"
+                        entity_state = "VACANCY_VERIFIED"
+                        competition["reason_code"] = (
+                            "official_public_competition_verified_open"
+                        )
+                        route = competition.get("submission_route") or {}
+                        route_kind = route.get("kind")
+                        if route_kind == "ONLINE_PORTAL":
+                            verified_route = str(route.get("destination_url") or "")
+                            opp.application_method = "COMPANY_PORTAL"
+                        elif route_kind == "EMAIL":
+                            opp.application_method = "EMAIL"
+                        else:
+                            opp.application_method = "UNKNOWN"
+                        opp.verification_status = "verified"
+                        source_report["verified_individual_vacancies"] += 1
+                        source_report["verification_candidates"] += 1
+                        query = str(combo.get("query") or "unknown")
+                        query_counts = source_report[
+                            "verified_individual_vacancies_by_query"
+                        ]
+                        query_counts[query] = query_counts.get(query, 0) + 1
+                        for field, key in (
+                            (
+                                "verified_individual_vacancies_by_country",
+                                str(opp.country or "Morocco"),
+                            ),
+                            (
+                                "verified_individual_vacancies_by_language",
+                                str(opp.language or combo.get("lang") or "unknown"),
+                            ),
+                        ):
+                            values = source_report[field]
+                            values[key] = values.get(key, 0) + 1
+                    elif status == "CLOSED_ANNOUNCEMENT":
+                        entity_type = "INDIVIDUAL_VACANCY"
+                        entity_state = "VACANCY_CLOSED"
+                        opp.verification_status = "closed"
+                        source_report["closed_vacancies"] += 1
+                        source_report["verification_candidates"] += 1
+                    else:
+                        entity_type = "INDIVIDUAL_VACANCY"
+                        entity_state = "VACANCY_STATUS_UNKNOWN"
+                        opp.verification_status = "unverified"
+                        source_report["unknown_vacancy_status"] += 1
+                        source_report["verification_candidates"] += 1
+                    competition["observed_at"] = (
+                        observed_at.isoformat() if observed_at else ""
+                    )
+                    reasons = source_report["verification_reason_codes"]
+                    reasons[entity_reason] = reasons.get(entity_reason, 0) + 1
+                    source_report["public_competition_status_counts"][status] = (
+                        source_report["public_competition_status_counts"].get(status, 0) + 1
+                    )
+                    for field, key in (
+                        (
+                            "public_competition_results_by_country",
+                            str(opp.country or "Morocco"),
+                        ),
+                        (
+                            "public_competition_results_by_language",
+                            str(opp.language or combo.get("lang") or "unknown"),
+                        ),
+                    ):
+                        values = source_report[field]
+                        values[key] = values.get(key, 0) + 1
+                    if competition.get("deadline_at"):
+                        opp.closing_at = datetime.fromisoformat(
+                            str(competition["deadline_at"]),
+                        )
+                    if competition.get("posted_at"):
+                        opp.posted_at = datetime.fromisoformat(
+                            str(competition["posted_at"]),
+                        )
+                        opp.posted_at_source = "emploi_public:date_publication"
+                        opp.posted_at_evidence_url = opp.url
+                elif entity_type == "INDIVIDUAL_VACANCY":
                     ats_detail = supported_ats_detail(opp.url)
                     if verify_vacancy_details and ats_detail is not None:
                         evidence = verify_detail(opp.url, source_report)
@@ -1196,7 +1513,8 @@ async def run_discovery(session: Session, config: AgentConfig, prefs: Preference
                               "careers_url": company_urls["careers_url"],
                               "recruitment_url": company_urls["recruitment_url"],
                               "company_profile_url": company_urls["profile_url"],
-                              "source_url": opp.url},
+                              "source_url": opp.url,
+                              "public_competition": competition},
                     reason="discovered opportunity", relevance_score=quality,
                 )
                 job_data = {
@@ -1215,7 +1533,9 @@ async def run_discovery(session: Session, config: AgentConfig, prefs: Preference
                     "employment_type": opp.employment_type or "full_time",
                     "salary": opp.salary or "",
                     "contact_email": opp.contact_email or "",
-                    "status": "new",
+                    "status": (
+                        "closed" if entity_state == "VACANCY_CLOSED" else "new"
+                    ),
                     "source_type": src_type,
                     "source_quality": quality,
                     "source_confidence": quality,
@@ -1237,13 +1557,17 @@ async def run_discovery(session: Session, config: AgentConfig, prefs: Preference
                         if entity_state == "VACANCY_VERIFIED" else "UNKNOWN"
                     ),
                     "application_method": (
-                        "COMPANY_PORTAL" if verified_route else "UNKNOWN"
+                        str(getattr(opp, "application_method", "UNKNOWN"))
+                        if competition else (
+                            "COMPANY_PORTAL" if verified_route else "UNKNOWN"
+                        )
                     ),
                     "application_url": verified_route,
                     "entity_type": entity_type,
                     "entity_state": entity_state,
                     "entity_reason_code": entity_reason,
                     "entity_evidence_url": opp.url,
+                    "public_competition": competition,
                 }
                 job, created = mem.store.upsert_job(session, job_data)
                 if created:
@@ -1259,9 +1583,12 @@ async def run_discovery(session: Session, config: AgentConfig, prefs: Preference
                             official_domain=company.official_domain,
                         )
                         company.last_researched_at = datetime.now(timezone.utc)
-                    verification = EmailVerificationService(session).verify_job(job, source_type=src_type)
-                    # Never copy an unverified string into a job as a sendable recipient.
-                    job.contact_email = verification.email if verification.verified else ""
+                    if competition:
+                        job.contact_email = ""
+                    else:
+                        verification = EmailVerificationService(session).verify_job(job, source_type=src_type)
+                        # Never copy an unverified string into a job as a sendable recipient.
+                        job.contact_email = verification.email if verification.verified else ""
                     if entity_state == "VACANCY_VERIFIED" and verified_route:
                         job.application_method = "COMPANY_PORTAL"
                         job.application_url = verified_route
@@ -1274,6 +1601,19 @@ async def run_discovery(session: Session, config: AgentConfig, prefs: Preference
                     report.new_jobs += 1
                     combo_new += 1
                     source_report["new"] += 1
+                elif competition:
+                    status = _apply_public_competition_evidence(
+                        session, job, opp,
+                    )
+                    source_report["existing_candidates_reverified"] += 1
+                    outcome = {
+                        "OPEN_ANNOUNCEMENT": "existing_candidates_verified",
+                        "CLOSED_ANNOUNCEMENT": "existing_candidates_closed",
+                    }.get(status, "existing_candidates_unknown")
+                    source_report[outcome] += 1
+                    reasons = source_report["verification_reason_codes"]
+                    reason = job.entity_reason_code
+                    reasons[reason] = reasons.get(reason, 0) + 1
             mem.store.record_query(session, combo["query"], combo.get("country", ""),
                                    source_name, jobs_found=len(processed),
                                    relevant_jobs=combo_new)
@@ -1302,8 +1642,19 @@ async def run_discovery(session: Session, config: AgentConfig, prefs: Preference
             status = getattr(_connector, "last_status", "")
             error_code = getattr(_connector, "last_error_code", "")
             deferred_reason = getattr(_connector, "last_deferred_reason", "")
+            source["public_page_requests"] += int(
+                getattr(_connector, "last_page_requests", 0),
+            )
             country = str(combo.get("country") or combo.get("location") or "UNKNOWN")
             language = str(combo.get("lang") or "unknown")
+            page_requests = int(getattr(_connector, "last_page_requests", 0))
+            if page_requests:
+                requests_by_language = source.setdefault(
+                    "public_page_requests_by_language", {},
+                )
+                requests_by_language[language] = (
+                    requests_by_language.get(language, 0) + page_requests
+                )
 
             def add_count(field: str, key: str, count: int) -> None:
                 if count <= 0:
@@ -1361,6 +1712,8 @@ async def run_discovery(session: Session, config: AgentConfig, prefs: Preference
                 add_count("accepted_results_by_language", language, accepted_result_count)
                 add_count("filtered_results_by_country", country, filtered_count)
                 add_count("filtered_results_by_language", language, filtered_count)
+            elif origin == "direct":
+                source["queries_direct"] += 1
             filter_reasons = getattr(
                 _connector, "last_filter_reason_counts", {},
             )

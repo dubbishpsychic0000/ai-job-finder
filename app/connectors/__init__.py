@@ -6,6 +6,7 @@ declares its `source_type`, legal `access_mode` and a `policy_notice` (spec §34
 """
 from app.connectors.base import JobSource, Opportunity, get_connector, registry
 from app.connectors.company_careers import CompanyCareersSource
+from app.connectors.emploi_public import EmploiPublicSource
 from app.connectors.eures import EuresSource
 from app.connectors.generic_api import GenericAPISource
 from app.connectors.government import GovernmentPortalSource
@@ -23,6 +24,7 @@ from app.connectors.workday import WorkdaySource
 
 __all__ = [
     "CompanyCareersSource",
+    "EmploiPublicSource",
     "EuresSource",
     "GenericAPISource",
     "GovernmentPortalSource",
@@ -54,6 +56,7 @@ def register_defaults() -> None:
         "greenhouse": GreenhouseSource,
         "smartrecruiters": SmartRecruitersSource,
         "eures": EuresSource,
+        "emploi_public": EmploiPublicSource,
         "generic_api": GenericAPISource,
         "government": GovernmentPortalSource,
         "lever": LeverSource,

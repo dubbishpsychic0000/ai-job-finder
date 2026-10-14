@@ -45,7 +45,21 @@ def pending_actions(session: Session) -> list:
             models.Job.id.not_in(acted),
         )
     ).scalars().all())
-    return [job for job in candidates if is_verified_individual_vacancy(job)]
+    return [
+        job for job in candidates
+        if not _is_public_competition(job) and is_verified_individual_vacancy(job)
+    ]
+
+
+def _is_public_competition(job) -> bool:
+    metadata = getattr(job, "public_competition", None)
+    return (
+        getattr(job, "source", "") == "emploi_public_ma"
+        or (
+            isinstance(metadata, dict)
+            and metadata.get("source") == "emploi_public_ma"
+        )
+    )
 
 
 def lang_for_country(country: str) -> str:
@@ -67,6 +81,19 @@ async def run_actions(session: Session, config: AgentConfig, settings: RunnerSet
     jobs = pending_actions(session)
 
     for job in jobs:
+        if _is_public_competition(job):
+            report.blocked.append({
+                "job_id": job.id,
+                "reason": "public competition submission requires explicit owner approval",
+            })
+            mem.store.record_event(
+                session,
+                "action",
+                "public competition submission blocked pending owner approval",
+                "warn",
+                {"job_id": job.id, "reason_code": "competition_owner_approval_required"},
+            )
+            continue
         decision = mem.store.get_last_decision(session, job.id)
         if not decision:
             continue
