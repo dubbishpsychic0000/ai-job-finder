@@ -925,10 +925,11 @@ reservation boundary, UTC-day budget accounting, BTP reserve, and 10/day
 outbound limit are unchanged. The full suite passed **502 tests, 1 skipped**;
 Ruff passed on changed Python files; Python compilation and `git diff --check`
 passed. Repository-wide Ruff still reports 25 findings in untouched files.
-At this point, the implementation has not dispatched discovery, written
+Before publication, the implementation had not dispatched discovery, written
 production candidate/application state, created drafts, sent email or
-WhatsApp, or reprocessed the confirmed MEGEC application. Publication/CI and
-any bounded follow-up evaluation remain pending.
+WhatsApp, or reprocessed the confirmed MEGEC application. The subsequent
+publication, CI result, and single bounded follow-up evaluation are recorded
+below.
 
 ### Phase 2.5 bounded evaluation
 
