@@ -929,3 +929,39 @@ At this point, the implementation has not dispatched discovery, written
 production candidate/application state, created drafts, sent email or
 WhatsApp, or reprocessed the confirmed MEGEC application. Publication/CI and
 any bounded follow-up evaluation remain pending.
+
+### Phase 2.5 bounded evaluation
+
+After commit
+[`776b321b699a78c40b57f706d40adb4e4b9d2780`](https://github.com/dubbishpsychic0000/ai-job-finder/commit/776b321b699a78c40b57f706d40adb4e4b9d2780)
+passed [CI run 38542559107](https://github.com/dubbishpsychic0000/ai-job-finder/actions/runs/38542559107),
+one bounded discovery-only run completed in
+[run 38542750328](https://github.com/dubbishpsychic0000/ai-job-finder/actions/runs/38542750328).
+The sanitized artifact reports 80 provider results, 34 source-filtered results,
+46 normalized results, 26 duplicates, and 20 new discovery records. Those 20
+are not verified vacancies: the report has **0 verified open vacancies**, 1
+unverified individual-vacancy candidate (`unsupported_detail_verification_source`),
+16 research-required leads, and 3 rejected non-vacancies. All 20 new records
+have unknown posting dates. No candidate eligibility was evaluated.
+
+The seven selected search combinations covered Morocco (3), Belgium (2),
+France (2), and Canada (1), using Arabic (2), Dutch (1), French (3), and
+English (2). All eight live provider attempts succeeded without retries:
+four broad web searches returned 48 provider results (2 filtered, 46
+normalized); three official-ATS searches returned 24, all source-filtered; and
+one Morocco/Arabic ANAPEC request returned 8, all source-filtered. The broad
+search attempts covered Morocco, Belgium, France, and Canada; official ATS
+covered Morocco, Belgium, and France. No Morocco-specific board request was
+attempted because the remaining requests were budget-deferred. The one
+individual-vacancy candidate points to an unsupported ATS/detail source and
+remains unverified; a representative research lead was Bayt's Morocco
+engineering-technician category page, not an individual vacancy.
+
+Seven durable key ledgers report **41 aggregate daily attempts remaining**
+(per-key remaining: 0, 0, 0, 0, 7, 17, 17). The artifact confirms all 8
+provider reservations were durably committed before dispatch and counted
+against those daily ledgers; the 12-combination, 8-attempt, daily per-key,
+BTP-reserve, and 10/day outbound limits remain unchanged. The run reports zero
+Gmail access, applications, drafts, email, WhatsApp, and production database
+writes; its 8 private-vault writes were exclusively budget-ledger reservations.
+No application, candidate/application state, or MEGEC retry occurred.
