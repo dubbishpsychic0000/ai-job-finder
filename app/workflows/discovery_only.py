@@ -187,6 +187,7 @@ def blocked_report(
             "failed_attempts": 0,
             "retry_attempts": 0,
             "remaining_run_attempts": MAX_TAVILY_ATTEMPTS,
+            "durably_reserved_attempts": 0,
             "rate_limit_errors": 0,
             "budget_deferred_queries": 0,
             "daily_budget": None,

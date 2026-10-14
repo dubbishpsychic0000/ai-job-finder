@@ -104,19 +104,20 @@ def _prepare_cli_inputs(root: Path, database_path: Path) -> None:
     (root / "candidate" / "preferences.yaml").write_text(
         "target_countries: [Morocco]\n", encoding="utf-8",
     )
+    from app import models
+
     connection = sqlite3.connect(database_path)
     try:
-        for table in (
-            "jobs", "companies", "sources", "query_stats", "discoveries",
-            "notifications",
-        ):
-            connection.execute(f"CREATE TABLE {table} (id INTEGER)")
+        for table in models.Base.metadata.tables:
+            quoted = table.replace('"', '""')
+            connection.execute(f'CREATE TABLE "{quoted}" (id INTEGER)')
     finally:
         connection.close()
 
 
 def _run_discovery_cli(
     monkeypatch, root, database_path, *, run_discovery=None, parse_candidate=False,
+    database_initializer=None,
 ):
     from app import cli
 
@@ -140,6 +141,9 @@ def _run_discovery_cli(
         lambda: SimpleNamespace(sqlite_path=database_path),
     )
     monkeypatch.setattr(cli, "get_config", lambda: AgentConfig())
+    monkeypatch.setattr(
+        cli, "init_db", database_initializer or (lambda: None),
+    )
     monkeypatch.setattr(
         cli, "session_scope", session_scope_stub,
     )
@@ -166,6 +170,7 @@ def test_discovery_execution_failure_has_sanitized_phase_diagnostics(
     database_path = root / "data" / "agent.db"
     _prepare_cli_inputs(root, database_path)
     secret_value = "provider-secret candidate@example.test private-candidate"
+    migrations = []
 
     async def fail_discovery(*_args, **_kwargs):
         raise RuntimeError(secret_value)
@@ -173,6 +178,7 @@ def test_discovery_execution_failure_has_sanitized_phase_diagnostics(
     report = _run_discovery_cli(
         monkeypatch, root, database_path, run_discovery=fail_discovery,
         parse_candidate=False,
+        database_initializer=lambda: migrations.append("initialized"),
     )
     serialized = json.dumps(report)
 
@@ -183,6 +189,7 @@ def test_discovery_execution_failure_has_sanitized_phase_diagnostics(
     assert report["diagnostic"]["message"] == (
         "Bounded discovery failed before a complete report was produced."
     )
+    assert migrations == ["initialized"]
     assert secret_value not in serialized
     assert "provider-secret" not in serialized
     assert "candidate@example.test" not in serialized

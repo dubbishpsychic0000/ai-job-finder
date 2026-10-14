@@ -31,6 +31,7 @@ class GitVaultBudgetStore:
         self.repository = Path(repository)
         self.max_push_attempts = max(1, int(max_push_attempts))
         self.write_count = 0
+        self.reservation_count = 0
 
     @staticmethod
     def _relative_ledger_path(path: Path) -> str:
@@ -201,7 +202,10 @@ class GitVaultBudgetStore:
 
     def reserve(self, path: Path, today: str, limit: int) -> dict:
         """Persist and return a reservation before the provider is dispatched."""
-        return self._update(path, today, limit, exhaust=False)
+        state = self._update(path, today, limit, exhaust=False)
+        if state.get("reserved") is True:
+            self.reservation_count += 1
+        return state
 
     def exhaust(self, path: Path, today: str, limit: int) -> dict:
         """Durably mark a key exhausted after a provider quota response."""

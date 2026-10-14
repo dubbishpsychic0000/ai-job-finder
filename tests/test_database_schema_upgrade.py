@@ -1,8 +1,11 @@
 from __future__ import annotations
 
-from sqlalchemy import create_engine, inspect, text
+import pytest
+from sqlalchemy import create_engine, inspect, select, text
+from sqlalchemy.exc import OperationalError
+from sqlalchemy.orm import Session
 
-from app import database
+from app import database, models
 
 
 def test_schema_upgrade_adds_missing_columns_idempotently(tmp_path, monkeypatch):
@@ -19,10 +22,41 @@ def test_schema_upgrade_adds_missing_columns_idempotently(tmp_path, monkeypatch)
     assert {"message_id", "draft_id", "mode"} <= {
         column["name"] for column in inspector.get_columns("emails")
     }
-    assert {"closing_at", "last_verified_at"} <= {
+    assert {
+        "closing_at", "last_verified_at", "posted_at_source",
+        "posted_at_evidence_url", "entity_type", "entity_state",
+        "entity_reason_code", "entity_evidence_url",
+    } <= {
         column["name"] for column in inspector.get_columns("jobs")
     }
     assert {"last_success_at", "last_failure_at"} <= {
         column["name"] for column in inspector.get_columns("sources")
     }
+    legacy_engine.dispose()
+
+
+def test_phase_24_job_columns_are_migrated_before_orm_reads(tmp_path, monkeypatch):
+    legacy_engine = create_engine(f"sqlite:///{tmp_path / 'phase-24-legacy.db'}")
+    models.Base.metadata.create_all(legacy_engine)
+    with legacy_engine.begin() as connection:
+        connection.execute(text("DROP INDEX IF EXISTS ix_jobs_entity_type"))
+        connection.execute(text("DROP INDEX IF EXISTS ix_jobs_entity_state"))
+        for name in (
+            "posted_at_source",
+            "posted_at_evidence_url",
+            "entity_type",
+            "entity_state",
+            "entity_reason_code",
+            "entity_evidence_url",
+        ):
+            connection.execute(text(f"ALTER TABLE jobs DROP COLUMN {name}"))
+
+    with Session(legacy_engine) as session, pytest.raises(OperationalError):
+        session.execute(select(models.Job)).all()
+
+    monkeypatch.setattr(database, "engine", legacy_engine)
+    database._upgrade_schema()
+
+    with Session(legacy_engine) as session:
+        assert session.execute(select(models.Job)).all() == []
     legacy_engine.dispose()

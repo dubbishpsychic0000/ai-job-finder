@@ -118,6 +118,7 @@ def test_durable_reservation_is_visible_before_provider_request(tmp_path, monkey
     assert observed_counts == [1]
     assert _remote_ledger(bare, relative_path)["count"] == 1
     assert store.write_count == 1
+    assert store.reservation_count == 1
 
 
 def test_failed_durable_reservation_sends_no_provider_request(tmp_path, monkeypatch):

@@ -811,3 +811,25 @@ Python files; Python compilation and `git diff --check` passed. Repository-wide
 Ruff still reports 25 findings in untouched files. Publication, CI, and the
 authorized single bounded discovery-only evaluation are pending; no production
 discovery measurements are claimed yet.
+
+### Phase 2.4 discovery execution recovery
+
+The authorized bounded discovery-only evaluation
+[38529148328](https://github.com/dubbishpsychic0000/ai-job-finder/actions/runs/38529148328)
+was blocked with `OperationalError` during `discovery_execution`, before it
+produced a usable discovery report. Its sanitized artifact reports four
+private-vault writes, all budget-ledger writes; that count does not establish
+how many provider attempts were dispatched. No email, draft, WhatsApp,
+application, or candidate/database write-back path ran. The workflow removed
+its internal error log, so the exact production SQLite message is unavailable.
+
+A stale restored-database schema is the likely cause, not a confirmed remote
+exception: a local regression reproduces the ORM `OperationalError` when
+reading the prior schema with the new Phase 2.4 model, then confirms the
+additive migration restores the read. Discovery-only now checks every ORM
+table and the restored database's integrity before calling the existing
+idempotent schema initializer on the ephemeral runner copy. Provider reporting
+also distinguishes confirmed durable reservations from other ledger writes.
+The full suite passes **484 tests, 1 skipped**; focused tests, Ruff on changed
+files, compilation, and `git diff --check` pass. The fix remains unpublished;
+no follow-up production evaluation has been dispatched.

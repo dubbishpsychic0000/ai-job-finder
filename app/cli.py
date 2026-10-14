@@ -262,10 +262,7 @@ def cmd_discovery_only(args) -> None:
                                     "SELECT name FROM sqlite_master WHERE type='table'",
                                 )
                             }
-                        required_tables = {
-                            "jobs", "companies", "sources", "query_stats",
-                            "discoveries", "notifications",
-                        }
+                        required_tables = set(models.Base.metadata.tables)
                         if not integrity or integrity[0] != "ok":
                             report = blocked_report(
                                 "production_database_integrity_check_failed",
@@ -276,6 +273,8 @@ def cmd_discovery_only(args) -> None:
                                 "production_database_schema_incomplete",
                                 phase=phase,
                             )
+                        if report is None:
+                            init_db()
                     except sqlite3.Error:
                         report = blocked_report(
                             "production_database_unreadable", phase=phase,
@@ -318,6 +317,10 @@ def cmd_discovery_only(args) -> None:
                             )
                             report["provider"].update({
                                 "api_attempts": int(actual_budget.get("attempts", 0)),
+                                "durably_reserved_attempts": (
+                                    budget_store.reservation_count
+                                    if budget_store else 0
+                                ),
                                 "successes": int(actual_budget.get("successes", 0)),
                                 "failed_attempts": int(
                                     actual_budget.get("failed_attempts", 0),
@@ -346,6 +349,9 @@ def cmd_discovery_only(args) -> None:
                             )
                             report["provider"]["restored_budget_ledger_count"] = (
                                 restored_ledger_count
+                            )
+                            report["provider"]["durably_reserved_attempts"] = (
+                                budget_store.reservation_count if budget_store else 0
                             )
                             if budget_store is not None:
                                 report["provider"]["durable_ledger_writes"] = (
@@ -393,6 +399,9 @@ def cmd_discovery_only(args) -> None:
             diagnostic_message=message,
         )
         if budget_store is not None:
+            report["provider"]["durably_reserved_attempts"] = (
+                budget_store.reservation_count
+            )
             report["side_effects"]["private_vault_writes"] = (
                 budget_store.write_count
             )
