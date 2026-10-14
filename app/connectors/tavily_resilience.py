@@ -725,6 +725,18 @@ class ResilientTavily:
             ):
                 continue
 
+            if key.budget.remaining() <= 0:
+                saw_daily_budget = True
+                self.last_deferred_reason = (
+                    key.budget.last_reservation_error
+                    or "daily_request_budget_exhausted"
+                )
+                self.last_key_budget_events.append({
+                    "fingerprint": key.fp,
+                    "reason_code": self.last_deferred_reason,
+                })
+                continue
+
             reservation_error = self.attempt_budget.reserve(
                 key.budget, retry=attempts_this_query > 0,
             )

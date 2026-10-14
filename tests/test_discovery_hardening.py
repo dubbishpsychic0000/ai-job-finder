@@ -85,6 +85,68 @@ def test_tavily_negative_results_are_cached_and_charged_once(tmp_path, monkeypat
     assert budget.remaining() == 19
 
 
+def test_mixed_key_budget_dispatches_only_through_general_capacity(
+    tmp_path, monkeypatch,
+):
+    today = datetime.now(timezone.utc).date().isoformat()
+    keys = []
+    persisted_counts = {}
+    dispatches = []
+
+    def reserve_general(path, requested_day, limit):
+        state = json.loads(path.read_text(encoding="utf-8"))
+        if state["date"] != requested_day or state["count"] >= limit:
+            return {**state, "reserved": False}
+        state["count"] += 1
+        path.write_text(json.dumps(state), encoding="utf-8")
+        return {**state, "reserved": True}
+
+    for name, count in (("at-total-limit", 20), ("at-general-limit", 17), ("usable", 1)):
+        path = tmp_path / f"{name}.json"
+        path.write_text(
+            json.dumps({"date": today, "count": count, "exhausted": False}),
+            encoding="utf-8",
+        )
+        persisted_counts[name] = path
+        key = TavilyKey(
+            name,
+            DailyBudget(
+                path,
+                limit=GENERAL_TAVILY_DAILY_LIMIT,
+                durable_reserver=reserve_general,
+            ),
+            key_fingerprint(name),
+        )
+        keys.append(key)
+
+    class Response:
+        status_code = 200
+
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {"results": []}
+
+    def post(_url, *, json, **_kwargs):
+        dispatches.append(json["api_key"])
+        return Response()
+
+    monkeypatch.setattr("app.connectors.tavily_resilience.requests.post", post)
+    source = ResilientTavily(
+        keys=keys,
+        cache=TavilyCache(tmp_path / "cache.json"),
+        attempt_budget=ApiAttemptBudget(8),
+    )
+
+    assert asyncio.run(source.search("civil engineering", "Morocco")) == []
+    assert dispatches == ["usable"]
+    assert [
+        json.loads(path.read_text(encoding="utf-8"))["count"]
+        for path in persisted_counts.values()
+    ] == [20, 17, 2]
+
+
 def test_tavily_cache_entries_expire_and_report_stale_entries(tmp_path):
     cache = TavilyCache(tmp_path / "cache.json", ttl_seconds=0)
     cache.put("query", [{"result": "cached"}])

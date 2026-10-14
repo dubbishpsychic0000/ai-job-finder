@@ -9,6 +9,8 @@ import tempfile
 from datetime import date
 from pathlib import Path
 
+from app.connectors.tavily_resilience import GENERAL_TAVILY_DAILY_LIMIT
+
 _LEDGER_NAME = re.compile(r"tavily_budget_[a-f0-9]{8}\.json\Z")
 _BRANCH = "refs/heads/main"
 _REMOTE_BRANCH = "refs/remotes/origin/main"
@@ -206,6 +208,11 @@ class GitVaultBudgetStore:
         if state.get("reserved") is True:
             self.reservation_count += 1
         return state
+
+    def reserve_general(self, path: Path, today: str, limit: int) -> dict:
+        """Reserve a discovery attempt without ever spending the BTP reserve."""
+        general_limit = min(max(0, int(limit)), GENERAL_TAVILY_DAILY_LIMIT)
+        return self.reserve(path, today, general_limit)
 
     def exhaust(self, path: Path, today: str, limit: int) -> dict:
         """Durably mark a key exhausted after a provider quota response."""

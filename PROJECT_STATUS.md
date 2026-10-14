@@ -1244,3 +1244,29 @@ The one restore-only run was not repeated. No live discovery was chained from
 the partial remaining aggregate capacity; the failed closed artifact is the
 current evidence and does not authorize a provider run. Further provider use
 requires a separate fresh budget preflight and explicit authorization.
+
+## Phase 2.8c Tavily general-capacity gate and UTC rollover
+
+The restore-only artifact demonstrated that the previous all-keys gate was
+overly restrictive: discovery had 16 general-purpose attempts remaining on one
+key, while the other keys had reached the 17-request general limit or the
+20-request total limit. The gate now authorizes only when at least one
+validated key has general capacity. Keys without general capacity are skipped;
+they do not consume another key's budget. A durable reservation independently
+clamps every discovery reservation to the 17-request general limit, preserving
+the three-request per-key BTP reserve.
+
+Current-UTC-day ledgers are reported with their actual remaining capacity.
+Prior-day ledgers are reported as rollover-eligible pending a successful
+durable reservation; no request is dispatched until that reservation succeeds.
+Restore-only reporting does not mutate or reconstruct ledger contents.
+Future-dated or malformed ledgers still block the gate. The reservation layer
+alone resets a stale-day ledger, atomically recording today's first request
+before provider dispatch.
+
+Added offline coverage for mixed 20/17/1 key states, general-cap reservation,
+and non-mutating prior-day reporting. A mocked-provider regression checks that
+only the 1/20 key can dispatch in that mixed state. Full suite: **548 passed,
+1 skipped**. Ruff, Python compilation, and `git diff --check` passed. A single
+restore-only Actions preflight will be run only after publication and CI; it
+will not dispatch discovery.

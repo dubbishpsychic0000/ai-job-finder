@@ -7,9 +7,12 @@ from datetime import datetime, timezone
 from pathlib import Path
 from threading import Barrier
 
+import pytest
+
 from app.connectors.tavily_resilience import (
     BTP_TAVILY_DAILY_RESERVE,
     GENERAL_TAVILY_DAILY_LIMIT,
+    TAVILY_DAILY_REQUEST_LIMIT,
     DailyBudget,
     key_fingerprint,
 )
@@ -280,6 +283,45 @@ def test_durable_reservation_writes_only_target_ledger_and_preserves_btp_reserve
     )
 
 
+def test_durable_general_reservation_cannot_spend_btp_reserve(tmp_path):
+    bare, relative_path, (clone, _) = _vault_repositories(
+        tmp_path, initial_count=GENERAL_TAVILY_DAILY_LIMIT - 1,
+    )
+    today = datetime.now(timezone.utc).date().isoformat()
+    local_path = tmp_path / "runtime" / Path(relative_path).name
+    local_path.parent.mkdir()
+    store = GitVaultBudgetStore(clone)
+
+    first = store.reserve_general(local_path, today, TAVILY_DAILY_REQUEST_LIMIT)
+    second = store.reserve_general(local_path, today, TAVILY_DAILY_REQUEST_LIMIT)
+
+    assert first["reserved"] is True
+    assert first["count"] == GENERAL_TAVILY_DAILY_LIMIT
+    assert second["reserved"] is False
+    assert second["reason"] == "daily_request_budget_exhausted"
+    assert _remote_ledger(bare, relative_path)["count"] == (
+        GENERAL_TAVILY_DAILY_LIMIT
+    )
+
+
+@pytest.mark.parametrize("initial_count", [17, 20])
+def test_durable_general_reservation_skips_keys_without_general_capacity(
+    tmp_path, initial_count,
+):
+    bare, relative_path, (clone, _) = _vault_repositories(
+        tmp_path, initial_count=initial_count,
+    )
+    today = datetime.now(timezone.utc).date().isoformat()
+    local_path = tmp_path / "runtime" / Path(relative_path).name
+    local_path.parent.mkdir()
+    store = GitVaultBudgetStore(clone)
+
+    result = store.reserve_general(local_path, today, TAVILY_DAILY_REQUEST_LIMIT)
+
+    assert result["reserved"] is False
+    assert _remote_ledger(bare, relative_path)["count"] == initial_count
+
+
 def test_durable_exhaustion_preserves_count_and_blocks_later_reservations(tmp_path):
     bare, relative_path, (clone, _) = _vault_repositories(tmp_path, initial_count=4)
     today = datetime.now(timezone.utc).date().isoformat()
@@ -313,4 +355,29 @@ def test_stale_date_rolls_only_at_utc_day_boundary(tmp_path):
     assert result["count"] == 1
     assert _remote_ledger(bare, relative_path) == {
         "date": tomorrow, "count": 1, "exhausted": False,
+    }
+
+
+def test_discovery_rollover_resets_stale_ledger_only_at_reservation_boundary(
+    tmp_path,
+):
+    bare, relative_path, (clone, _) = _vault_repositories(tmp_path, initial_count=20)
+    store = GitVaultBudgetStore(clone)
+    local_path = tmp_path / "runtime" / Path(relative_path).name
+    local_path.parent.mkdir()
+    next_day = "2026-10-15"
+    store.synchronize(local_path, today="2026-10-14")
+    before = _remote_ledger(bare, relative_path)
+
+    reservation = store.reserve_general(local_path, next_day, 20)
+
+    assert before["date"] == "2026-10-14"
+    assert before["count"] == 20
+    assert reservation["reserved"] is True
+    assert reservation["date"] == next_day
+    assert reservation["count"] == 1
+    assert _remote_ledger(bare, relative_path) == {
+        "date": next_day,
+        "count": 1,
+        "exhausted": False,
     }

@@ -275,6 +275,8 @@ def build_restore_preflight_report(
             "general_remaining": None,
             "btp_reserve_remaining": None,
             "btp_reserve_intact": False,
+            "eligible_for_general_discovery": False,
+            "general_capacity_after_rollover": 0,
             "reason_code": "",
         }
         source_ledger_path = repository / "state" / ledger_path.name
@@ -317,11 +319,20 @@ def build_restore_preflight_report(
 
         item["ledger_valid"] = True
         item["ledger_utc_day_matches"] = ledger_date == now_date
+        item["ledger_date_relation"] = (
+            "current_utc_day" if ledger_date == now_date else "prior_utc_day"
+        )
         item["count"] = payload["count"]
         item["exhausted"] = payload["exhausted"]
-        if ledger_date != now_date:
-            item["reason_code"] = "provider_budget_ledger_stale"
+        if ledger_date > now_date:
+            item["ledger_date_relation"] = "future_utc_day"
+            item["reason_code"] = "provider_budget_ledger_from_future"
             reasons.append(item["reason_code"])
+        elif ledger_date < now_date:
+            item["eligible_for_general_discovery"] = True
+            item["general_capacity_after_rollover"] = GENERAL_TAVILY_DAILY_LIMIT
+            item["btp_reserve_intact"] = True
+            item["reason_code"] = "utc_day_rollover_pending_durable_reservation"
         else:
             item["total_remaining"] = max(
                 0, TAVILY_DAILY_REQUEST_LIMIT - payload["count"],
@@ -338,12 +349,16 @@ def build_restore_preflight_report(
                 payload["count"] <= GENERAL_TAVILY_DAILY_LIMIT
                 and item["btp_reserve_remaining"] >= BTP_TAVILY_DAILY_RESERVE
             )
-            if payload["exhausted"] or payload["count"] >= TAVILY_DAILY_REQUEST_LIMIT:
-                item["reason_code"] = "provider_budget_exhausted"
-                reasons.append(item["reason_code"])
-            elif not item["btp_reserve_intact"]:
-                item["reason_code"] = "btp_reserve_not_intact"
-                reasons.append(item["reason_code"])
+            item["eligible_for_general_discovery"] = (
+                not payload["exhausted"]
+                and payload["count"] < GENERAL_TAVILY_DAILY_LIMIT
+            )
+            if item["eligible_for_general_discovery"]:
+                item["reason_code"] = ""
+            elif payload["exhausted"]:
+                item["reason_code"] = "provider_key_exhausted"
+            else:
+                item["reason_code"] = "general_budget_exhausted"
         per_key.append(item)
 
     input_expected = restoration.get("expected_input_count", 4)
@@ -374,25 +389,48 @@ def build_restore_preflight_report(
     if not checkout_path_verified:
         reasons.append("vault_repository_path_mismatch")
 
+    eligible_keys = [
+        item for item in per_key
+        if item["eligible_for_general_discovery"]
+    ]
+    current_general_remaining = sum(
+        item["general_remaining"] or 0
+        for item in eligible_keys
+        if item.get("ledger_date_relation") == "current_utc_day"
+    )
+    rollover_general_capacity = sum(
+        item["general_capacity_after_rollover"]
+        for item in eligible_keys
+        if item.get("ledger_date_relation") == "prior_utc_day"
+    )
     aggregate = {
-        key: (
-            sum(item[key] for item in per_key if isinstance(item[key], int))
-            if per_key and all(isinstance(item[key], int) for item in per_key)
-            else None
-        )
-        for key in (
-            "total_remaining",
-            "general_remaining",
-            "btp_reserve_remaining",
-        )
+        "total_remaining": sum(
+            item["total_remaining"] or 0
+            for item in per_key
+            if item.get("ledger_date_relation") == "current_utc_day"
+        ),
+        "general_remaining": current_general_remaining,
+        "btp_reserve_remaining": sum(
+            item["btp_reserve_remaining"] or 0
+            for item in per_key
+            if item.get("ledger_date_relation") == "current_utc_day"
+        ),
     }
+    if any(not item["ledger_valid"] for item in per_key):
+        reasons.append("provider_budget_ledger_missing_or_invalid")
+    if not eligible_keys:
+        reasons.append("no_general_budget_available")
     unique_reasons = list(dict.fromkeys(reasons))
-    success = not unique_reasons and len(per_key) == len(fingerprints)
+    success = (
+        not unique_reasons
+        and len(per_key) == len(fingerprints)
+        and all(item["btp_reserve_intact"] for item in eligible_keys)
+    )
     return {
         "schema_version": 1,
         "mode": "restore_only",
         "status": "COMPLETED" if success else "BLOCKED",
-        "reason_code": "restoration_validated" if success else unique_reasons[0],
+        "reason_code": "general_capacity_available" if success else unique_reasons[0],
         "utc_day": now_date.isoformat(),
         "restoration": {
             "expected_input_count": input_expected,
@@ -412,14 +450,31 @@ def build_restore_preflight_report(
             "limit_per_key": TAVILY_DAILY_REQUEST_LIMIT,
             "general_limit_per_key": GENERAL_TAVILY_DAILY_LIMIT,
             "btp_reserve_per_key": BTP_TAVILY_DAILY_RESERVE,
-            "utc_day_validation": "passed" if success else "blocked",
+            "utc_day_validation": (
+                "passed"
+                if success and rollover_general_capacity == 0
+                else "passed_with_durable_rollover"
+                if success
+                else "blocked"
+            ),
             "btp_reserve_validation": (
                 "passed"
-                if success and all(item["btp_reserve_intact"] for item in per_key)
+                if success and all(item["btp_reserve_intact"] for item in eligible_keys)
                 else "blocked"
             ),
             "aggregate_capacity_remaining": aggregate,
+            "eligible_general_key_count": len(eligible_keys),
+            "excluded_general_key_count": len(per_key) - len(eligible_keys),
+            "general_capacity_current_utc_day": current_general_remaining,
+            "general_capacity_after_durable_rollover": rollover_general_capacity,
             "per_key": per_key,
+        },
+        "discovery_gate": {
+            "authorized": success,
+            "policy": "eligible_keys_only_preserve_per_key_btp_reserve",
+            "reason_code": (
+                "general_capacity_available" if success else unique_reasons[0]
+            ),
         },
         "reason_codes": unique_reasons,
         "side_effects": {

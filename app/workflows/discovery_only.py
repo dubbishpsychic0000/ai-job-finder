@@ -136,7 +136,9 @@ async def run_bounded_discovery(
         max_queries_override=MAX_SEARCH_COMBINATIONS,
         max_api_attempts_override=MAX_TAVILY_ATTEMPTS,
         max_search_combinations=MAX_SEARCH_COMBINATIONS,
-        budget_reserver=budget_store.reserve if budget_store is not None else None,
+        budget_reserver=(
+            budget_store.reserve_general if budget_store is not None else None
+        ),
         budget_exhauster=budget_store.exhaust if budget_store is not None else None,
     )
 
