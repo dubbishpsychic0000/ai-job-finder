@@ -7,6 +7,7 @@ import pytest
 
 from app.agents.decision_agent import DecisionAgent
 from app.config import CandidateProfile, Preferences
+from app.models import utcnow
 
 
 class _FakeLLM:
@@ -32,13 +33,18 @@ def _job(db, status="new", country="France"):
         source="static_files", external_id="dp1", dedup_key="hash:policy1",
         title="Ingénieur VRD", company_id=company.id, location="Lyon",
         country=country, description="road works",
+        url="https://boards.greenhouse.io/example/jobs/1",
         posted_at=datetime.now(timezone.utc) - timedelta(days=2),
         contact_email="jobs@colas.example", status=status,
         source_type="ats",
         entity_type="INDIVIDUAL_VACANCY",
         entity_state="VACANCY_VERIFIED",
-        entity_reason_code="structured_official_ats_record",
+        entity_reason_code="matching_public_ats_posting_record",
         entity_evidence_url="https://boards.greenhouse.io/example/jobs/1",
+        verification_status="verified",
+        last_verified_at=utcnow(),
+        application_method="COMPANY_PORTAL",
+        application_url="https://boards.greenhouse.io/example/jobs/1",
     )
     db.add(job)
     db.flush()

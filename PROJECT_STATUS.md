@@ -875,3 +875,57 @@ ledgers; production-database writes, Gmail access, applications, drafts, sent
 email, and WhatsApp messages were all zero. Ephemeral database writes were
 reported as enabled for local discovery state. Outbound limits remain
 unchanged at 10/day; the confirmed MEGEC application was not retried.
+
+## Phase 2.5 evidence-backed vacancy verification
+
+The sanitized report for discovery-only run
+[38531637992](https://github.com/dubbishpsychic0000/ai-job-finder/actions/runs/38531637992)
+shows 5 `VACANCY_UNVERIFIED` candidates, 16 `RESEARCH_REQUIRED` records, and
+2 rejected non-vacancies; it establishes no verified vacancies. Code-path
+inspection confirms the primary missing evidence: Tavily results retained
+search snippets and no detail-page request was made, so the 23 new records
+had no source-backed posting dates. The old classifier could trust some
+structured-looking ATS records without checking current posting status, and
+URL-derived employer slugs were not independent employer evidence. It also
+classified a salary/reference result as a possible vacancy. These facts
+explain the absence of verification; they do not establish that the five
+unverified leads are genuine or still open. The deleted internal log leaves
+no further production exception hypothesis to confirm.
+
+The local implementation adds conservative public detail verification for
+exact Greenhouse and SmartRecruiters posting URLs. It checks the stable posting
+ID, employer, title, location, meaningful description, the currently
+published ATS record, and an ATS-hosted application route. HTTP 200, URL
+shape, search wording, collection time, or a query term do not prove an open
+job, posting date, internship, PFE, or candidate fit. Explicit closed status
+or elapsed source-reported closing date is separate from posting-date
+confidence. Unknown, unsupported, inaccessible, ambiguous, and expired
+records remain blocked with evidence timestamps, URLs, and stable reason
+codes. Generic category/careers/reference/discussion results remain leads or
+are rejected as non-vacancies. Detail checks are capped at 12 per run. Only
+Greenhouse and SmartRecruiters have source-specific verification adapters so
+far; every other ATS and unsupported page type remains explicitly unverified
+until a similarly auditable adapter or manual research is available.
+
+Previously stored ATS leads are rechecked when rediscovered, so a
+`verification_required` record can return to normal analysis only after fresh
+evidence confirms it. Candidate eligibility analysis now stops before
+matching/scoring when the vacancy proof tuple is absent. Application selection
+and the send-time gate both require a recent verified individual vacancy;
+send-time evidence must be fresh, match the stored title/employer/location/
+description, and confirm the same ATS application route. Unverified pages do
+not contribute confirmed opportunity types or qualification evidence to the
+sanitized report.
+
+The sanitized discovery-only report uses schema version 3 and separates
+detail checks, reused detail evidence, open/closed/unknown/unverified outcomes,
+source-level reason codes, and existing leads reverified from genuinely new
+records. Its existing 12-combination/8-provider-attempt caps, durable Tavily
+reservation boundary, UTC-day budget accounting, BTP reserve, and 10/day
+outbound limit are unchanged. The full suite passed **502 tests, 1 skipped**;
+Ruff passed on changed Python files; Python compilation and `git diff --check`
+passed. Repository-wide Ruff still reports 25 findings in untouched files.
+At this point, the implementation has not dispatched discovery, written
+production candidate/application state, created drafts, sent email or
+WhatsApp, or reprocessed the confirmed MEGEC application. Publication/CI and
+any bounded follow-up evaluation remain pending.

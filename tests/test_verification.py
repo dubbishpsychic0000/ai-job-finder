@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import asyncio
 from datetime import datetime, timedelta, timezone
+from types import SimpleNamespace
 
 from sqlalchemy import select
 
@@ -79,14 +80,18 @@ def _job(db, status="analyzed"):
     job = models.Job(
         source="static_files", external_id="v5", dedup_key="hash:verify5", title="Technicien VRD",
         company_id=company.id, location="Lyon, France", country="France",
-        description="road construction", url="https://example.com/j", status=status,
+        description="road construction", url="https://boards.greenhouse.io/colas/jobs/1", status=status,
         contact_email="jobs@colas.example",
         posted_at=datetime.now(timezone.utc) - timedelta(days=2),
         source_type="ats",
         entity_type="INDIVIDUAL_VACANCY",
         entity_state="VACANCY_VERIFIED",
-        entity_reason_code="structured_official_ats_record",
-        entity_evidence_url="https://boards.greenhouse.io/example/jobs/1",
+        entity_reason_code="matching_public_ats_posting_record",
+        entity_evidence_url="https://boards.greenhouse.io/colas/jobs/1",
+        verification_status="verified",
+        last_verified_at=datetime.now(timezone.utc),
+        application_method="COMPANY_PORTAL",
+        application_url="https://boards.greenhouse.io/colas/jobs/1",
     )
     db.add(job)
     db.flush()
@@ -99,6 +104,22 @@ def _decision(db, job):
     db.add(d)
     db.flush()
     return d
+
+
+def _live_evidence(job, **updates):
+    values = {
+        "outcome": "OPEN",
+        "reason_code": "matching_public_ats_posting_record",
+        "evidence_url": job.url,
+        "observed_at": datetime.now(timezone.utc),
+        "title": job.title,
+        "employer": job.company.name,
+        "location": job.location,
+        "description": job.description,
+        "application_url": job.application_url,
+    }
+    values.update(updates)
+    return SimpleNamespace(**values)
 
 
 def _engine(db, config, profile, settings, verify_fn):
@@ -124,8 +145,46 @@ def test_email_blocked_when_posting_not_live(db, config, profile, settings):
 def test_email_proceeds_when_posting_live(db, config, profile, settings):
     job = _job(db)
     decision = _decision(db, job)
-    result = asyncio.run(_engine(db, config, profile, settings, lambda url: True).run(
+    result = asyncio.run(_engine(
+        db, config, profile, settings, lambda _job: _live_evidence(job),
+    ).run(
         job, decision, "APPLY", job.contact_email, "fr"))
     assert result["status"] == "dry_run"
     assert job.verification_status == "verified"
     assert job.last_verified_at is not None
+
+
+def test_email_recheck_rejects_changed_ats_record(db, config, profile, settings):
+    job = _job(db)
+    decision = _decision(db, job)
+    result = asyncio.run(_engine(
+        db,
+        config,
+        profile,
+        settings,
+        lambda _job: _live_evidence(job, title="Different Civil Engineer Role"),
+    ).run(job, decision, "APPLY", job.contact_email, "fr"))
+
+    assert result["status"] == "blocked"
+    assert job.entity_state == "VACANCY_STATUS_UNKNOWN"
+    assert job.entity_reason_code == "current_ats_record_changed"
+
+
+def test_email_recheck_persists_explicit_closed_status(db, config, profile, settings):
+    job = _job(db)
+    decision = _decision(db, job)
+    result = asyncio.run(_engine(
+        db,
+        config,
+        profile,
+        settings,
+        lambda _job: _live_evidence(
+            job,
+            outcome="CLOSED",
+            reason_code="ats_reports_closed_status",
+        ),
+    ).run(job, decision, "APPLY", job.contact_email, "fr"))
+
+    assert result["status"] == "blocked"
+    assert job.verification_status == "closed"
+    assert job.entity_state == "VACANCY_CLOSED"

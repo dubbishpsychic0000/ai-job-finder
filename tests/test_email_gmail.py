@@ -36,14 +36,19 @@ def _job(db, title="Technicien VRD", email="jobs@colas.example", posted_days_ago
     job = models.Job(
         source="static_files", external_id="g1", dedup_key="hash:gmail1", title=title,
         company_id=company.id, location="Lyon, France", country="France",
-        description="road construction VRD", url="https://example.com/j",
+        description="road construction VRD",
+        url="https://boards.greenhouse.io/example/jobs/1",
         posted_at=datetime.now(timezone.utc) - timedelta(days=posted_days_ago),
         contact_email=email, status="analyzed",
         source_type="ats",
         entity_type="INDIVIDUAL_VACANCY",
         entity_state="VACANCY_VERIFIED",
-        entity_reason_code="structured_official_ats_record",
+        entity_reason_code="matching_public_ats_posting_record",
         entity_evidence_url="https://boards.greenhouse.io/example/jobs/1",
+        verification_status="verified",
+        last_verified_at=datetime.now(timezone.utc),
+        application_method="COMPANY_PORTAL",
+        application_url="https://boards.greenhouse.io/example/jobs/1",
     )
     db.add(job)
     db.flush()
@@ -64,7 +69,22 @@ def _settings(settings, **kw):
 
 
 def _engine(db, config, profile, settings, communicator):
-    return ApplicationEngine(db, config, settings, profile, communicator)
+    def verify(job):
+        return SimpleNamespace(
+            outcome="OPEN",
+            reason_code="matching_public_ats_posting_record",
+            evidence_url=job.url,
+            observed_at=datetime.now(timezone.utc),
+            title=job.title,
+            employer=job.company.name,
+            location=job.location,
+            description=job.description,
+            application_url=job.application_url,
+        )
+
+    return ApplicationEngine(
+        db, config, settings, profile, communicator, verify_url_fn=verify,
+    )
 
 
 def _real_communicator(profile):
@@ -100,6 +120,23 @@ def test_application_engine_blocks_unverified_non_spontaneous_vacancy(db, config
         "sent": False,
         "status": "blocked",
         "reason": "vacancy_not_verified",
+    }
+    assert db.query(models.Application).all() == []
+
+
+def test_application_engine_requires_live_reverification_for_verified_vacancy(
+    db, config, profile, settings,
+):
+    job = _job(db)
+    decision = _decision(db, job)
+    result = asyncio.run(ApplicationEngine(
+        db, config, settings, profile, _draft_communicator("test"),
+    ).run(job, decision, "APPLY", job.contact_email, "en"))
+
+    assert result == {
+        "sent": False,
+        "status": "blocked",
+        "reason": "vacancy_reverification_unavailable",
     }
     assert db.query(models.Application).all() == []
 
@@ -836,15 +873,19 @@ def test_distinct_companies_can_each_receive_a_draft(
         location="Lyon, France",
         country="France",
         description="civil engineering",
-        url="https://other.example/jobs/1",
+        url="https://boards.greenhouse.io/example/jobs/2",
         posted_at=datetime.now(timezone.utc) - timedelta(days=2),
         contact_email="jobs@other.example",
         status="analyzed",
         source_type="ats",
         entity_type="INDIVIDUAL_VACANCY",
         entity_state="VACANCY_VERIFIED",
-        entity_reason_code="structured_official_ats_record",
+        entity_reason_code="matching_public_ats_posting_record",
         entity_evidence_url="https://boards.greenhouse.io/example/jobs/2",
+        verification_status="verified",
+        last_verified_at=datetime.now(timezone.utc),
+        application_method="COMPANY_PORTAL",
+        application_url="https://boards.greenhouse.io/example/jobs/2",
     )
     db.add(second_job)
     db.flush()

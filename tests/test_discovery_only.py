@@ -377,6 +377,7 @@ def test_discovery_report_is_sanitized_and_distinguishes_cached_new_listing():
     serialized = json.dumps(output, ensure_ascii=False)
     opportunity = output["opportunities"][0]
 
+    assert output["schema_version"] == 3
     assert output["counts"]["unique_new_opportunities"] == 0
     assert output["counts"]["unique_new_candidate_vacancies"] == 1
     assert output["counts"]["unique_new_discovery_records"] == 1
@@ -393,7 +394,7 @@ def test_discovery_report_is_sanitized_and_distinguishes_cached_new_listing():
     assert opportunity["entity_evidence_url"] == "https://jobs.example.org/listing/42"
     assert opportunity["eligibility"] == "NOT_EVALUATED"
     assert opportunity["listing_url"] == "https://jobs.example.org/listing/42"
-    assert "AutoCAD" in serialized
+    assert "AutoCAD" not in serialized
     assert "+212 600 000 000" not in serialized
     assert "hr@employer.example" not in serialized
     assert "123 456 789" not in serialized

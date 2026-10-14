@@ -19,7 +19,11 @@ from app.agents.llm import LLMProvider
 from app.agents.mobility_agent import MobilityAgent
 from app.config import AgentConfig, CandidateProfile, Preferences
 from app.discovery.email_verification import EmailVerificationService
-from app.discovery.opportunity_details import classify_opportunity, detect_application_method
+from app.discovery.opportunity_details import (
+    classify_opportunity,
+    detect_application_method,
+    is_verified_individual_vacancy,
+)
 from app.scoring.engine import compute_scores
 
 logger = logging.getLogger(__name__)
@@ -29,6 +33,7 @@ logger = logging.getLogger(__name__)
 class AnalysisReport:
     analyzed: list[dict] = field(default_factory=list)
     blocked_by_rules: int = 0
+    blocked_unverified: int = 0
     errors: list[str] = field(default_factory=list)
 
 
@@ -39,6 +44,16 @@ async def analyze_job(session: Session, job, analyzer: JobAnalyzer, matcher: Can
     """Analyze one job. Returns summary dict (or None on failure)."""
     if job.opportunity_type == "SPONTANEOUS_APPLICATION":
         job.status = "outreach_only"
+        return None
+    if not is_verified_individual_vacancy(job):
+        job.status = "verification_required"
+        mem.store.record_event(
+            session,
+            "analysis",
+            f"#{job.id} held before eligibility analysis: vacancy evidence is not verified",
+            "warn",
+            {"job_id": job.id, "reason_code": "vacancy_not_verified"},
+        )
         return None
     existing = mem.store.get_analysis(session, job.id)
     if not existing:
@@ -115,6 +130,8 @@ async def run_analysis(session: Session, config: AgentConfig, profile: Candidate
             )
             if summary:
                 report.analyzed.append(summary)
+            elif job.status == "verification_required":
+                report.blocked_unverified += 1
         except Exception as exc:
             logger.exception("Analysis failed for job #%s", job.id)
             report.errors.append(f"#{job.id}: {exc}")

@@ -13,6 +13,7 @@ from pathlib import Path
 from urllib.parse import urlparse, urlunparse
 
 from dotenv import load_dotenv
+from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
 from app import memory as mem
@@ -30,12 +31,17 @@ from app.discovery.email_verification import EmailVerificationService
 from app.discovery.opportunity_details import (
     classify_entity,
     classify_opportunity,
-    detect_application_method,
+    is_verified_individual_vacancy,
+)
+from app.discovery.vacancy_verification import (
+    MAX_DETAIL_VERIFICATIONS_PER_RUN,
+    VacancyDetailVerifier,
+    supported_ats_detail,
 )
 from app.discovery.verification import freshness_label
 from app.discovery.vocabulary import CandidateVocabulary
 from app.discovery.website_researcher import host_domain, normalize_url
-from app.models import Company
+from app.models import Company, Job
 from app.normalization import normalize
 
 logger = logging.getLogger(__name__)
@@ -597,6 +603,55 @@ def _remaining_tavily_requests(connector) -> int:
     return remaining
 
 
+def _apply_vacancy_evidence(session: Session, job: Job, evidence) -> None:
+    job.entity_type = "INDIVIDUAL_VACANCY"
+    job.entity_evidence_url = evidence.evidence_url
+    job.entity_reason_code = evidence.reason_code
+    job.last_verified_at = evidence.observed_at
+    if evidence.title:
+        job.title = evidence.title
+    if evidence.employer:
+        company = mem.store.get_or_create_company(
+            session, evidence.employer, country=evidence.country,
+        )
+        job.company_id = company.id
+    if evidence.location:
+        job.location = evidence.location
+    if evidence.country:
+        job.country = evidence.country
+    if evidence.description:
+        job.description = evidence.description
+    job.posted_at = evidence.posted_at
+    job.posted_at_source = evidence.posted_at_source
+    job.posted_at_evidence_url = (
+        evidence.evidence_url if evidence.posted_at is not None else ""
+    )
+    job.closing_at = evidence.closing_at
+    if evidence.outcome == "OPEN":
+        job.country = evidence.country or job.country or "UNKNOWN"
+        job.freshness = freshness_label(evidence.posted_at)
+        job.opportunity_type = classify_opportunity(
+            evidence.title, evidence.description, job.source_type,
+        )
+        job.application_method = "COMPANY_PORTAL"
+        job.application_url = evidence.application_url
+        job.verification_status = "verified"
+        job.entity_state = "VACANCY_VERIFIED"
+        if job.status == "verification_required":
+            job.status = "new"
+    else:
+        job.opportunity_type = "UNKNOWN"
+        job.entity_state = (
+            "VACANCY_CLOSED" if evidence.outcome == "CLOSED"
+            else "VACANCY_STATUS_UNKNOWN"
+        )
+        job.verification_status = (
+            "closed" if evidence.outcome == "CLOSED" else "unverified"
+        )
+        job.application_method = "UNKNOWN"
+        job.application_url = ""
+
+
 def _cap_scheduled_queries(
     scheduled: list[list[dict]],
     limit: int,
@@ -759,6 +814,50 @@ async def run_discovery(session: Session, config: AgentConfig, prefs: Preference
             scheduled_queries, max_search_combinations, plan,
         )
     attempted_combinations: set[tuple[str, str, str]] = set()
+    verify_vacancy_details = bool(
+        discovery_cfg.get("verify_vacancy_details", False),
+    )
+    detail_verifier = VacancyDetailVerifier() if verify_vacancy_details else None
+    detail_verifications = 0
+    detail_evidence_cache = {}
+    reverified_job_ids: set[int] = set()
+
+    def verify_detail(url: str, source_report: dict):
+        nonlocal detail_verifications
+        if url in detail_evidence_cache:
+            source_report["detail_verifications_reused"] += 1
+            return detail_evidence_cache[url]
+        if detail_verifier is None or detail_verifications >= MAX_DETAIL_VERIFICATIONS_PER_RUN:
+            return None
+        detail_verifications += 1
+        source_report["detail_verification_attempts"] += 1
+        evidence = detail_verifier.verify(url)
+        detail_evidence_cache[url] = evidence
+        return evidence
+
+    def record_verification(source_report: dict, evidence, *, existing=False) -> None:
+        reason = evidence.reason_code
+        reasons = source_report["verification_reason_codes"]
+        reasons[reason] = reasons.get(reason, 0) + 1
+        if existing:
+            source_report["existing_candidates_reverified"] += 1
+        else:
+            source_report["verification_candidates"] += 1
+        outcome_field = {
+            "OPEN": "verified",
+            "CLOSED": "closed",
+            "UNKNOWN": "unknown",
+        }.get(evidence.outcome, "unknown")
+        field = (
+            f"existing_candidates_{outcome_field}" if existing
+            else {
+                "verified": "verified_individual_vacancies",
+                "closed": "closed_vacancies",
+                "unknown": "unknown_vacancy_status",
+            }[outcome_field]
+        )
+        source_report[field] += 1
+
     for source_index, (source_cfg, connector) in enumerate(connectors):
         source_name = source_cfg.get("name", connector.name)
         inapplicable_countries: dict[str, int] = {}
@@ -789,6 +888,20 @@ async def run_discovery(session: Session, config: AgentConfig, prefs: Preference
             "duplicates": 0,
             "duplicate_reasons": {"exact": 0, "probable": 0, "same_run": 0},
             "new": 0,
+            "verification_candidates": 0,
+            "verified_individual_vacancies": 0,
+            "unverified_vacancy_candidates": 0,
+            "closed_vacancies": 0,
+            "unknown_vacancy_status": 0,
+            "research_leads": 0,
+            "rejected_non_vacancy": 0,
+            "existing_candidates_reverified": 0,
+            "existing_candidates_verified": 0,
+            "existing_candidates_closed": 0,
+            "existing_candidates_unknown": 0,
+            "detail_verifications_reused": 0,
+            "detail_verification_attempts": 0,
+            "verification_reason_codes": {},
             "queries_cached": 0,
             "queries_api": 0,
             "queries_empty": 0,
@@ -836,6 +949,7 @@ async def run_discovery(session: Session, config: AgentConfig, prefs: Preference
             combo, results, source_name, source_report, _connector=connector,
         ) -> int:
             """Normalize + dedup + store one combo's results; returns jobs found."""
+            nonlocal detail_verifications
             origin = getattr(_connector, "last_origin", "")
             if origin == "api":
                 source_report["fetched_api_results"] += len(results)
@@ -865,6 +979,33 @@ async def run_discovery(session: Session, config: AgentConfig, prefs: Preference
                     report.duplicates += 1
                     source_report["duplicates"] += 1
                     source_report["duplicate_reasons"][dup[idx]] += 1
+                    entity_type, _entity_state, _entity_reason = classify_entity(opp)
+                    if entity_type == "INDIVIDUAL_VACANCY":
+                        coordinates = supported_ats_detail(opp.url)
+                        if coordinates is not None:
+                            clauses = [Job.dedup_key == opp.dedup_key()]
+                            canonical_id = opp.canonical_job_id()
+                            if canonical_id:
+                                clauses.append(Job.canonical_job_id == canonical_id)
+                            if opp.url:
+                                clauses.append(Job.url == opp.url)
+                            existing_job = session.execute(
+                                select(Job).where(or_(*clauses)).limit(1),
+                            ).scalar_one_or_none()
+                            if (
+                                existing_job is not None
+                                and existing_job.id not in reverified_job_ids
+                                and not is_verified_individual_vacancy(existing_job)
+                            ):
+                                evidence = verify_detail(opp.url, source_report)
+                                if evidence is not None:
+                                    reverified_job_ids.add(existing_job.id)
+                                    _apply_vacancy_evidence(
+                                        session, existing_job, evidence,
+                                    )
+                                    record_verification(
+                                        source_report, evidence, existing=True,
+                                    )
                     continue
                 canonical = opp.canonical_job_id()
                 if canonical in seen_canonical:  # same vacancy from another source this run
@@ -874,12 +1015,83 @@ async def run_discovery(session: Session, config: AgentConfig, prefs: Preference
                     continue
                 seen_canonical.add(canonical)
                 src_type = opp.effective_source_type()
+                entity_type, entity_state, entity_reason = classify_entity(opp)
+                observed_at = None
+                verified_route = ""
+                evidence = None
+                if entity_type == "INDIVIDUAL_VACANCY":
+                    ats_detail = supported_ats_detail(opp.url)
+                    if verify_vacancy_details and ats_detail is not None:
+                        evidence = verify_detail(opp.url, source_report)
+                    else:
+                        evidence = None
+                    if evidence is not None:
+                        observed_at = evidence.observed_at
+                        entity_reason = evidence.reason_code
+                        if evidence.title:
+                            opp.title = evidence.title
+                        if evidence.employer:
+                            opp.company = evidence.employer
+                        if evidence.location:
+                            opp.location = evidence.location
+                        if evidence.country:
+                            opp.country = evidence.country
+                        if evidence.description:
+                            opp.description = evidence.description
+                        opp.posted_at = evidence.posted_at
+                        opp.posted_at_source = evidence.posted_at_source
+                        opp.posted_at_evidence_url = (
+                            evidence.evidence_url
+                            if evidence.posted_at is not None else ""
+                        )
+                        opp.closing_at = evidence.closing_at
+                        if evidence.outcome == "OPEN":
+                            entity_state = "VACANCY_VERIFIED"
+                            opp.country = evidence.country or opp.country or "UNKNOWN"
+                            opp.verification_status = "verified"
+                            verified_route = evidence.application_url
+                        elif evidence.outcome == "CLOSED":
+                            entity_state = "VACANCY_CLOSED"
+                            opp.verification_status = "closed"
+                            opp.closing_at = evidence.closing_at
+                        else:
+                            entity_state = "VACANCY_STATUS_UNKNOWN"
+                            opp.verification_status = "unverified"
+                    else:
+                        entity_state = "VACANCY_UNVERIFIED"
+                        entity_reason = (
+                            "detail_verification_disabled"
+                            if not verify_vacancy_details
+                            else "detail_verification_limit_reached"
+                            if ats_detail is not None
+                            else "unsupported_detail_verification_source"
+                        )
+                        opp.verification_status = "unverified"
+                    if evidence is not None:
+                        record_verification(source_report, evidence)
+                    elif entity_state == "VACANCY_UNVERIFIED":
+                        source_report["unverified_vacancy_candidates"] += 1
+                        reasons = source_report["verification_reason_codes"]
+                        reasons[entity_reason] = reasons.get(entity_reason, 0) + 1
+                    elif entity_state == "VACANCY_STATUS_UNKNOWN":
+                        source_report["unknown_vacancy_status"] += 1
+                elif entity_state == "RESEARCH_REQUIRED":
+                    source_report["research_leads"] += 1
+                elif entity_state == "REJECTED_NON_VACANCY":
+                    source_report["rejected_non_vacancy"] += 1
+                if (
+                    src_type == "ats"
+                    and opp.external_id == opp.url
+                    and not verified_route
+                    and not (evidence and evidence.employer)
+                ):
+                    # A slug parsed from a search-result URL is not employer evidence.
+                    opp.company = ""
                 qmap = discovery_cfg.get("source_quality") or {}
                 quality = int(qmap.get(src_type, opp.effective_quality())) if qmap else opp.effective_quality()
                 company, company_urls = _upsert_opportunity_company(
                     session, opp, src_type
                 )
-                entity_type, entity_state, entity_reason = classify_entity(opp)
                 raw_channel = (opp.raw or {}).get("channel", "")
                 kind = "RECRUITMENT_POST" if src_type == "recruitment_post" else "JOB"
                 if src_type in {"company_career", "ats"}:
@@ -927,14 +1139,20 @@ async def run_discovery(session: Session, config: AgentConfig, prefs: Preference
                     "relocation_signal": opp.relocation_signal,
                     "work_permit_signal": opp.work_permit_signal,
                     "verification_status": opp.verification_status,
+                    "last_verified_at": observed_at,
                     "search_query": combo["query"],
                     "search_language": combo.get("lang", ""),
                     "search_country": combo.get("country", opp.country),
                     "canonical_job_id": canonical,
                     "freshness": freshness_label(opp.posted_at),
-                    "opportunity_type": classify_opportunity(opp.title, opp.description, src_type),
-                    "application_method": "UNKNOWN",
-                    "application_url": "",
+                    "opportunity_type": (
+                        classify_opportunity(opp.title, opp.description, src_type)
+                        if entity_state == "VACANCY_VERIFIED" else "UNKNOWN"
+                    ),
+                    "application_method": (
+                        "COMPANY_PORTAL" if verified_route else "UNKNOWN"
+                    ),
+                    "application_url": verified_route,
                     "entity_type": entity_type,
                     "entity_state": entity_state,
                     "entity_reason_code": entity_reason,
@@ -942,6 +1160,7 @@ async def run_discovery(session: Session, config: AgentConfig, prefs: Preference
                 }
                 job, created = mem.store.upsert_job(session, job_data)
                 if created:
+                    job.last_verified_at = observed_at
                     if (
                         researcher is not None
                         and src_type == "company_career"
@@ -956,10 +1175,12 @@ async def run_discovery(session: Session, config: AgentConfig, prefs: Preference
                     verification = EmailVerificationService(session).verify_job(job, source_type=src_type)
                     # Never copy an unverified string into a job as a sendable recipient.
                     job.contact_email = verification.email if verification.verified else ""
-                    method, application_url = detect_application_method(
-                        text=f"{job.title}\n{job.description}", url=job.url, source_type=src_type,
-                        has_verified_email=verification.verified)
-                    job.application_method, job.application_url = method, application_url
+                    if entity_state == "VACANCY_VERIFIED" and verified_route:
+                        job.application_method = "COMPANY_PORTAL"
+                        job.application_url = verified_route
+                    else:
+                        job.application_method = "UNKNOWN"
+                        job.application_url = ""
                     mem.store.enqueue_notification(session, "JOB_FOUND", job_id=job.id,
                                                    payload={"opportunity_id": mem.store.opportunity_id(job)})
                     report.new_opportunity_origins[job.id] = origin or "unknown"

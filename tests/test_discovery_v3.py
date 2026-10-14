@@ -13,7 +13,7 @@ from app.memory.store import (
     get_or_create_company,
     opportunity_id,
 )
-from app.models import Decision, Job
+from app.models import Decision, Job, utcnow
 from app.notifications.service import NotificationService
 from app.workflows.action import pending_actions
 
@@ -122,8 +122,8 @@ def test_entity_classification_distinguishes_vacancies_from_research_pages():
     )
     assert classify_entity(official_record) == (
         "INDIVIDUAL_VACANCY",
-        "VACANCY_VERIFIED",
-        "structured_official_ats_record",
+        "VACANCY_UNVERIFIED",
+        "ats_detail_requires_live_evidence",
     )
 
     official_record.company = "example"
@@ -147,10 +147,17 @@ def test_unverified_entities_are_excluded_from_pending_actions(db):
         url="https://boards.greenhouse.io/example/jobs/123",
         status="analyzed",
         source_type="ats",
+        company_id=get_or_create_company(db, "Example Construction").id,
+        location="Casablanca, Morocco",
+        description="Design and supervise civil engineering projects.",
+        verification_status="verified",
+        application_method="COMPANY_PORTAL",
+        application_url="https://boards.greenhouse.io/example/jobs/123",
         entity_type="INDIVIDUAL_VACANCY",
         entity_state="VACANCY_VERIFIED",
-        entity_reason_code="structured_official_ats_record",
+        entity_reason_code="matching_public_ats_posting_record",
         entity_evidence_url="https://boards.greenhouse.io/example/jobs/123",
+        last_verified_at=utcnow(),
     )
     db.add_all([unverified, verified])
     db.flush()

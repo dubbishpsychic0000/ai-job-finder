@@ -32,7 +32,6 @@ email:
   max_daily_outbound: 10
   require_verifiable_recipient: true
   require_claims_allowedlist: true          # invention check against candidate profile
-  verify_url_before_send: false             # §20 — re-fetch the posting URL before emailing (live)
 
 discovery:
   full_text_description_max_chars: 8000
@@ -61,6 +60,7 @@ discovery:
   website_research_max_pages: 12
   website_research_delay_seconds: 0.25
   website_research_refresh_days: 7
+  verify_vacancy_details: true      # public ATS detail verification before any vacancy is trusted
   company_universe_discovery: true
   company_universe_sources:
     - kind: osm

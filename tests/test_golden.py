@@ -47,26 +47,11 @@ def test_golden_decisions(db, config, prefs, profile):
     _discover(db, config, prefs)
     _refresh_demo_posting_dates(db)
     by_job = _analyze(db, config, prefs, profile)
+    jobs = db.execute(select(models.Job)).scalars().all()
 
-    def dec(title, company=""):
-        for job, d in by_job.items():
-            if job.title == title and (not company or (job.company and job.company.name == company)):
-                return d["decision"]
-        raise AssertionError(f"job not found: {title} / {company}")
-
-    assert dec("Technicien Génie Civil", "Bouygues Construction") == "HOLD", (
-        "a specific but unverified listing must not be recommended for application"
-    )
-    assert dec("Civil Engineering Technician", "EllisDon") == "HOLD", (
-        "a specific but unverified listing must not be recommended for application"
-    )
-    assert dec("Técnico de Obras Civiles") == "IGNORE", "es-only role should IGNORE"
-    assert dec("Técnico de Engenharia Civil") == "IGNORE", "pt-only role should IGNORE"
-    assert dec("Technicien VRD", "Colas") == "HOLD", (
-        "an overseas role without explicit sponsorship evidence must remain unqualified"
-    )
-    # the senior (12y) VRD posting must be blocked by the experience hard rule
-    assert dec("Technicien VRD", "Eiffage") == "IGNORE"
+    assert by_job == {}, "unverified listings must not enter eligibility analysis"
+    assert jobs
+    assert all(job.status == "verification_required" for job in jobs)
 
 
 def test_dedup_idempotent(db, config, prefs):

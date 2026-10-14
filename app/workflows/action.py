@@ -60,9 +60,8 @@ async def run_actions(session: Session, config: AgentConfig, settings: RunnerSet
                       immigration_agent=None) -> ActionReport:
     report = ActionReport()
     communicator = CommunicationAgent(llm, profile)
-    # §20 — re-verify a posting is still live before emailing (opt-in via config;
-    # kept OFF by default so tests and dry-runs stay offline).
-    verify_fn = _verify_before_send(config) if (config.email or {}).get("verify_url_before_send", False) else None
+    # Reconfirm the structured ATS posting before any application communication.
+    verify_fn = _verify_before_send(config)
     engine = ApplicationEngine(session, config, settings, profile, communicator,
                                verify_url_fn=verify_fn)
     jobs = pending_actions(session)
@@ -131,17 +130,12 @@ async def run_actions(session: Session, config: AgentConfig, settings: RunnerSet
 
 
 def _verify_before_send(config: AgentConfig):
-    """Live-page checker for §20 before generating an employer email."""
+    """Recheck structured ATS evidence; page accessibility alone is insufficient."""
 
-    def _check(url: str) -> bool:
-        import requests
+    def _check(job):
+        from app.discovery.vacancy_verification import VacancyDetailVerifier
 
-        try:
-            resp = requests.get(url, headers={"User-Agent": "WorldwideCareerAgent/0.1 (verifier)"},
-                                timeout=20, allow_redirects=True)
-            return resp.ok and bool(resp.text.strip())
-        except Exception:
-            return False
+        return VacancyDetailVerifier().verify(job.url)
 
     return _check
 

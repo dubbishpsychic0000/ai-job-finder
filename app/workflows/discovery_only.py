@@ -7,9 +7,11 @@ from datetime import datetime, timezone
 from urllib.parse import urlsplit, urlunsplit
 
 from app.config import AgentConfig, CandidateProfile, Preferences, load_yaml
+from app.discovery.opportunity_details import is_verified_individual_vacancy
+from app.discovery.vacancy_verification import MAX_DETAIL_VERIFICATIONS_PER_RUN
 from app.workflows.discovery import DEFAULT_SOURCES_PATH, DiscoveryReport, run_discovery
 
-REPORT_SCHEMA_VERSION = 2
+REPORT_SCHEMA_VERSION = 3
 MAX_SEARCH_COMBINATIONS = 12
 MAX_TAVILY_ATTEMPTS = 8
 
@@ -50,6 +52,7 @@ async def run_bounded_discovery(
         "vocab_llm",
     ):
         discovery[key] = False
+    discovery["verify_vacancy_details"] = True
     bounded_config = config.model_copy(update={"discovery": discovery})
     if phase_callback is not None:
         phase_callback("discovery_execution")
@@ -152,6 +155,7 @@ def blocked_report(
         "limits": {
             "search_combinations": MAX_SEARCH_COMBINATIONS,
             "tavily_api_attempts": MAX_TAVILY_ATTEMPTS,
+            "vacancy_detail_verifications": MAX_DETAIL_VERIFICATIONS_PER_RUN,
         },
         "counts": {
             "external_results_fetched": 0,
@@ -162,6 +166,8 @@ def blocked_report(
             "unique_new_discovery_records": 0,
             "individual_vacancies_verified": 0,
             "individual_vacancies_unverified": 0,
+            "individual_vacancies_closed_or_expired": 0,
+            "individual_vacancies_status_unknown": 0,
             "research_required": 0,
             "rejected_non_vacancy": 0,
             "requiring_eligibility_assessment": 0,
@@ -361,6 +367,44 @@ def build_sanitized_report(
                 for key, value in (item.get("duplicate_reasons") or {}).items()
             },
             "new": int(item.get("new", 0)),
+            "detail_verification_attempts": int(
+                item.get("detail_verification_attempts", 0),
+            ),
+            "detail_verifications_reused": int(
+                item.get("detail_verifications_reused", 0),
+            ),
+            "verification_candidates": int(item.get("verification_candidates", 0)),
+            "verified_individual_vacancies": int(
+                item.get("verified_individual_vacancies", 0),
+            ),
+            "unverified_vacancy_candidates": int(
+                item.get("unverified_vacancy_candidates", 0),
+            ),
+            "closed_vacancies": int(item.get("closed_vacancies", 0)),
+            "unknown_vacancy_status": int(
+                item.get("unknown_vacancy_status", 0),
+            ),
+            "research_leads": int(item.get("research_leads", 0)),
+            "rejected_non_vacancy": int(
+                item.get("rejected_non_vacancy", 0),
+            ),
+            "existing_candidates_reverified": int(
+                item.get("existing_candidates_reverified", 0),
+            ),
+            "existing_candidates_verified": int(
+                item.get("existing_candidates_verified", 0),
+            ),
+            "existing_candidates_closed": int(
+                item.get("existing_candidates_closed", 0),
+            ),
+            "existing_candidates_unknown": int(
+                item.get("existing_candidates_unknown", 0),
+            ),
+            "verification_reason_codes": {
+                str(code): int(count)
+                for code, count in (item.get("verification_reason_codes") or {}).items()
+                if str(code).isalnum() or "_" in str(code)
+            },
             "error_codes": errors,
             "queried_by_country": dict(item.get("queries_by_country") or {}),
             "queried_by_language": dict(item.get("queries_by_language") or {}),
@@ -439,6 +483,20 @@ def build_sanitized_report(
             "duplicates": 0,
             "duplicate_reasons": {},
             "new": 0,
+            "detail_verification_attempts": 0,
+            "detail_verifications_reused": 0,
+            "verification_candidates": 0,
+            "verified_individual_vacancies": 0,
+            "unverified_vacancy_candidates": 0,
+            "closed_vacancies": 0,
+            "unknown_vacancy_status": 0,
+            "research_leads": 0,
+            "rejected_non_vacancy": 0,
+            "verification_reason_codes": {},
+            "existing_candidates_reverified": 0,
+            "existing_candidates_verified": 0,
+            "existing_candidates_closed": 0,
+            "existing_candidates_unknown": 0,
             "error_codes": {},
             "queried_by_country": {},
             "queried_by_language": {},
@@ -458,7 +516,11 @@ def build_sanitized_report(
     opportunities = []
     for job in jobs:
         origin = report.new_opportunity_origins.get(job.id, "unknown")
-        category = _opportunity_type(job)
+        entity_state = _clean_text(
+            getattr(job, "entity_state", "RESEARCH_REQUIRED"), 40,
+        ).upper()
+        verified_vacancy = is_verified_individual_vacancy(job)
+        category = _opportunity_type(job) if verified_vacancy else "UNKNOWN"
         freshness = _freshness(
             job,
             int((config.rules or {}).get("max_days_since_posted", 45)),
@@ -473,18 +535,29 @@ def build_sanitized_report(
         source_counts[source] += 1
         freshness_counts[freshness] += 1
         entity_type = _clean_text(getattr(job, "entity_type", "UNKNOWN"), 40).upper()
-        entity_state = _clean_text(getattr(job, "entity_state", "RESEARCH_REQUIRED"), 40).upper()
         entity_type_counts[entity_type] += 1
         entity_state_counts[entity_state] += 1
         method = _clean_text(job.application_method or "UNKNOWN", 40).upper()
         listing_url = _public_url(job.url)
         route_url = _public_url(job.application_url)
+        observed_at = getattr(job, "last_verified_at", None)
+        verification_outcome = {
+            "VACANCY_VERIFIED": "OPEN",
+            "VACANCY_CLOSED": "CLOSED_OR_EXPIRED",
+            "VACANCY_STATUS_UNKNOWN": "UNKNOWN_OR_UNAVAILABLE",
+            "VACANCY_UNVERIFIED": "UNVERIFIED_CANDIDATE",
+            "RESEARCH_REQUIRED": "RESEARCH_REQUIRED",
+            "REJECTED_NON_VACANCY": "REJECTED_NON_VACANCY",
+        }.get(entity_state, "UNKNOWN_OR_UNAVAILABLE")
         opportunities.append({
             "title": _clean_text(job.title, 180) or "Untitled listing",
             "employer": _clean_text(job.company.name if job.company else "", 120) or None,
             "listing_url": listing_url,
             "country": country,
-            "country_basis": "connector_or_search_location_not_independently_verified",
+            "country_basis": (
+                "verified_ats_detail_location" if verified_vacancy
+                else "connector_or_search_location_not_independently_verified"
+            ),
             "location": _clean_text(job.location, 120),
             "posted_at": (
                 job.posted_at.isoformat()
@@ -521,6 +594,17 @@ def build_sanitized_report(
             "entity_evidence_url": _public_url(
                 getattr(job, "entity_evidence_url", ""),
             ),
+            "vacancy_verification": {
+                "outcome": verification_outcome,
+                "observed_at": observed_at.isoformat() if observed_at else None,
+                "reason_code": _clean_text(
+                    getattr(job, "entity_reason_code", "legacy_record_unverified"),
+                    64,
+                ),
+                "evidence_url": _public_url(
+                    getattr(job, "entity_evidence_url", ""),
+                ),
+            },
             "source": source,
             "source_confidence": job.source_confidence,
             "result_origin": "LIVE_API_RESPONSE" if origin == "api" else (
@@ -529,13 +613,18 @@ def build_sanitized_report(
             "search_language": language,
             "language_basis": "search_query_language_not_verified_listing_language",
             "application_route": {
-                "status": "DETECTED_UNVERIFIED" if method != "UNKNOWN" else "NOT_DETECTED",
+                "status": "VERIFIED" if verified_vacancy else (
+                    "DETECTED_UNVERIFIED" if method != "UNKNOWN" else "NOT_DETECTED"
+                ),
                 "type": method,
-                "verified": False,
+                "verified": verified_vacancy,
                 "url": route_url or (listing_url if method != "UNKNOWN" else ""),
-                "evidence_url": listing_url if method != "UNKNOWN" else "",
+                "evidence_url": listing_url if verified_vacancy or method != "UNKNOWN" else "",
             },
-            "qualification_evidence": _qualification_evidence(job.description or ""),
+            "qualification_evidence": (
+                _qualification_evidence(job.description or "")
+                if verified_vacancy else []
+            ),
             "discovery_relevance": (
                 "Returned by a configured civil-engineering/BTP search; "
                 "candidate fit was not evaluated."
@@ -572,6 +661,13 @@ def build_sanitized_report(
         sum(item["inapplicable_country_queries"].values())
         for item in source_reports
     )
+    existing_verification_updates = {
+        outcome: sum(
+            item[f"existing_candidates_{outcome}"]
+            for item in source_reports
+        )
+        for outcome in ("reverified", "verified", "closed", "unknown")
+    }
     if external_results:
         result_state = "provider_results_received"
     elif provider_results_returned:
@@ -599,6 +695,7 @@ def build_sanitized_report(
         "limits": {
             "search_combinations": MAX_SEARCH_COMBINATIONS,
             "tavily_api_attempts": MAX_TAVILY_ATTEMPTS,
+            "vacancy_detail_verifications": MAX_DETAIL_VERIFICATIONS_PER_RUN,
             "daily_query_limit_setting_unchanged": True,
         },
         "counts": {
@@ -612,6 +709,16 @@ def build_sanitized_report(
             "unique_new_discovery_records": int(report.new_jobs),
             "individual_vacancies_verified": entity_state_counts["VACANCY_VERIFIED"],
             "individual_vacancies_unverified": entity_state_counts["VACANCY_UNVERIFIED"],
+            "individual_vacancies_closed_or_expired": entity_state_counts["VACANCY_CLOSED"],
+            "individual_vacancies_status_unknown": entity_state_counts[
+                "VACANCY_STATUS_UNKNOWN"
+            ],
+            "existing_candidates_reverified": existing_verification_updates[
+                "reverified"
+            ],
+            "existing_candidates_verified": existing_verification_updates["verified"],
+            "existing_candidates_closed": existing_verification_updates["closed"],
+            "existing_candidates_unknown": existing_verification_updates["unknown"],
             "research_required": entity_state_counts["RESEARCH_REQUIRED"],
             "rejected_non_vacancy": entity_state_counts["REJECTED_NON_VACANCY"],
             "requiring_eligibility_assessment": entity_state_counts["VACANCY_VERIFIED"],

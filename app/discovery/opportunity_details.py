@@ -7,6 +7,7 @@ email application route.
 from __future__ import annotations
 
 import re
+from datetime import datetime, timezone
 from urllib.parse import urlsplit
 
 OPPORTUNITY_TYPES = {
@@ -31,6 +32,8 @@ ENTITY_TYPES = {
 ENTITY_STATES = {
     "VACANCY_VERIFIED",
     "VACANCY_UNVERIFIED",
+    "VACANCY_CLOSED",
+    "VACANCY_STATUS_UNKNOWN",
     "RESEARCH_REQUIRED",
     "REJECTED_NON_VACANCY",
 }
@@ -48,13 +51,15 @@ _TYPE_PATTERNS = (
 _NON_VACANCY_PATTERNS = (
     (
         "SALARY_INFORMATION",
-        r"\b(?:salary|salaries|wage|pay)\b.{0,35}\b(?:guide|report|survey|benchmark|by occupation|range by)\b"
-        r"|\b(?:salary|wage) (?:guide|report|survey|calculator|benchmark)\b",
+        r"\b(?:salary|salaries|wage|pay)\b"
+        r"|\b(?:salaire|salaires|rémunération|lohn|salaris)\b",
         "salary_reference",
     ),
     (
         "OCCUPATIONAL_REFERENCE",
-        r"\b(?:occupational outlook|career profile|occupation profile|what does .{1,60} do|career information)\b",
+        r"\b(?:occupational outlook|career profile|occupation profile|"
+        r"what does .{1,60} do|career information)\b"
+        r"|/(?:marketreport|occupation|occupational-outlook|salary|research)/",
         "occupational_reference",
     ),
     (
@@ -105,8 +110,12 @@ def classify_entity(opportunity) -> tuple[str, str, str]:
     """
     title = str(getattr(opportunity, "title", "") or "")
     url = str(getattr(opportunity, "url", "") or "")
+    try:
+        parsed_url = urlsplit(url)
+    except ValueError:
+        return "UNKNOWN", "RESEARCH_REQUIRED", "invalid_listing_url"
     path_parts = [
-        part.casefold() for part in urlsplit(url).path.split("/") if part
+        part.casefold() for part in parsed_url.path.split("/") if part
     ]
     text = f"{title}\n{' '.join(path_parts)}".casefold()
 
@@ -114,7 +123,7 @@ def classify_entity(opportunity) -> tuple[str, str, str]:
         if re.search(pattern, text, re.I):
             return entity_type, "REJECTED_NON_VACANCY", reason
 
-    host = (urlsplit(url).hostname or "").casefold()
+    host = (parsed_url.hostname or "").casefold()
     if any(name in host for name in ("reddit.", "quora.", "forum.")):
         return "FORUM_DISCUSSION", "REJECTED_NON_VACANCY", "forum_domain"
 
@@ -124,9 +133,24 @@ def classify_entity(opportunity) -> tuple[str, str, str]:
             title,
             re.I,
         )
-        and not _has_detail_path(path_parts)
     ):
         return "JOB_BOARD_CATEGORY", "RESEARCH_REQUIRED", "job_category_page"
+
+    if re.search(r"\b(?:\d[\d,]*\s+)?(?:job vacancies|job openings|jobs?)\b", title, re.I):
+        host = (parsed_url.hostname or "").casefold()
+        if (
+            re.search(r"\b(?:\d[\d,]*\s+)?(?:job vacancies|job openings)\b", title, re.I)
+            or (
+                any(name in host for name in (
+                    "bayt.com", "indeed.", "naukri.com", "jobsora.", "emploi.ma",
+                ))
+                and re.search(r"\bjobs?\b", title, re.I)
+            )
+        ):
+            return "JOB_BOARD_CATEGORY", "RESEARCH_REQUIRED", "job_category_page"
+
+    if re.search(r"/(?:q-[^/]+|jobs/search|job-search|search/jobs)(?:\.html)?$", url, re.I):
+        return "JOB_BOARD_CATEGORY", "RESEARCH_REQUIRED", "job_search_results_page"
 
     if path_parts and path_parts[-1] in {"careers", "career", "jobs", "openings"}:
         if getattr(opportunity, "effective_source_type", lambda: "")() in {
@@ -134,6 +158,14 @@ def classify_entity(opportunity) -> tuple[str, str, str]:
         }:
             return "EMPLOYER_CAREERS_PAGE", "RESEARCH_REQUIRED", "employer_careers_page"
         return "JOB_BOARD_CATEGORY", "RESEARCH_REQUIRED", "job_category_page"
+
+    direct_ats_url = _supported_ats_posting_url(url)
+    if direct_ats_url and title.strip() and title.casefold().strip() not in _GENERIC_LISTING_TITLES:
+        return (
+            "INDIVIDUAL_VACANCY",
+            "VACANCY_UNVERIFIED",
+            "ats_detail_requires_live_evidence",
+        )
 
     raw = getattr(opportunity, "raw", None)
     raw = raw if isinstance(raw, dict) else {}
@@ -161,7 +193,11 @@ def classify_entity(opportunity) -> tuple[str, str, str]:
         and bool(url)
     )
     if direct_ats_record:
-        return "INDIVIDUAL_VACANCY", "VACANCY_VERIFIED", "structured_official_ats_record"
+        return (
+            "INDIVIDUAL_VACANCY",
+            "VACANCY_UNVERIFIED",
+            "ats_record_requires_current_evidence",
+        )
 
     if _has_detail_path(path_parts) or re.search(
         r"(?:req(?:uisition)?[-_ ]?\d{3,}|job[-_ ]?\d{3,})",
@@ -180,21 +216,55 @@ def _has_detail_path(path_parts: list[str]) -> bool:
     return False
 
 
+def _supported_ats_posting_url(url: str) -> bool:
+    from app.discovery.vacancy_verification import supported_ats_detail
+
+    return supported_ats_detail(url) is not None
+
+
 def is_verified_individual_vacancy(job) -> bool:
     """Require the full provenance tuple before permitting application actions."""
     url = str(getattr(job, "entity_evidence_url", "") or "")
-    parsed = urlsplit(url)
+    try:
+        parsed = urlsplit(url)
+    except ValueError:
+        return False
     host = (parsed.hostname or "").casefold()
     official_ats_host = any(
         host == domain or host.endswith(f".{domain}")
         for domains in _DIRECT_ATS_DOMAINS.values()
         for domain in domains
     )
+    observed_at = getattr(job, "last_verified_at", None)
+    now = None
+    if observed_at is not None:
+        if observed_at.tzinfo is None:
+            observed_at = observed_at.replace(tzinfo=timezone.utc)
+        now = datetime.now(timezone.utc)
+        age_seconds = (now - observed_at).total_seconds()
+        if age_seconds > 86400 or age_seconds < -300:
+            return False
+    closing_at = getattr(job, "closing_at", None)
+    if closing_at is not None:
+        if closing_at.tzinfo is None:
+            closing_at = closing_at.replace(tzinfo=timezone.utc)
+        if closing_at <= (now or datetime.now(timezone.utc)):
+            return False
     return (
         getattr(job, "entity_type", "") == "INDIVIDUAL_VACANCY"
         and getattr(job, "entity_state", "") == "VACANCY_VERIFIED"
-        and getattr(job, "entity_reason_code", "") == "structured_official_ats_record"
+        and getattr(job, "entity_reason_code", "") == "matching_public_ats_posting_record"
         and getattr(job, "source_type", "") == "ats"
+        and getattr(job, "verification_status", "") == "verified"
+        and observed_at is not None
+        and str(getattr(job, "url", "") or "") == url
+        and _supported_ats_posting_url(url)
+        and bool(str(getattr(job, "title", "") or "").strip())
+        and bool(str(getattr(job, "description", "") or "").strip())
+        and bool(str(getattr(job, "location", "") or "").strip())
+        and bool(getattr(getattr(job, "company", None), "name", ""))
+        and getattr(job, "application_method", "") == "COMPANY_PORTAL"
+        and str(getattr(job, "application_url", "") or "") == url
         and parsed.scheme in {"http", "https"}
         and official_ats_host
     )

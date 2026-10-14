@@ -17,7 +17,7 @@ from __future__ import annotations
 import hashlib
 import logging
 import uuid
-from datetime import timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from sqlalchemy.exc import IntegrityError
@@ -69,9 +69,8 @@ class ApplicationEngine:
         self.settings = settings
         self.profile = profile
         self.communicator = communicator
-        # §20 — re-verify the posting is still live before emailing. Injectable
-        # for hermetic tests; `None` means "only verify when the safety gate
-        # freshness rule is enabled".
+        # §20 — re-verify supported structured ATS evidence before acting.
+        # Injectable for hermetic tests; missing verification fails closed.
         self.verify_url_fn = verify_url_fn
 
     # ------------------------------------------------------------------ UI
@@ -94,6 +93,12 @@ class ApplicationEngine:
                 "sent": False,
                 "status": "blocked",
                 "reason": "vacancy_not_verified",
+            }
+        if not is_spontaneous and self.verify_url_fn is None:
+            return {
+                "sent": False,
+                "status": "blocked",
+                "reason": "vacancy_reverification_unavailable",
             }
         if is_spontaneous and mode == "live" and not getattr(
             self.settings, "authorize_live_spontaneous", False
@@ -145,15 +150,79 @@ class ApplicationEngine:
         if verifier:
             from app.models import utcnow as _now
 
+            verification_time = None
             try:
-                live = bool(verifier(job.url))
+                verification = verifier(job)
+                verification_outcome = getattr(
+                    verification, "outcome", "UNKNOWN",
+                )
+                verification_reason = getattr(
+                    verification, "reason_code", "send_time_recheck_failed",
+                )
+                verification_time = getattr(verification, "observed_at", None)
+                if (
+                    isinstance(verification_time, datetime)
+                    and verification_time.tzinfo is None
+                ):
+                    verification_time = verification_time.replace(tzinfo=timezone.utc)
+                live = (
+                    verification_outcome == "OPEN"
+                    and verification_reason == "matching_public_ats_posting_record"
+                    and getattr(verification, "evidence_url", "") == job.url
+                    and isinstance(verification_time, datetime)
+                    and timedelta(0)
+                    <= datetime.now(timezone.utc) - verification_time
+                    <= timedelta(minutes=5)
+                )
+                if live:
+                    company_name = (
+                        job.company.name if getattr(job, "company", None) else ""
+                    )
+
+                    def normalized(value):
+                        return " ".join(str(value or "").casefold().split())
+
+                    live = all((
+                        normalized(job.title) == normalized(
+                            getattr(verification, "title", ""),
+                        ),
+                        normalized(company_name) == normalized(
+                            getattr(verification, "employer", ""),
+                        ),
+                        normalized(job.location) == normalized(
+                            getattr(verification, "location", ""),
+                        ),
+                        normalized(job.description) == normalized(
+                            getattr(verification, "description", ""),
+                        ),
+                        str(job.application_url or "") == str(
+                            getattr(verification, "application_url", ""),
+                        ),
+                    ))
+                    if not live:
+                        verification_outcome = "UNKNOWN"
+                        verification_reason = "current_ats_record_changed"
+                elif verification_outcome == "OPEN":
+                    verification_outcome = "UNKNOWN"
+                    verification_reason = "send_time_evidence_not_current"
             except Exception as exc:
                 live = False
+                verification_outcome = "UNKNOWN"
+                verification_reason = "send_time_recheck_failed"
                 mem.store.record_event(self.session, "action",
-                                       f"verification error for #{job.id}: {exc}", "warn",
+                                       f"verification error for #{job.id} "
+                                       f"({type(exc).__name__})", "warn",
                                        {"job_id": job.id})
             if not live:
-                job.verification_status = "unverified"
+                job.verification_status = (
+                    "closed" if verification_outcome == "CLOSED" else "unverified"
+                )
+                job.entity_state = (
+                    "VACANCY_CLOSED"
+                    if verification_outcome == "CLOSED"
+                    else "VACANCY_STATUS_UNKNOWN"
+                )
+                job.entity_reason_code = verification_reason
                 job.last_verified_at = _now()
                 app = mem.store.add_application(self.session, job.id, decision.id, action,
                                                 score, contact_email)
@@ -163,7 +232,7 @@ class ApplicationEngine:
                                        {"job_id": job.id})
                 return {"sent": False, "status": "blocked", "reason": "posting not live",
                         "application_id": app.id}
-            job.last_verified_at = _now()
+            job.last_verified_at = verification_time
             job.verification_status = "verified"
 
         draft = await self.communicator.generate(job, action, target_language)
