@@ -20,6 +20,7 @@ import logging
 import os
 import threading
 import time
+from collections.abc import Callable
 from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -169,10 +170,19 @@ class TavilyCache:
 class DailyBudget:
     """Tracks how many Tavily calls were spent *today* (UTC)."""
 
-    def __init__(self, path: Path, limit: int):
+    def __init__(
+        self,
+        path: Path,
+        limit: int,
+        *,
+        durable_reserver: Callable[[Path, str, int], dict] | None = None,
+        durable_exhauster: Callable[[Path, str, int], dict] | None = None,
+    ):
         self.path = path
         self.identity = str(path.resolve())
         self.limit = int(limit)
+        self.durable_reserver = durable_reserver
+        self.durable_exhauster = durable_exhauster
         self._lock = _budget_thread_lock(self.identity)
         self._date = ""
         self._count = 0
@@ -264,6 +274,62 @@ class DailyBudget:
             return True
         today = self._today(now)
         with self._lock:
+            if self.durable_reserver is not None:
+                if self._ledger_error and self._date == today:
+                    self.last_reservation_error = (
+                        "provider_budget_persistence_unavailable"
+                    )
+                    return False
+                try:
+                    state = self.durable_reserver(self.path, today, self.limit)
+                except Exception:
+                    state = None
+                if not isinstance(state, dict):
+                    self.last_reservation_error = "provider_budget_persistence_unavailable"
+                    self._date = today
+                    self._ledger_error = True
+                    return False
+                if (
+                    state.get("reserved") is not True
+                    or state.get("date") != today
+                    or not isinstance(state.get("count"), int)
+                    or isinstance(state.get("count"), bool)
+                    or not 1 <= state.get("count", 0) <= self.limit
+                    or not isinstance(state.get("exhausted"), bool)
+                    or state.get("exhausted") is not False
+                ):
+                    reason = state.get("reason")
+                    self.last_reservation_error = (
+                        reason if reason in {
+                            "daily_request_budget_exhausted",
+                            "provider_budget_persistence_unavailable",
+                            "budget_ledger_unavailable",
+                        }
+                        else "provider_budget_persistence_unavailable"
+                    )
+                    self._date = today
+                    count = state.get("count", 0)
+                    self._count = (
+                        count if isinstance(count, int) and not isinstance(count, bool)
+                        and count >= 0 else 0
+                    )
+                    self._exhausted = state.get("exhausted") is True
+                    self._ledger_error = (
+                        self.last_reservation_error in {
+                            "provider_budget_persistence_unavailable",
+                            "budget_ledger_unavailable",
+                        }
+                    )
+                    return False
+                self._date = today
+                self._count = state["count"]
+                self._exhausted = state["exhausted"]
+                self._ledger_error = False
+                if not self._save():
+                    self.last_reservation_error = "provider_budget_persistence_unavailable"
+                    self._ledger_error = True
+                    return False
+                return True
             try:
                 with _budget_file_lock(self.path):
                     self._reload_for_date(today)
@@ -295,13 +361,45 @@ class DailyBudget:
     def exhaust(self) -> None:
         """Stop further calls after the provider confirms the key is quota-exhausted."""
         today = self._today()
-        with self._lock, _budget_file_lock(self.path):
-            self._reload_for_date(today)
-            self._date = today
-            self._exhausted = True
-            if not self._save():
-                self._ledger_error = True
-                raise OSError("could not persist Tavily quota exhaustion")
+        with self._lock:
+            if self.durable_exhauster is not None:
+                try:
+                    state = self.durable_exhauster(self.path, today, self.limit)
+                except Exception as exc:
+                    self._ledger_error = True
+                    self.last_reservation_error = (
+                        "provider_budget_persistence_unavailable"
+                    )
+                    raise OSError(self.last_reservation_error) from exc
+                if (
+                    not isinstance(state, dict)
+                    or state.get("date") != today
+                    or not isinstance(state.get("count"), int)
+                    or isinstance(state.get("count"), bool)
+                    or state.get("exhausted") is not True
+                ):
+                    self._ledger_error = True
+                    self.last_reservation_error = (
+                        "provider_budget_persistence_unavailable"
+                    )
+                    raise OSError(self.last_reservation_error)
+                self._date = today
+                self._count = state["count"]
+                self._exhausted = True
+                if not self._save():
+                    self._ledger_error = True
+                    self.last_reservation_error = (
+                        "provider_budget_persistence_unavailable"
+                    )
+                    raise OSError(self.last_reservation_error)
+                return
+            with _budget_file_lock(self.path):
+                self._reload_for_date(today)
+                self._date = today
+                self._exhausted = True
+                if not self._save():
+                    self._ledger_error = True
+                    raise OSError("could not persist Tavily quota exhaustion")
 
 
 class ApiAttemptBudget:
@@ -486,6 +584,7 @@ class ResilientTavily:
         saw_daily_budget = False
         saw_run_budget = False
         saw_ledger_error = False
+        saw_persistence_error = False
         attempts_this_query = 0
         for key in keys:
             if (
@@ -507,6 +606,10 @@ class ResilientTavily:
                 continue
             if reservation_error == "budget_ledger_unavailable":
                 saw_ledger_error = True
+                continue
+            if reservation_error == "provider_budget_persistence_unavailable":
+                saw_ledger_error = True
+                saw_persistence_error = True
                 continue
             attempts_this_query += 1
             self.last_call_attempts += 1
@@ -605,7 +708,15 @@ class ResilientTavily:
                 logger.warning("Tavily key %s failed: %s -> trying next key", key.fp, str(exc)[:200])
                 if _is_quota_error(exc):
                     saw_quota_error = True
-                    key.budget.exhaust()
+                    try:
+                        key.budget.exhaust()
+                    except OSError:
+                        saw_persistence_error = True
+                        self.last_error_code = (
+                            "provider_budget_persistence_unavailable"
+                        )
+                        self.last_status = "degraded"
+                        return []
                 else:
                     saw_request_error = True
 
@@ -620,7 +731,10 @@ class ResilientTavily:
         elif saw_daily_budget:
             self.last_error_code = "daily_request_budget_exhausted"
         elif saw_ledger_error:
-            self.last_error_code = "budget_ledger_unavailable"
+            self.last_error_code = (
+                "provider_budget_persistence_unavailable"
+                if saw_persistence_error else "budget_ledger_unavailable"
+            )
         else:
             self.last_error_code = "daily_request_budget_exhausted"
         self.last_status = "degraded"

@@ -73,6 +73,44 @@ private-vault write-back. A subsequent workflow could therefore restore stale
 daily counters and spend against the same allowance again. Resolve this
 budget-ledger persistence boundary before another live-provider discovery run.
 
+## Phase 2.2 discovery diagnostics and durable Tavily reservations
+
+The first discovery-only artifact and workflow logs recorded zero provider
+attempts, zero results, and no source reports, while the CLI's broad exception
+handler replaced every exception with `discovery_execution_failed` and the
+workflow deleted stderr. The precise production exception is therefore not
+recoverable from the retained evidence. A deterministic local failure fixture
+reproduces that diagnostic collapse; the CLI now emits a stable phase, reason
+code, safe exception class, and controlled message without serializing raw
+exception text or tracebacks.
+
+The discovery-only task now keeps its sparse private-vault checkout for the
+run and gives each Tavily `DailyBudget` a durable reservation callback. Before
+each provider request, the callback fetches current vault `main`, reads the
+single fingerprinted ledger, increments its UTC-day count, and pushes a new
+normal commit whose tree is checked to differ by exactly that ledger path.
+Non-fast-forward races refetch and retry; inability to confirm the commit
+blocks provider dispatch. Quota exhaustion is also persisted. Repeated keys
+are deduplicated, the shared per-run eight-attempt cap counts retries, and the
+general daily limit remains 17 of 20, preserving the three-request BTP reserve.
+No candidate, database, CV, OAuth, secret, cache, or application state is
+written to the vault by this path.
+
+The workflow now fails when its report is `BLOCKED` even if the CLI wrote a
+valid report. Focused deterministic tests cover sanitized diagnostics, missing
+and corrupt inputs, durable-before-request ordering, failed reservation,
+crash recovery, write scope, stale concurrent pushes, UTC-day boundaries,
+exhaustion, duplicate keys, and outbound-path exclusions. Do not dispatch
+another production discovery run until this change is published, CI passes,
+and the committed workflow and ledger path are re-audited.
+
+Validation on the final implementation: **53 focused tests passed**;
+the full suite passed **466 tests, 1 skipped**. Ruff, Python compilation,
+and `git diff --check` passed. The original production exception remains
+unidentifiable because its raw diagnostic was deleted before this reporting
+schema existed; no specific runtime cause is inferred from the deterministic
+failure-path fixture.
+
 Gmail mailbox reconciliation remains `NOT_CHECKED`. The supported OAuth flow
 is `wca gmail-auth`; in live mode it requests the existing `gmail.send` and
 `gmail.compose` scopes plus optional `gmail.readonly`, and uses the configured

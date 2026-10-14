@@ -283,7 +283,12 @@ class DiscoveryReport:
     new_opportunity_origins: dict[int, str] = field(default_factory=dict)
 
 
-def _load_source_connectors(path: Path | None = None) -> list[tuple[dict, object]]:
+def _load_source_connectors(
+    path: Path | None = None,
+    *,
+    budget_reserver=None,
+    budget_exhauster=None,
+) -> list[tuple[dict, object]]:
     path = path or DEFAULT_SOURCES_PATH
     cfg = load_yaml(path)
     # Ensure .env is loaded into os.environ so downstream modules see TAVILY_API_KEYS
@@ -304,7 +309,12 @@ def _load_source_connectors(path: Path | None = None) -> list[tuple[dict, object
         budget_path.parent.mkdir(parents=True, exist_ok=True)
         tavily_resilient_keys.append(TavilyKey(
             api_key=k,
-            budget=DailyBudget(budget_path, limit=GENERAL_TAVILY_DAILY_LIMIT),
+            budget=DailyBudget(
+                budget_path,
+                limit=GENERAL_TAVILY_DAILY_LIMIT,
+                durable_reserver=budget_reserver,
+                durable_exhauster=budget_exhauster,
+            ),
             fp=key_fingerprint(k),
         ))
 
@@ -534,7 +544,9 @@ async def run_discovery(session: Session, config: AgentConfig, prefs: Preference
                         *,
                         max_queries_override: int | None = None,
                         max_api_attempts_override: int | None = None,
-                        max_total_source_queries: int | None = None) -> DiscoveryReport:
+                        max_total_source_queries: int | None = None,
+                        budget_reserver=None,
+                        budget_exhauster=None) -> DiscoveryReport:
     report = DiscoveryReport()
     discovery_cfg = config.discovery or {}
     max_api_attempts = max(
@@ -558,7 +570,14 @@ async def run_discovery(session: Session, config: AgentConfig, prefs: Preference
         logger.info("vocab_llm enabled; vocabulary now %d terms", len(vocab.roles()))
     from app.workflows.adaptive_plan import build_adaptive_plan
 
-    connectors = _load_source_connectors(sources_path)
+    if budget_reserver is None and budget_exhauster is None:
+        connectors = _load_source_connectors(sources_path)
+    else:
+        connectors = _load_source_connectors(
+            sources_path,
+            budget_reserver=budget_reserver,
+            budget_exhauster=budget_exhauster,
+        )
     for _source_cfg, connector in connectors:
         if callable(getattr(connector, "has_cached_result", None)):
             connector.attempt_budget = api_attempt_budget

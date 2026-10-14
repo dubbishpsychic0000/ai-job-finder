@@ -2,10 +2,13 @@ from __future__ import annotations
 
 import asyncio
 import json
+import sqlite3
+from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
 import yaml
 
 from app.config import AgentConfig, CandidateProfile, Preferences
@@ -74,6 +77,216 @@ def test_budget_ledger_validation_requires_and_preserves_restored_usage(tmp_path
 
     ledger.write_text('{"date":"2026-10-13","count":"unknown","exhausted":false}')
     assert discovery_only.validate_budget_ledgers(tmp_path, [key]) == (False, 0)
+
+
+def test_budget_ledger_validation_deduplicates_identical_keys(tmp_path):
+    from app.connectors.tavily_resilience import key_fingerprint
+
+    key = "duplicate-key"
+    ledger = tmp_path / f"tavily_budget_{key_fingerprint(key)}.json"
+    ledger.write_text(json.dumps({
+        "date": "2026-10-13", "count": 4, "exhausted": False,
+    }), encoding="utf-8")
+
+    assert discovery_only.validate_budget_ledgers(tmp_path, [key, key]) == (True, 1)
+
+
+def _prepare_cli_inputs(root: Path, database_path: Path) -> None:
+    (root / "data").mkdir(parents=True)
+    (root / "candidate").mkdir()
+    (root / "secrets").mkdir()
+    (root / "data" / "discovery_only_inputs_status.json").write_text(
+        '{"ready":true}', encoding="utf-8",
+    )
+    (root / "candidate" / "profile.yaml").write_text(
+        "name: Test Candidate\n", encoding="utf-8",
+    )
+    (root / "candidate" / "preferences.yaml").write_text(
+        "target_countries: [Morocco]\n", encoding="utf-8",
+    )
+    connection = sqlite3.connect(database_path)
+    try:
+        for table in (
+            "jobs", "companies", "sources", "query_stats", "discoveries",
+            "notifications",
+        ):
+            connection.execute(f"CREATE TABLE {table} (id INTEGER)")
+    finally:
+        connection.close()
+
+
+def _run_discovery_cli(
+    monkeypatch, root, database_path, *, run_discovery=None, parse_candidate=False,
+):
+    from app import cli
+
+    class SessionStub:
+        def scalar(self, _statement):
+            return 0
+
+        def flush(self):
+            pass
+
+        def scalars(self, _statement):
+            return iter(())
+
+    @contextmanager
+    def session_scope_stub():
+        yield SessionStub()
+
+    monkeypatch.setattr(cli, "ROOT_DIR", root)
+    monkeypatch.setattr(
+        cli, "get_settings",
+        lambda: SimpleNamespace(sqlite_path=database_path),
+    )
+    monkeypatch.setattr(cli, "get_config", lambda: AgentConfig())
+    monkeypatch.setattr(
+        cli, "session_scope", session_scope_stub,
+    )
+    if not parse_candidate:
+        monkeypatch.setattr(
+            cli, "get_profile", lambda _path: CandidateProfile(name="Fixture"),
+        )
+        monkeypatch.setattr(
+            cli, "get_preferences", lambda _path: Preferences(),
+        )
+    if run_discovery is not None:
+        monkeypatch.setattr(
+            discovery_only, "run_bounded_discovery", run_discovery,
+        )
+    report_path = root / "report.json"
+    cli.cmd_discovery_only(SimpleNamespace(report=report_path))
+    return json.loads(report_path.read_text(encoding="utf-8"))
+
+
+def test_discovery_execution_failure_has_sanitized_phase_diagnostics(
+    tmp_path, monkeypatch,
+):
+    root = tmp_path / "repo"
+    database_path = root / "data" / "agent.db"
+    _prepare_cli_inputs(root, database_path)
+    secret_value = "provider-secret candidate@example.test private-candidate"
+
+    async def fail_discovery(*_args, **_kwargs):
+        raise RuntimeError(secret_value)
+
+    report = _run_discovery_cli(
+        monkeypatch, root, database_path, run_discovery=fail_discovery,
+        parse_candidate=False,
+    )
+    serialized = json.dumps(report)
+
+    assert report["status"] == "BLOCKED"
+    assert report["phase"] == "discovery_execution"
+    assert report["reason_code"] == "discovery_execution_failed"
+    assert report["diagnostic"]["exception_class"] == "RuntimeError"
+    assert report["diagnostic"]["message"] == (
+        "Bounded discovery failed before a complete report was produced."
+    )
+    assert secret_value not in serialized
+    assert "provider-secret" not in serialized
+    assert "candidate@example.test" not in serialized
+
+
+@pytest.mark.parametrize(
+    ("missing", "expected_reason", "expected_phase"),
+    [
+        ("profile", "candidate_search_preferences_missing", "profile_parse"),
+        ("preferences", "candidate_search_preferences_missing", "profile_parse"),
+        ("database", "production_database_snapshot_missing", "database_check"),
+    ],
+)
+def test_missing_discovery_inputs_fail_closed(
+    tmp_path, monkeypatch, missing, expected_reason, expected_phase,
+):
+    root = tmp_path / "repo"
+    database_path = root / "data" / "agent.db"
+    _prepare_cli_inputs(root, database_path)
+    if missing == "profile":
+        (root / "candidate" / "profile.yaml").unlink()
+    elif missing == "preferences":
+        (root / "candidate" / "preferences.yaml").unlink()
+    else:
+        database_path.unlink()
+
+    report = _run_discovery_cli(monkeypatch, root, database_path)
+
+    assert report["status"] == "BLOCKED"
+    assert report["reason_code"] == expected_reason
+    assert report["phase"] == expected_phase
+
+
+def test_corrupt_production_database_fails_closed(tmp_path, monkeypatch):
+    root = tmp_path / "repo"
+    database_path = root / "data" / "agent.db"
+    _prepare_cli_inputs(root, database_path)
+    database_path.write_bytes(b"not a sqlite database")
+
+    report = _run_discovery_cli(monkeypatch, root, database_path)
+
+    assert report["status"] == "BLOCKED"
+    assert report["phase"] == "database_check"
+    assert report["reason_code"] == "production_database_unreadable"
+
+
+@pytest.mark.parametrize(
+    ("ledger_payload", "expected_valid"),
+    [
+        (None, False),
+        ('{"date":"2026-10-13","count":"bad","exhausted":false}', False),
+        ('{"date":"2026-10-13","count":1,"exhausted":false}', True),
+    ],
+)
+def test_invalid_or_missing_ledger_inputs_fail_closed(
+    tmp_path, monkeypatch, ledger_payload, expected_valid,
+):
+    from app.connectors.tavily_resilience import key_fingerprint
+
+    root = tmp_path / "repo"
+    database_path = root / "data" / "agent.db"
+    _prepare_cli_inputs(root, database_path)
+    key = "fixture-provider-secret"
+    (root / "secrets" / "tavily_keys.txt").write_text(key, encoding="utf-8")
+    ledger = root / "data" / f"tavily_budget_{key_fingerprint(key)}.json"
+    if ledger_payload is not None:
+        ledger.write_text(ledger_payload, encoding="utf-8")
+    monkeypatch.setenv("TAVILY_BUDGET_VAULT_REPO", "")
+
+    report = _run_discovery_cli(
+        monkeypatch, root, database_path, parse_candidate=False,
+    )
+
+    assert report["status"] == "BLOCKED"
+    assert report["phase"] == "budget_validation"
+    assert report["reason_code"] == (
+        "provider_budget_persistence_unavailable"
+        if expected_valid else "provider_budget_ledger_missing_or_invalid"
+    )
+    assert key not in json.dumps(report)
+
+
+@pytest.mark.parametrize(
+    ("filename", "content"),
+    [
+        ("profile.yaml", "name: [invalid\n"),
+        ("preferences.yaml", "target_countries: not-a-list\n"),
+    ],
+)
+def test_corrupt_candidate_inputs_fail_closed(
+    tmp_path, monkeypatch, filename, content,
+):
+    root = tmp_path / "repo"
+    database_path = root / "data" / "agent.db"
+    _prepare_cli_inputs(root, database_path)
+    (root / "candidate" / filename).write_text(content, encoding="utf-8")
+
+    report = _run_discovery_cli(
+        monkeypatch, root, database_path, parse_candidate=True,
+    )
+
+    assert report["status"] == "BLOCKED"
+    assert report["phase"] == "profile_parse"
+    assert report["reason_code"] == "candidate_profile_or_preferences_invalid"
 
 
 def test_discovery_report_is_sanitized_and_distinguishes_cached_new_listing():
@@ -212,9 +425,12 @@ def test_workflow_discovery_task_skips_outbound_vault_and_full_pipeline_steps():
     assert "secrets/tavily_keys.txt" in restore["run"]
     assert "secrets/." not in restore["run"]
     assert "candidate/cv" not in restore["run"]
+    assert "wca-history-vault" not in restore["run"]
 
     persist_condition = steps["Persist state back to vault"]["if"]
     assert "inputs.task != 'discovery_only'" in persist_condition
+    assert "TAVILY_BUDGET_VAULT_REPO" in run_step["env"]
+    assert 'get("status") == "COMPLETED"' in run_step["run"]
     assert "upload sanitized discovery-only report" in {
         name.casefold() for name in steps
     }

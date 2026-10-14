@@ -163,44 +163,6 @@ jobs:
             "$([ "${#budget_paths[@]}" -gt 0 ] && echo true || echo false)" \
             "$([ -f data/tavily_cache.json ] && echo true || echo false)" \
             > data/discovery_only_inputs_status.json
-          rm -rf /tmp/wca-discovery-vault
-          set +e
-          git clone --depth 1 --filter=blob:none --sparse \
-            "https://x-access-token:${VAULT_TOKEN}@${VAULT_URL#https://}" \
-            /tmp/wca-history-vault >/dev/null 2>&1
-          clone_status=$?
-          if [ "$clone_status" -eq 0 ]; then
-            printf '{"vault_snapshot_restored":false,"state_database_restored":false,"vault_read_performed":true}\n' \
-              > data/preflight_restore_status.json
-            git -C /tmp/wca-history-vault sparse-checkout set --no-cone \
-              state/agent.db state/btp_outreach_state.json \
-              candidate/profile.yaml candidate/preferences.yaml >/dev/null 2>&1
-            checkout_status=$?
-            if [ "$checkout_status" -eq 0 ]; then
-              git -C /tmp/wca-history-vault checkout >/dev/null 2>&1
-              checkout_status=$?
-            fi
-            if [ "$checkout_status" -eq 0 ]; then
-              cp /tmp/wca-history-vault/candidate/profile.yaml candidate/profile.yaml 2>/dev/null
-              profile_status=$?
-              cp /tmp/wca-history-vault/candidate/preferences.yaml candidate/preferences.yaml 2>/dev/null
-              preferences_status=$?
-              cp /tmp/wca-history-vault/state/agent.db data/agent.db 2>/dev/null
-              database_status=$?
-              cp /tmp/wca-history-vault/state/btp_outreach_state.json data/btp_outreach_state.json 2>/dev/null
-              state_status=$?
-              if [ "$database_status" -eq 0 ]; then
-                printf '{"vault_snapshot_restored":true,"state_database_restored":true,"vault_read_performed":true,"candidate_profile_restored":%s,"candidate_preferences_restored":%s,"screening_state_restored":%s}\n' \
-                  "$([ "$profile_status" -eq 0 ] && echo true || echo false)" \
-                  "$([ "$preferences_status" -eq 0 ] && echo true || echo false)" \
-                  "$([ "$state_status" -eq 0 ] && echo true || echo false)" \
-                  > data/preflight_restore_status.json
-              else
-                printf '{"vault_snapshot_restored":true,"state_database_restored":false,"vault_read_performed":true}\n' > data/preflight_restore_status.json
-              fi
-            fi
-          fi
-          rm -rf /tmp/wca-history-vault
 
       - name: Restore targeted BTP preflight inputs only
         if: ${{ github.event_name == 'workflow_dispatch' && inputs.task == 'btp_outreach' && inputs.email_mode == 'dry_run' && inputs.target_employer != 'none' }}
@@ -310,6 +272,7 @@ jobs:
         if: ${{ github.event_name == 'workflow_dispatch' && inputs.task == 'discovery_only' }}
         env:
           DATABASE_URL: sqlite:///${{ github.workspace }}/data/agent.db
+          TAVILY_BUDGET_VAULT_REPO: /tmp/wca-discovery-vault
           EMAIL_MODE: dry_run
           ENABLE_EMAIL: "false"
           EMAIL_PROVIDER: log
@@ -321,7 +284,7 @@ jobs:
           PYTHON_DOTENV_DISABLED: "true"
         run: |
           set +e
-          trap 'rm -f secrets/tavily_keys.txt /tmp/discovery_only_internal.log' EXIT
+          trap 'rm -f secrets/tavily_keys.txt /tmp/discovery_only_internal.log; rm -rf /tmp/wca-discovery-vault' EXIT
           keys=""
           if [ -f secrets/tavily_keys.txt ]; then
             keys="$(python -c 'from pathlib import Path; print(",".join(k.strip() for k in Path("secrets/tavily_keys.txt").read_text(encoding="utf-8").replace("\r", "").replace("\n", ",").split(",") if k.strip()))')"
@@ -333,9 +296,10 @@ jobs:
           if ! TAVILY_API_KEYS="$keys" TAVILY_API_KEY="" \
             python -m app.cli discovery-only --report /tmp/discovery_only_report.json \
             >/dev/null 2>/tmp/discovery_only_internal.log; then
-            printf '{"schema_version":1,"status":"BLOCKED","reason_code":"discovery_command_failed","limits":{"search_combinations":12,"tavily_api_attempts":8},"counts":{"external_results_fetched":0,"normalized_results":0,"duplicates":0,"unique_new_opportunities":0,"new_from_live_api":0,"new_from_cache":0},"sources":[],"opportunities":[],"provider":{"api_attempts":0,"successes":0,"failed_attempts":0,"retry_attempts":0,"remaining_run_attempts":8,"rate_limit_errors":0,"budget_deferred_queries":0},"eligibility":"NOT_EVALUATED","side_effects":{"gmail_accessed":false,"applications_attempted":0,"drafts_created":0,"emails_sent":0,"whatsapp_messages_sent":0,"private_vault_writes":0,"production_database_writes":0,"ephemeral_database_writes":true}}\n' \
+            printf '{"schema_version":1,"status":"BLOCKED","reason_code":"discovery_command_failed","phase":"report_serialization","diagnostic":{"exception_class":"","message":"The bounded discovery command did not produce a sanitized report."},"limits":{"search_combinations":12,"tavily_api_attempts":8},"counts":{"external_results_fetched":0,"normalized_results":0,"duplicates":0,"unique_new_opportunities":0,"new_from_live_api":0,"new_from_cache":0},"sources":[],"opportunities":[],"provider":{"api_attempts":0,"successes":0,"failed_attempts":0,"retry_attempts":0,"remaining_run_attempts":8,"rate_limit_errors":0,"budget_deferred_queries":0},"eligibility":"NOT_EVALUATED","side_effects":{"gmail_accessed":false,"applications_attempted":0,"drafts_created":0,"emails_sent":0,"whatsapp_messages_sent":0,"private_vault_writes":0,"private_vault_budget_ledger_writes":0,"production_database_writes":0,"ephemeral_database_writes":true}}\n' \
               > /tmp/discovery_only_report.json
           fi
+          python -c 'import json,sys; sys.exit(0 if json.loads(open("/tmp/discovery_only_report.json", encoding="utf-8").read()).get("status") == "COMPLETED" else 1)'
 
       - name: Run read-only employer history preflight
         if: ${{ github.event_name == 'workflow_dispatch' && inputs.task == 'history_preflight' }}

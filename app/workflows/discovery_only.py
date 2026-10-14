@@ -25,8 +25,13 @@ async def run_bounded_discovery(
     config: AgentConfig,
     preferences: Preferences,
     profile: CandidateProfile,
+    *,
+    budget_store=None,
+    phase_callback=None,
 ) -> DiscoveryReport:
     """Run configured listing connectors with strict task-specific bounds."""
+    if phase_callback is not None:
+        phase_callback("source_initialization")
     source_configuration = load_yaml(DEFAULT_SOURCES_PATH)
     if any(
         source.get("enabled", True) and source.get("kind") != "tavily"
@@ -46,6 +51,8 @@ async def run_bounded_discovery(
     ):
         discovery[key] = False
     bounded_config = config.model_copy(update={"discovery": discovery})
+    if phase_callback is not None:
+        phase_callback("discovery_execution")
     return await run_discovery(
         session,
         bounded_config,
@@ -55,6 +62,8 @@ async def run_bounded_discovery(
         max_queries_override=MAX_SEARCH_COMBINATIONS,
         max_api_attempts_override=MAX_TAVILY_ATTEMPTS,
         max_total_source_queries=MAX_SEARCH_COMBINATIONS,
+        budget_reserver=budget_store.reserve if budget_store is not None else None,
+        budget_exhauster=budget_store.exhaust if budget_store is not None else None,
     )
 
 
@@ -82,13 +91,21 @@ def validate_budget_ledgers(data_dir, keys: list[str]) -> tuple[bool, int]:
         if (
             not isinstance(payload, dict)
             or not isinstance(payload.get("date"), str)
+            or not _valid_ledger_date(payload["date"])
             or not isinstance(payload.get("count"), int)
             or isinstance(payload.get("count"), bool)
             or payload["count"] < 0
             or not isinstance(payload.get("exhausted"), bool)
         ):
             return False, 0
-    return True, len(keys)
+    return True, len(seen)
+
+
+def _valid_ledger_date(value: str) -> bool:
+    try:
+        return datetime.strptime(value, "%Y-%m-%d").strftime("%Y-%m-%d") == value
+    except (TypeError, ValueError):
+        return False
 
 
 def daily_budget_summary(data_dir, keys: list[str]) -> dict:
@@ -116,11 +133,22 @@ def daily_budget_summary(data_dir, keys: list[str]) -> dict:
     }
 
 
-def blocked_report(reason_code: str) -> dict:
+def blocked_report(
+    reason_code: str,
+    *,
+    phase: str = "",
+    exception_class: str = "",
+    diagnostic_message: str = "",
+) -> dict:
     return {
         "schema_version": REPORT_SCHEMA_VERSION,
         "status": "BLOCKED",
         "reason_code": reason_code,
+        "phase": phase,
+        "diagnostic": {
+            "exception_class": exception_class,
+            "message": diagnostic_message,
+        },
         "limits": {
             "search_combinations": MAX_SEARCH_COMBINATIONS,
             "tavily_api_attempts": MAX_TAVILY_ATTEMPTS,
@@ -167,6 +195,7 @@ def _no_outbound_side_effects() -> dict:
         "emails_sent": 0,
         "whatsapp_messages_sent": 0,
         "private_vault_writes": 0,
+        "private_vault_budget_ledger_writes": 0,
         "production_database_writes": 0,
         "ephemeral_database_writes": True,
     }

@@ -18,7 +18,10 @@ import argparse
 import asyncio
 import json
 import logging
+import os
+import re
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 
 from rich.console import Console
@@ -128,28 +131,66 @@ def cmd_discovery_only(args) -> None:
         run_bounded_discovery,
         validate_budget_ledgers,
     )
+    from app.workflows.tavily_budget_vault import (
+        BudgetPersistenceError,
+        GitVaultBudgetStore,
+    )
 
     report_path = Path(args.report)
     report = None
+    budget_store = None
     root = ROOT_DIR
     data_dir = root / "data"
-    database_path = get_settings().sqlite_path
+    phase = "input_restore"
+    exception_class = ""
+
+    def set_phase(value: str) -> None:
+        nonlocal phase
+        phase = value
+
     try:
+        database_path = get_settings().sqlite_path
         status_path = data_dir / "discovery_only_inputs_status.json"
         status = json.loads(status_path.read_text(encoding="utf-8"))
         if status.get("ready") is not True:
             report = blocked_report(
-                str(status.get("reason_code") or "production_inputs_not_restored"),
+                "production_inputs_not_restored",
+                phase=phase,
             )
         else:
             profile_path = root / "candidate" / "profile.yaml"
             preferences_path = root / "candidate" / "preferences.yaml"
             keys_path = root / "secrets" / "tavily_keys.txt"
             if not profile_path.is_file() or not preferences_path.is_file():
-                report = blocked_report("candidate_search_preferences_missing")
+                report = blocked_report(
+                    "candidate_search_preferences_missing", phase="profile_parse",
+                )
             elif not database_path.is_file():
-                report = blocked_report("production_database_snapshot_missing")
+                report = blocked_report(
+                    "production_database_snapshot_missing", phase="database_check",
+                )
             else:
+                phase = "config_load"
+                config = get_config()
+                phase = "profile_parse"
+                profile = get_profile(profile_path)
+                preferences = get_preferences(preferences_path)
+                phase = "source_initialization"
+                from app.config import load_yaml
+                from app.workflows.discovery import DEFAULT_SOURCES_PATH
+
+                sources_config = load_yaml(DEFAULT_SOURCES_PATH)
+                enabled_sources = [
+                    source for source in sources_config.get("connectors", [])
+                    if source.get("enabled", True)
+                ]
+                if any(source.get("kind") != "tavily" for source in enabled_sources):
+                    report = blocked_report(
+                        "unsupported_connector_enabled_for_bounded_discovery",
+                        phase=phase,
+                    )
+
+                phase = "budget_validation"
                 key_text = (
                     keys_path.read_text(encoding="utf-8")
                     if keys_path.is_file() else ""
@@ -159,12 +200,45 @@ def cmd_discovery_only(args) -> None:
                     for key in key_text.replace("\r", "").replace("\n", ",").split(",")
                     if key.strip()
                 ]
+                fingerprints = {}
+                from app.connectors.tavily_resilience import key_fingerprint
+
+                for key in keys:
+                    fingerprint = key_fingerprint(key)
+                    if fingerprint in fingerprints and fingerprints[fingerprint] != key:
+                        report = blocked_report(
+                            "provider_budget_ledger_collision",
+                            phase=phase,
+                        )
+                    fingerprints[fingerprint] = key
                 ledgers_valid, restored_ledger_count = validate_budget_ledgers(
                     data_dir, keys,
                 )
-                if keys and not ledgers_valid:
-                    report = blocked_report("provider_budget_ledger_missing_or_invalid")
-                else:
+                vault_repo = os.environ.get("TAVILY_BUDGET_VAULT_REPO", "")
+                if report is None and keys and not ledgers_valid:
+                    report = blocked_report(
+                        "provider_budget_ledger_missing_or_invalid", phase=phase,
+                    )
+                elif report is None and keys and not vault_repo:
+                    report = blocked_report(
+                        "provider_budget_persistence_unavailable", phase=phase,
+                        diagnostic_message=(
+                            "The private-vault reservation store is not configured."
+                        ),
+                    )
+                elif report is None:
+                    budget_store = (
+                        GitVaultBudgetStore(Path(vault_repo)) if keys else None
+                    )
+                    if budget_store is not None:
+                        for fingerprint in dict.fromkeys(
+                            key_fingerprint(key) for key in keys
+                        ):
+                            budget_store.synchronize(
+                                data_dir / f"tavily_budget_{fingerprint}.json",
+                                today=datetime.now(timezone.utc).date().isoformat(),
+                            )
+                    phase = "database_check"
                     uri = f"file:{database_path.resolve().as_posix()}?mode=ro"
                     try:
                         with sqlite3.connect(uri, uri=True) as connection:
@@ -179,15 +253,21 @@ def cmd_discovery_only(args) -> None:
                             "discoveries", "notifications",
                         }
                         if not integrity or integrity[0] != "ok":
-                            report = blocked_report("production_database_integrity_check_failed")
+                            report = blocked_report(
+                                "production_database_integrity_check_failed",
+                                phase=phase,
+                            )
                         elif not required_tables <= tables:
-                            report = blocked_report("production_database_schema_incomplete")
+                            report = blocked_report(
+                                "production_database_schema_incomplete",
+                                phase=phase,
+                            )
                     except sqlite3.Error:
-                        report = blocked_report("production_database_unreadable")
+                        report = blocked_report(
+                            "production_database_unreadable", phase=phase,
+                        )
                     if report is None:
-                        config = get_config()
-                        profile = get_profile(profile_path)
-                        preferences = get_preferences(preferences_path)
+                        phase = "discovery_execution"
                         with session_scope() as session:
                             previous_max_id = session.scalar(
                                 select(func.max(models.Job.id)),
@@ -195,6 +275,8 @@ def cmd_discovery_only(args) -> None:
                             discovery_report = asyncio.run(
                                 run_bounded_discovery(
                                     session, config, preferences, profile,
+                                    budget_store=budget_store,
+                                    phase_callback=set_phase,
                                 ),
                             )
                             session.flush()
@@ -203,30 +285,122 @@ def cmd_discovery_only(args) -> None:
                                 .where(models.Job.id > previous_max_id)
                                 .order_by(models.Job.id),
                             ))
-                        report = build_sanitized_report(
-                            discovery_report,
-                            new_jobs,
-                            config,
-                            daily_budget_summary(data_dir, keys),
-                            sources_config=load_yaml(DEFAULT_SOURCES_PATH),
+                        budget_persistence_failed = any(
+                            {
+                                "provider_budget_persistence_unavailable",
+                                "budget_ledger_unavailable",
+                            } & set(item.get("query_error_codes", {}))
+                            for item in discovery_report.source_reports
                         )
-                        report["provider"]["restored_budget_ledger_count"] = (
-                            restored_ledger_count
-                        )
-    except (OSError, ValueError, TypeError):
-        report = blocked_report("discovery_inputs_invalid_or_incomplete")
-    except Exception:
-        logging.getLogger(__name__).exception(
-            "Bounded discovery task failed; details excluded from report",
+                        if budget_persistence_failed:
+                            report = blocked_report(
+                                "provider_budget_persistence_unavailable",
+                                phase="budget_validation",
+                                diagnostic_message=(
+                                    "A durable budget update failed; discovery "
+                                    "stopped without an unreserved retry."
+                                ),
+                            )
+                            actual_budget = (
+                                discovery_report.api_request_budget or {}
+                            )
+                            report["provider"].update({
+                                "api_attempts": int(actual_budget.get("attempts", 0)),
+                                "successes": int(actual_budget.get("successes", 0)),
+                                "failed_attempts": int(
+                                    actual_budget.get("failed_attempts", 0),
+                                ),
+                                "retry_attempts": int(
+                                    actual_budget.get("retry_attempts", 0),
+                                ),
+                                "remaining_run_attempts": int(
+                                    actual_budget.get("remaining", 8),
+                                ),
+                            })
+                            report["side_effects"]["private_vault_writes"] = (
+                                budget_store.write_count if budget_store else 0
+                            )
+                            report["side_effects"][
+                                "private_vault_budget_ledger_writes"
+                            ] = budget_store.write_count if budget_store else 0
+                        else:
+                            phase = "report_serialization"
+                            report = build_sanitized_report(
+                                discovery_report,
+                                new_jobs,
+                                config,
+                                daily_budget_summary(data_dir, keys),
+                                sources_config=sources_config,
+                            )
+                            report["provider"]["restored_budget_ledger_count"] = (
+                                restored_ledger_count
+                            )
+                            if budget_store is not None:
+                                report["provider"]["durable_ledger_writes"] = (
+                                    budget_store.write_count
+                                )
+                                report["side_effects"]["private_vault_writes"] = (
+                                    budget_store.write_count
+                                )
+                                report["side_effects"][
+                                    "private_vault_budget_ledger_writes"
+                                ] = budget_store.write_count
+                            report["phase"] = "completed"
+    except Exception as exc:
+        exception_class = type(exc).__name__
+        if not re.fullmatch(r"[A-Za-z][A-Za-z0-9]{0,63}", exception_class):
+            exception_class = "Exception"
+        reason_code = {
+            "input_restore": "production_inputs_invalid_or_incomplete",
+            "config_load": "discovery_config_invalid",
+            "profile_parse": "candidate_profile_or_preferences_invalid",
+            "source_initialization": "discovery_source_initialization_failed",
+            "budget_validation": "provider_budget_persistence_unavailable",
+            "database_check": "production_database_check_failed",
+            "discovery_execution": (
+                "provider_budget_persistence_unavailable"
+                if isinstance(exc, BudgetPersistenceError)
+                else "discovery_execution_failed"
+            ),
+            "report_serialization": "discovery_report_serialization_failed",
+        }.get(phase, "discovery_execution_failed")
+        message = {
+            "input_restore": "Required restored inputs could not be read.",
+            "config_load": "The public discovery configuration could not be loaded.",
+            "profile_parse": "Candidate search preferences could not be validated.",
+            "source_initialization": "The bounded public source configuration is invalid.",
+            "budget_validation": "The durable provider budget could not be verified.",
+            "database_check": "The restored database failed its read-only checks.",
+            "discovery_execution": "Bounded discovery failed before a complete report was produced.",
+            "report_serialization": "The sanitized discovery report could not be serialized.",
+        }.get(phase, "The bounded discovery task failed.")
+        report = blocked_report(
+            reason_code,
+            phase=phase,
+            exception_class=exception_class,
+            diagnostic_message=message,
         )
-        report = blocked_report("discovery_execution_failed")
+        if budget_store is not None:
+            report["side_effects"]["private_vault_writes"] = (
+                budget_store.write_count
+            )
+            report["side_effects"][
+                "private_vault_budget_ledger_writes"
+            ] = budget_store.write_count
 
-    report_path.parent.mkdir(parents=True, exist_ok=True)
-    report_path.write_text(
-        json.dumps(report or blocked_report("discovery_report_unavailable"),
-                   ensure_ascii=False, indent=2),
-        encoding="utf-8",
-    )
+    try:
+        report_path.parent.mkdir(parents=True, exist_ok=True)
+        report_path.write_text(
+            json.dumps(report or blocked_report(
+                "discovery_report_unavailable", phase="report_serialization",
+            ), ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+    except Exception:
+        logging.getLogger(__name__).error(
+            "Could not write sanitized discovery report (phase=report_serialization)",
+        )
+        raise SystemExit(1) from None
 
 
 def cmd_btp_outreach(args) -> None:
