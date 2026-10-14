@@ -95,9 +95,6 @@ def _prepare_cli_inputs(root: Path, database_path: Path) -> None:
     (root / "data").mkdir(parents=True)
     (root / "candidate").mkdir()
     (root / "secrets").mkdir()
-    (root / "data" / "discovery_only_inputs_status.json").write_text(
-        '{"ready":true}', encoding="utf-8",
-    )
     (root / "candidate" / "profile.yaml").write_text(
         "name: Test Candidate\n", encoding="utf-8",
     )
@@ -113,11 +110,38 @@ def _prepare_cli_inputs(root: Path, database_path: Path) -> None:
             connection.execute(f'CREATE TABLE "{quoted}" (id INTEGER)')
     finally:
         connection.close()
+    from app.connectors.tavily_resilience import key_fingerprint
+
+    key = "fixture-provider-key"
+    (root / "secrets" / "tavily_keys.txt").write_text(key, encoding="utf-8")
+    (root / "data" / f"tavily_budget_{key_fingerprint(key)}.json").write_text(
+        '{"date":"2026-10-14","count":0,"exhausted":false}',
+        encoding="utf-8",
+    )
+    (root / "data" / "discovery_only_inputs_status.json").write_text(
+        json.dumps({
+            "schema_version": 1,
+            "ready": True,
+            "reason_code": "",
+            "vault_checkout_path": str((root / "vault").resolve()),
+            "vault_commit": "a" * 40,
+            "vault_repository_validated": True,
+            "vault_ref_validated": True,
+            "database_snapshot_restored": True,
+            "candidate_search_profile_restored": True,
+            "provider_keys_restored": True,
+            "provider_budget_ledgers_restored": True,
+            "provider_key_count": 1,
+            "provider_budget_ledger_count": 1,
+            "provider_cache_restored": False,
+        }),
+        encoding="utf-8",
+    )
 
 
 def _run_discovery_cli(
     monkeypatch, root, database_path, *, run_discovery=None, parse_candidate=False,
-    database_initializer=None,
+    database_initializer=None, vault_configured=False,
 ):
     from app import cli
 
@@ -158,6 +182,25 @@ def _run_discovery_cli(
         monkeypatch.setattr(
             discovery_only, "run_bounded_discovery", run_discovery,
         )
+    if vault_configured:
+        from app.workflows import tavily_budget_vault
+
+        class BudgetStoreStub:
+            reservation_count = 0
+            write_count = 0
+
+            def __init__(self, _repository):
+                pass
+
+            def synchronize(self, _path, *, today):
+                assert today == datetime.now(timezone.utc).date().isoformat()
+
+        monkeypatch.setenv(
+            "TAVILY_BUDGET_VAULT_REPO", str((root / "vault").resolve()),
+        )
+        monkeypatch.setattr(
+            tavily_budget_vault, "GitVaultBudgetStore", BudgetStoreStub,
+        )
     report_path = root / "report.json"
     cli.cmd_discovery_only(SimpleNamespace(report=report_path))
     return json.loads(report_path.read_text(encoding="utf-8"))
@@ -179,6 +222,7 @@ def test_discovery_execution_failure_has_sanitized_phase_diagnostics(
         monkeypatch, root, database_path, run_discovery=fail_discovery,
         parse_candidate=False,
         database_initializer=lambda: migrations.append("initialized"),
+        vault_configured=True,
     )
     serialized = json.dumps(report)
 
@@ -223,13 +267,123 @@ def test_missing_discovery_inputs_fail_closed(
     assert report["phase"] == expected_phase
 
 
+def test_absent_or_invalid_input_manifest_blocks_before_discovery(
+    tmp_path, monkeypatch,
+):
+    root = tmp_path / "repo"
+    database_path = root / "data" / "agent.db"
+    _prepare_cli_inputs(root, database_path)
+    status_path = root / "data" / "discovery_only_inputs_status.json"
+    status_path.unlink()
+    dispatched = []
+
+    async def forbidden_discovery(*_args, **_kwargs):
+        dispatched.append(True)
+        return DiscoveryReport()
+
+    report = _run_discovery_cli(
+        monkeypatch, root, database_path, run_discovery=forbidden_discovery,
+    )
+
+    assert report["status"] == "BLOCKED"
+    assert report["phase"] == "input_restore"
+    assert report["reason_code"] == "discovery_input_status_missing"
+    assert dispatched == []
+
+    status_path.write_text('{"ready":true}', encoding="utf-8")
+    report = _run_discovery_cli(
+        monkeypatch, root, database_path, run_discovery=forbidden_discovery,
+    )
+    assert report["status"] == "BLOCKED"
+    assert report["reason_code"] == "discovery_input_status_invalid"
+    assert dispatched == []
+
+
+@pytest.mark.parametrize(
+    "reason",
+    [
+        "vault_repository_configuration_missing",
+        "vault_origin_mismatch",
+        "vault_ref_mismatch",
+        "vault_repository_path_mismatch",
+        "provider_budget_ledger_missing_or_invalid",
+    ],
+)
+def test_restore_failure_manifest_blocks_before_discovery(
+    tmp_path, monkeypatch, reason,
+):
+    root = tmp_path / "repo"
+    database_path = root / "data" / "agent.db"
+    _prepare_cli_inputs(root, database_path)
+    status_path = root / "data" / "discovery_only_inputs_status.json"
+    status = json.loads(status_path.read_text(encoding="utf-8"))
+    status.update({
+        "ready": False,
+        "reason_code": reason,
+        "vault_repository_validated": False,
+        "vault_ref_validated": False,
+        "provider_budget_ledgers_restored": False,
+    })
+    status_path.write_text(json.dumps(status), encoding="utf-8")
+    dispatched = []
+
+    async def forbidden_discovery(*_args, **_kwargs):
+        dispatched.append(True)
+        return DiscoveryReport()
+
+    report = _run_discovery_cli(
+        monkeypatch, root, database_path, run_discovery=forbidden_discovery,
+    )
+
+    assert report["status"] == "BLOCKED"
+    assert report["reason_code"] == reason
+    assert dispatched == []
+
+
+def test_vault_checkout_path_mismatch_blocks_before_discovery(
+    tmp_path, monkeypatch,
+):
+    root = tmp_path / "repo"
+    database_path = root / "data" / "agent.db"
+    _prepare_cli_inputs(root, database_path)
+    (root / "data" / "discovery_only_inputs_status.json").write_text(
+        json.dumps({
+            **json.loads(
+                (root / "data" / "discovery_only_inputs_status.json")
+                .read_text(encoding="utf-8"),
+            ),
+            "vault_checkout_path": str((root / "different-vault").resolve()),
+        }),
+        encoding="utf-8",
+    )
+    dispatched = []
+
+    async def forbidden_discovery(*_args, **_kwargs):
+        dispatched.append(True)
+        return DiscoveryReport()
+
+    report = _run_discovery_cli(
+        monkeypatch,
+        root,
+        database_path,
+        run_discovery=forbidden_discovery,
+        vault_configured=True,
+    )
+
+    assert report["status"] == "BLOCKED"
+    assert report["reason_code"] == "vault_repository_path_mismatch"
+    assert dispatched == []
+
+
 def test_corrupt_production_database_fails_closed(tmp_path, monkeypatch):
     root = tmp_path / "repo"
     database_path = root / "data" / "agent.db"
     _prepare_cli_inputs(root, database_path)
     database_path.write_bytes(b"not a sqlite database")
 
-    report = _run_discovery_cli(monkeypatch, root, database_path)
+    report = _run_discovery_cli(
+        monkeypatch, root, database_path, vault_configured=True,
+    )
 
     assert report["status"] == "BLOCKED"
     assert report["phase"] == "database_check"
@@ -258,9 +412,18 @@ def test_invalid_or_missing_ledger_inputs_fail_closed(
     if ledger_payload is not None:
         ledger.write_text(ledger_payload, encoding="utf-8")
     monkeypatch.setenv("TAVILY_BUDGET_VAULT_REPO", "")
+    dispatched = []
+
+    async def forbidden_discovery(*_args, **_kwargs):
+        dispatched.append(True)
+        return DiscoveryReport()
 
     report = _run_discovery_cli(
-        monkeypatch, root, database_path, parse_candidate=False,
+        monkeypatch,
+        root,
+        database_path,
+        parse_candidate=False,
+        run_discovery=forbidden_discovery,
     )
 
     assert report["status"] == "BLOCKED"
@@ -270,6 +433,7 @@ def test_invalid_or_missing_ledger_inputs_fail_closed(
         if expected_valid else "provider_budget_ledger_missing_or_invalid"
     )
     assert key not in json.dumps(report)
+    assert dispatched == []
 
 
 @pytest.mark.parametrize(
@@ -687,6 +851,9 @@ def test_workflow_discovery_task_skips_outbound_vault_and_full_pipeline_steps():
     assert "candidate/profile.yaml" in restore["run"]
     assert "candidate/preferences.yaml" in restore["run"]
     assert "secrets/tavily_keys.txt" in restore["run"]
+    assert "--branch main --single-branch" in restore["run"]
+    assert "app.workflows.discovery_only_restore" in restore["run"]
+    assert '"ready":true' not in restore["run"]
     assert "secrets/." not in restore["run"]
     assert "candidate/cv" not in restore["run"]
     assert "wca-history-vault" not in restore["run"]

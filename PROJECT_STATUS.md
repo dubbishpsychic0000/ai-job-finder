@@ -1076,3 +1076,118 @@ unknown. Direct portal retrieval is separately bounded and does not consume or
 borrow Tavily reservations. Remaining limits include the portal's changing
 HTML, uncertain Arabic field variants, and contradictory submission routes;
 unknown or inconsistent evidence fails closed.
+
+## Phase 2.8 bounded live validation of Emploi-Public discovery
+
+The repository was rechecked on `main` at
+[`8c3937eeeb27c13c17a7c364c5b3e975b5c382e3`](https://github.com/dubbishpsychic0000/ai-job-finder/commit/8c3937eeeb27c13c17a7c364c5b3e975b5c382e3),
+with CI passing in [run 38565428201](https://github.com/dubbishpsychic0000/ai-job-finder/actions/runs/38565428201).
+
+A fresh bounded discovery preflight was attempted with the repository's guarded
+`discovery-only` command:
+`python -m app.cli discovery-only --report data/discovery_only_report.json`.
+The command did not dispatch any provider request. It failed in the
+`input_restore` phase because the restored discovery inputs were not present in
+`data/`, and the private-vault budget store was not configured or readable.
+Evidence:
+
+- `TAVILY_BUDGET_VAULT_REPO` is empty in the current environment.
+- `data/discovery_only_inputs_status.json` is absent.
+- The expected secure vault repository at `../ai-job-finder-vault` contains no
+  `state/tavily_budget_*.json` ledger files.
+- The generated sanitized report is `data/discovery_only_report.json` and reports
+  `reason_code: "production_inputs_invalid_or_incomplete"` with status
+  `BLOCKED`.
+
+This satisfies the hold condition in the repository's safety rules: no
+Tavily/API call, direct public ATS request, budget reservation, application,
+email, WhatsApp, BTP action, production candidate write, or MEGEC retry was
+performed. The discovery-only path remains isolated and no further evaluation
+was dispatched because the ledger and restored inputs cannot be reconciled.
+
+Measured result from the bounded preflight run:
+
+- Status: `BLOCKED`
+- Reason code: `production_inputs_invalid_or_incomplete`
+- Phase: `input_restore`
+- External results fetched: 0
+- Normalized results: 0
+- Verified open competitions: 0
+- Unverified candidates: 0
+- Research-required records: 0
+- Provider API attempts: 0
+- Remaining run attempts: 8
+
+The live source validation is therefore intentionally withheld pending a valid
+restored vault, current production snapshot, and reconciled daily budget ledger.
+No discovery changes were made during this validation step.
+
+## Phase 2.8a discovery input restoration hardening
+
+### Confirmed cause
+
+The Phase 2.8 preflight was invoked directly in the local checkout rather than
+as the `discovery_only` GitHub Actions task. The restore manifest and
+`TAVILY_BUDGET_VAULT_REPO` are runtime inputs created/configured only by
+`.github/workflows/agent.yml`; they are not expected to exist in a normal local
+checkout. The local command therefore stopped at `input_restore`, before a
+provider request. The local `../ai-job-finder-vault` checkout was also not a
+current authority: its checked-out branch was ahead of and 145 commits behind
+its cached `origin/main`, and it had no Tavily ledger files. Its cached
+`origin/main` tree did contain Tavily ledger paths, but that tracking ref was
+from 2026-10-13 and was not used to infer any current balance.
+
+Recent GitHub workflow metadata corroborates that the intended execution path
+is Actions-managed: bounded run
+[38549804215](https://github.com/dubbishpsychic0000/ai-job-finder/actions/runs/38549804215)
+shows both “Restore bounded discovery inputs only” and “Run bounded
+discovery-only evaluation” completed. Its report artifact could not be
+recovered in Phase 2.8, so this history does not establish current ledger
+balances or successful source yield.
+
+The restore step had a separate proven integrity/reporting flaw: it set
+`provider_budget_ledgers_restored` from whether key-derived ledger path names
+were generated, rather than whether every expected ledger existed and was
+valid. It also cloned the vault's default branch without explicitly pinning
+`main`. The CLI did fail closed when a manifest was absent or `ready` was
+false, but it accepted an underspecified `{"ready": true}` manifest and did
+not tie the manifest to the checkout path used by durable reservations.
+
+### Repair
+
+Added `app/workflows/discovery_only_restore.py` as the single restoration
+validator/copy path. The workflow now explicitly clones only `main`, sparse
+checks out required inputs and key-derived ledger paths, then calls this
+validator. Before any input is copied or the manifest is marked ready, it
+checks the configured vault origin, checked-out branch and equality with
+`origin/main`; requires the database, profile, preferences and non-empty
+provider keys; and validates every per-key ledger's JSON shape, UTC date,
+exhaustion flag and count against Tavily's unchanged 20-request hard limit.
+It preserves ledger content and never derives a balance from reports. Missing
+or corrupt ledgers, an invalid origin/ref, or incomplete configuration writes
+a sanitized `ready: false` manifest with a stable reason code.
+
+The discovery-only CLI now requires the complete versioned restore manifest,
+checks that key and ledger counts match the restored keys, revalidates local
+ledger contents, and requires the durable reservation repository path to be
+the same checkout attested by the manifest. A missing/invalid manifest,
+missing vault configuration, absent/corrupt ledger, wrong ref, or path
+mismatch blocks before discovery dispatch. The 8-attempt run cap, 17-per-key
+general daily allowance, three-request BTP reserve, and outbound protections
+are unchanged.
+
+### Validation and limits
+
+Offline tests cover absent/invalid manifests, missing and corrupt ledgers,
+future/out-of-range ledger state, missing vault configuration, wrong origin,
+wrong branch, vault-path mismatch, and successful restoration from a local
+Git fixture while preserving its ledger balance. CLI tests assert blocked
+restore states never invoke discovery. No live discovery, provider request,
+production write, or outbound action was run in this phase. The actual current
+durable ledger balance remains unverified; restoration must run in the
+configured GitHub Actions environment before any separately authorized
+bounded live validation is considered.
+
+Validation completed: full suite **536 passed, 1 skipped**; Ruff on changed
+Python files, Python compilation, and `git diff --check` passed. Publication
+and CI status are recorded below after the `main` push.

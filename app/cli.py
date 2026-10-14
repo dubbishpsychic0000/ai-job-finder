@@ -145,6 +145,7 @@ def cmd_discovery_only(args) -> None:
         daily_budget_summary,
         run_bounded_discovery,
         validate_budget_ledgers,
+        validate_discovery_input_status,
     )
     from app.workflows.tavily_budget_vault import (
         BudgetPersistenceError,
@@ -166,13 +167,14 @@ def cmd_discovery_only(args) -> None:
     try:
         database_path = get_settings().sqlite_path
         status_path = data_dir / "discovery_only_inputs_status.json"
-        status = json.loads(status_path.read_text(encoding="utf-8"))
-        if status.get("ready") is not True:
+        input_restore_error = validate_discovery_input_status(status_path)
+        if input_restore_error:
             report = blocked_report(
-                "production_inputs_not_restored",
+                input_restore_error,
                 phase=phase,
             )
         else:
+            status = json.loads(status_path.read_text(encoding="utf-8"))
             profile_path = root / "candidate" / "profile.yaml"
             preferences_path = root / "candidate" / "preferences.yaml"
             keys_path = root / "secrets" / "tavily_keys.txt"
@@ -233,16 +235,39 @@ def cmd_discovery_only(args) -> None:
                     data_dir, keys,
                 )
                 vault_repo = os.environ.get("TAVILY_BUDGET_VAULT_REPO", "")
-                if report is None and keys and not ledgers_valid:
+                unique_key_count = len({
+                    key_fingerprint(key) for key in keys
+                })
+                if report is None and not keys:
+                    report = blocked_report(
+                        "vault_provider_keys_missing", phase=phase,
+                    )
+                elif report is None and (
+                    status.get("provider_key_count") != unique_key_count
+                    or status.get("provider_budget_ledger_count") != unique_key_count
+                ):
+                    report = blocked_report(
+                        "discovery_input_status_invalid", phase=phase,
+                    )
+                elif report is None and (
+                    not ledgers_valid
+                    or restored_ledger_count != unique_key_count
+                ):
                     report = blocked_report(
                         "provider_budget_ledger_missing_or_invalid", phase=phase,
                     )
-                elif report is None and keys and not vault_repo:
+                elif report is None and not vault_repo:
                     report = blocked_report(
                         "provider_budget_persistence_unavailable", phase=phase,
                         diagnostic_message=(
                             "The private-vault reservation store is not configured."
                         ),
+                    )
+                elif report is None and Path(vault_repo).resolve() != Path(
+                    status["vault_checkout_path"],
+                ).resolve():
+                    report = blocked_report(
+                        "vault_repository_path_mismatch", phase=phase,
                     )
                 elif report is None:
                     budget_store = (

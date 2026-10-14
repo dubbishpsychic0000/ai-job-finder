@@ -29,6 +29,70 @@ def bounded_source_allowed(source: dict) -> bool:
     return kind == "tavily" or (
         kind == "emploi_public" and source.get("name") == "emploi_public_ma"
     )
+
+
+def validate_discovery_input_status(status_path) -> str:
+    """Return a safe block reason unless every restored input is attested."""
+    import json
+    from pathlib import Path
+
+    path = Path(status_path)
+    try:
+        status = json.loads(path.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        return "discovery_input_status_missing"
+    except (OSError, ValueError):
+        return "discovery_input_status_invalid"
+    if not isinstance(status, dict):
+        return "discovery_input_status_invalid"
+    if (
+        not isinstance(status.get("schema_version"), int)
+        or isinstance(status.get("schema_version"), bool)
+        or status["schema_version"] != 1
+    ):
+        return "discovery_input_status_invalid"
+    if status.get("ready") is not True:
+        reason = status.get("reason_code")
+        if isinstance(reason, str) and re.fullmatch(r"[a-z][a-z0-9_]{0,79}", reason):
+            return reason
+        return "production_inputs_not_restored"
+    required_true = (
+        "vault_repository_validated",
+        "vault_ref_validated",
+        "database_snapshot_restored",
+        "candidate_search_profile_restored",
+        "provider_keys_restored",
+        "provider_budget_ledgers_restored",
+    )
+    if any(status.get(key) is not True for key in required_true):
+        return "discovery_input_status_invalid"
+    key_count = status.get("provider_key_count")
+    ledger_count = status.get("provider_budget_ledger_count")
+    if (
+        not isinstance(key_count, int)
+        or isinstance(key_count, bool)
+        or key_count < 1
+        or not isinstance(ledger_count, int)
+        or isinstance(ledger_count, bool)
+        or ledger_count != key_count
+    ):
+        return "discovery_input_status_invalid"
+    commit = status.get("vault_commit")
+    checkout = status.get("vault_checkout_path")
+    if (
+        not isinstance(commit, str)
+        or not re.fullmatch(r"[a-f0-9]{40}", commit)
+        or not isinstance(checkout, str)
+        or not checkout
+        or (
+            status.get("provider_cache_restored") is not True
+            and status.get("provider_cache_restored") is not False
+        )
+    ):
+        return "discovery_input_status_invalid"
+    return ""
+
+
 async def run_bounded_discovery(
     session,
     config: AgentConfig,
@@ -82,9 +146,13 @@ def validate_budget_ledgers(data_dir, keys: list[str]) -> tuple[bool, int]:
     import json
     from pathlib import Path
 
-    from app.connectors.tavily_resilience import key_fingerprint
+    from app.connectors.tavily_resilience import (
+        TAVILY_DAILY_REQUEST_LIMIT,
+        key_fingerprint,
+    )
 
     root = Path(data_dir)
+    today = datetime.now(timezone.utc).date()
     seen: set[str] = set()
     for key in keys:
         fingerprint = key_fingerprint(key)
@@ -104,9 +172,17 @@ def validate_budget_ledgers(data_dir, keys: list[str]) -> tuple[bool, int]:
             or not _valid_ledger_date(payload["date"])
             or not isinstance(payload.get("count"), int)
             or isinstance(payload.get("count"), bool)
-            or payload["count"] < 0
+            or not 0 <= payload["count"] <= TAVILY_DAILY_REQUEST_LIMIT
             or not isinstance(payload.get("exhausted"), bool)
         ):
+            return False, 0
+        try:
+            ledger_date = datetime.strptime(
+                payload["date"], "%Y-%m-%d",
+            ).date()
+        except ValueError:
+            return False, 0
+        if ledger_date > today:
             return False, 0
     return True, len(seen)
 

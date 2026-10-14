@@ -104,8 +104,9 @@ jobs:
           set +e
           mkdir -p data candidate secrets
           printf '{"ready":false,"reason_code":"vault_restore_failed"}\n' > data/discovery_only_inputs_status.json
+          if [ -z "$VAULT_TOKEN" ] || [ -z "$VAULT_URL" ]; then exit 0; fi
           rm -rf /tmp/wca-discovery-vault
-          git clone --depth 1 --filter=blob:none --sparse \
+          git clone --depth 1 --filter=blob:none --sparse --branch main --single-branch \
             "https://x-access-token:${VAULT_TOKEN}@${VAULT_URL#https://}" \
             /tmp/wca-discovery-vault >/dev/null 2>&1
           if [ "$?" -ne 0 ]; then exit 0; fi
@@ -122,11 +123,7 @@ jobs:
             rm -rf /tmp/wca-discovery-vault
             exit 0
           fi
-          cp /tmp/wca-discovery-vault/state/agent.db data/agent.db
-          cp /tmp/wca-discovery-vault/candidate/profile.yaml candidate/profile.yaml
-          cp /tmp/wca-discovery-vault/candidate/preferences.yaml candidate/preferences.yaml
           if [ -f /tmp/wca-discovery-vault/secrets/tavily_keys.txt ]; then
-            cp /tmp/wca-discovery-vault/secrets/tavily_keys.txt secrets/tavily_keys.txt
             mapfile -t budget_paths < <(python - <<'PY'
           import hashlib
           from pathlib import Path
@@ -142,7 +139,6 @@ jobs:
           PY
             )
           else
-            : > secrets/tavily_keys.txt
             budget_paths=()
           fi
           git -C /tmp/wca-discovery-vault sparse-checkout set --no-cone \
@@ -151,18 +147,12 @@ jobs:
             secrets/tavily_keys.txt "${budget_paths[@]}" >/dev/null 2>&1
           git -C /tmp/wca-discovery-vault checkout >/dev/null 2>&1
           if [ "$?" -ne 0 ]; then rm -rf /tmp/wca-discovery-vault; exit 0; fi
-          if [ -f /tmp/wca-discovery-vault/state/tavily_cache.json ]; then
-            cp /tmp/wca-discovery-vault/state/tavily_cache.json data/tavily_cache.json
-          fi
-          for budget_path in "${budget_paths[@]}"; do
-            if [ -f "/tmp/wca-discovery-vault/$budget_path" ]; then
-              cp "/tmp/wca-discovery-vault/$budget_path" "data/${budget_path##*/}"
-            fi
-          done
-          printf '{"ready":true,"database_snapshot_restored":true,"candidate_search_profile_restored":true,"provider_budget_ledgers_restored":%s,"provider_cache_restored":%s}\n' \
-            "$([ "${#budget_paths[@]}" -gt 0 ] && echo true || echo false)" \
-            "$([ -f data/tavily_cache.json ] && echo true || echo false)" \
-            > data/discovery_only_inputs_status.json
+          python -m app.workflows.discovery_only_restore \
+            --vault /tmp/wca-discovery-vault \
+            --workspace "$GITHUB_WORKSPACE" \
+            --origin "$VAULT_URL" \
+            --branch main >/dev/null 2>&1
+          if [ "$?" -ne 0 ]; then rm -rf /tmp/wca-discovery-vault; exit 0; fi
 
       - name: Restore targeted BTP preflight inputs only
         if: ${{ github.event_name == 'workflow_dispatch' && inputs.task == 'btp_outreach' && inputs.email_mode == 'dry_run' && inputs.target_employer != 'none' }}
