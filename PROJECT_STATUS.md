@@ -199,9 +199,12 @@ then serialized after the session closed; the sanitizer accesses the lazy
 `Job.company` relationship. The follow-up loads that relationship eagerly,
 with a regression test that detaches the loaded job before sanitizing it. The
 follow-up passed the full suite (**474 passed, 1 skipped**), Ruff, Python
-compilation, and `git diff --check`; publication and CI are pending. No second
-production evaluation has been dispatched. Durable Tavily reservations,
-daily limits, the BTP reserve, and the 10/day outbound limit remain unchanged.
+compilation, and `git diff --check`. It was published as commit
+[`5c372be77e64492dc23fd0a3bfb391424f83bbd9`](https://github.com/dubbishpsychic0000/ai-job-finder/commit/5c372be77e64492dc23fd0a3bfb391424f83bbd9);
+[CI run 38521913666](https://github.com/dubbishpsychic0000/ai-job-finder/actions/runs/38521913666)
+passed. No second production evaluation has been dispatched. Durable Tavily
+reservations, daily limits, the BTP reserve, and the 10/day outbound limit
+remain unchanged.
 
 Gmail mailbox reconciliation remains `NOT_CHECKED`. The supported OAuth flow
 is `wca gmail-auth`; in live mode it requests the existing `gmail.send` and
