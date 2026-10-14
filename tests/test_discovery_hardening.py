@@ -190,33 +190,21 @@ def test_tavily_failed_retries_are_charged_and_share_aggregate_cap(
     }
 
 
-def test_total_source_query_cap_selects_unique_uncached_combinations_first():
-    class Connector:
-        def __init__(self, cached=()):
-            self.cached = set(cached)
-
-        def has_cached_result(self, query, location):
-            return (query, location) in self.cached
-
+def test_search_combination_cap_preserves_distinct_source_requests():
     plan = [
         {"query": f"query-{index}", "location": "Morocco", "lang": "fr"}
         for index in range(6)
     ]
-    connectors = [
-        ({}, Connector()),
-        ({}, Connector()),
-        ({}, Connector()),
-    ]
     scheduled = [plan.copy(), plan.copy(), plan.copy()]
 
-    selected, deferred = _cap_scheduled_queries(scheduled, 5, connectors)
+    selected, deferred = _cap_scheduled_queries(scheduled, 5)
     queries = [
         item["query"] for source_queries in selected for item in source_queries
     ]
 
-    assert len(queries) == 5
+    assert len(queries) == 15
     assert len(set(queries)) == 5
-    assert sum(deferred) == 18 - 5
+    assert sum(deferred) == 18 - 15
 
 
 def test_api_allocator_spreads_bounded_calls_over_unique_plan_combinations(tmp_path):
@@ -423,6 +411,8 @@ def test_discovery_applies_shared_tavily_budget_and_reports_deferred_sources(
     assert sum(item["queries_budget_deferred"] for item in by_name.values()) == 1
     assert sum(item["queries_api"] for item in by_name.values()) == 2
     assert sum(item["queries"] for item in by_name.values()) == 2
+    assert report.combinations_attempted == 1
+    assert report.source_requests_attempted == 2
 
 
 def test_discovery_enforces_aggregate_attempt_cap_across_tavily_connectors(
@@ -561,7 +551,11 @@ def test_expired_tavily_cache_with_no_run_budget_is_not_treated_as_empty(
         cache=source_cache,
         attempt_budget=ApiAttemptBudget(0),
     )
-    query_key = _cache_key(source._build_query("civil", "Morocco"), "Morocco")
+    query_key = _cache_key(
+        source._build_query("civil", "Morocco"),
+        "Morocco",
+        source.request_scope_id,
+    )
     source_cache._data[query_key] = {
         "cached_at": datetime.now(timezone.utc).timestamp() - 31 * 24 * 60 * 60,
         "results": [],

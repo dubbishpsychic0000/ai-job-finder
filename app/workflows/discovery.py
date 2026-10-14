@@ -265,6 +265,7 @@ def _upsert_opportunity_company(
 @dataclass
 class DiscoveryReport:
     combinations_attempted: int = 0
+    source_requests_attempted: int = 0
     opportunities_fetched: int = 0
     new_jobs: int = 0
     duplicates: int = 0
@@ -331,6 +332,9 @@ def _load_source_connectors(
         opts.pop("name", None)
         opts.pop("enabled", None)
         opts.pop("mode", None)  # metadata for diagnostics, not connector options
+        opts.pop("applies_to_countries", None)
+        opts.pop("allocation_priority", None)
+        opts.pop("allocation_group", None)
         if kind in ("search_engine", "tavily"):
             opts["source_name"] = c.get("name", kind)
             if proxy:
@@ -369,6 +373,18 @@ def _tavily_budgets(connectors: list[tuple[dict, object]]) -> list[object]:
     return list(budgets.values())
 
 
+def _source_applies_to_country(source_cfg: dict, combo: dict) -> bool:
+    countries = source_cfg.get("applies_to_countries")
+    if not countries:
+        return not bool(source_cfg.get("domains"))
+    if isinstance(countries, str):
+        countries = [countries]
+    country = str(combo.get("country") or combo.get("location") or "").casefold()
+    return "*" in {str(value).casefold() for value in countries} or country in {
+        str(value).casefold() for value in countries
+    }
+
+
 def _allocate_source_queries(
     connectors: list[tuple[dict, object]],
     plan: list[dict],
@@ -377,7 +393,11 @@ def _allocate_source_queries(
     rotation_offset: int | None = None,
     max_api_attempts: int | None = None,
 ) -> tuple[list[list[dict]], list[int], list[int]]:
-    """Share uncached Tavily calls across sources while retaining cached reads."""
+    """Allocate applicable source requests against the shared Tavily budget.
+
+    Plan combinations are shared across sources; requests are not. A request's
+    source scope determines applicability, filtering, and cache identity.
+    """
     scheduled: list[list[dict]] = []
     deferred_by_source: list[int] = []
     stale_by_source: list[int] = []
@@ -392,14 +412,22 @@ def _allocate_source_queries(
         scheduled.append([])
         deferred_by_source.append(0)
         stale_by_source.append(0)
+        applicable_indices = []
+        for combo_index, combo in enumerate(combos):
+            if _source_applies_to_country(_source_cfg, combo):
+                applicable_indices.append(combo_index)
         if not callable(getattr(connector, "has_cached_result", None)) or not getattr(
             connector, "keys", None
         ):
-            scheduled[source_index] = list(combos)
+            scheduled[source_index] = [
+                combo for index, combo in enumerate(combos)
+                if index in applicable_indices
+            ]
             continue
         budgeted_sources.append(source_index)
         uncached_indices = []
-        for combo_index, combo in enumerate(combos):
+        for combo_index in applicable_indices:
+            combo = combos[combo_index]
             if connector.has_cached_result(combo["query"], combo["location"]):
                 scheduled[source_index].append(combo)
             else:
@@ -425,48 +453,126 @@ def _allocate_source_queries(
         for index in budgeted_sources
     }
     selected_indices = {index: set() for index in budgeted_sources}
-    max_queries = max(
+    source_counts = {index: 0 for index in budgeted_sources}
+    combo_count = max(
         (len(source_combos[index]) for index in budgeted_sources),
         default=0,
     )
-    used_query_keys: set[tuple[str, str, str]] = set()
-    for combo_index in range(max_queries):
-        rotated_order = order[combo_index % len(order):] + order[:combo_index % len(order)]
-        for source_index in rotated_order:
-            if combo_index not in uncached_by_source[source_index]:
-                continue
-            if available <= 0:
-                break
-            combo = source_combos[source_index][combo_index]
-            key = (
-                str(combo["query"]).casefold(),
-                str(combo["location"]).casefold(),
-                str(combo.get("lang", "")).casefold(),
-            )
-            if key in used_query_keys:
-                continue
-            selected_indices[source_index].add(combo_index)
-            used_query_keys.add(key)
-            available -= 1
+    def source_group(source_cfg: dict) -> str:
+        if source_cfg.get("allocation_group"):
+            return str(source_cfg["allocation_group"])
+        if source_cfg.get("official_only"):
+            return "official_ats"
+        if source_cfg.get("domains"):
+            return "market_specific"
+        return "broad"
+
+    # Spend the first slots across distinct request classes (broad web, official
+    # ATS, and market-specific domains) so one class cannot consume every slot.
+    group_candidates: dict[str, list[tuple[int, int]]] = {}
+    for source_index in budgeted_sources:
+        group = source_group(connectors[source_index][0])
+        group_candidates.setdefault(group, []).extend(
+            (source_index, combo_index)
+            for combo_index in uncached_by_source[source_index]
+        )
+    groups_by_priority = sorted(
+        group_candidates,
+        key=lambda group: max(
+            int(connectors[source_index][0].get("allocation_priority", 50))
+            for source_index, _combo_index in group_candidates[group]
+        ),
+        reverse=True,
+    )
+    grouped_combo_counts: dict[int, int] = {}
+    for group in groups_by_priority:
+        candidates = group_candidates[group]
+        chosen = max(
+            candidates,
+            key=lambda pair: (
+                -grouped_combo_counts.get(pair[1], 0),
+                int(connectors[pair[0]][0].get("allocation_priority", 50)),
+                -pair[1],
+                -order.index(pair[0]),
+            ),
+        )
+        source_index, combo_index = chosen
+        if available <= 0:
+            break
+        selected_indices[source_index].add(combo_index)
+        source_counts[source_index] += 1
+        grouped_combo_counts[combo_index] = (
+            grouped_combo_counts.get(combo_index, 0) + 1
+        )
+        available -= 1
+
+    # Then cover unserved plan combinations in their adaptive priority order.
+    # Source-specific requests may repeat a combination because their scopes
+    # are distinct; this pass avoids doing so until other combinations had a
+    # first request.
+    served_combinations = {
+        combo_index
+        for selected in selected_indices.values()
+        for combo_index in selected
+    }
+    for combo_index in range(combo_count):
+        if available <= 0:
+            break
+        if combo_index in served_combinations:
+            continue
+        candidates = [
+            index for index in budgeted_sources
+            if combo_index in uncached_by_source[index]
+            and combo_index not in selected_indices[index]
+        ]
+        if not candidates:
+            continue
+        selected_source = max(
+            candidates,
+            key=lambda index: (
+                int(connectors[index][0].get("allocation_priority", 50))
+                - source_counts[index] * 25,
+                -order.index(index),
+            ),
+        )
+        selected_indices[selected_source].add(combo_index)
+        source_counts[selected_source] += 1
+        available -= 1
+        served_combinations.add(combo_index)
+
+    # Only use remaining allowance on additional source scopes after each
+    # distinct combination has had a chance to run.
     if available > 0:
-        for combo_index in range(max_queries):
-            rotated_order = order[combo_index % len(order):] + order[:combo_index % len(order)]
-            for source_index in rotated_order:
-                if (
-                    available <= 0
-                    or combo_index not in uncached_by_source[source_index]
-                    or combo_index in selected_indices[source_index]
-                ):
-                    continue
-                selected_indices[source_index].add(combo_index)
+        for combo_index in range(combo_count):
+            candidates = [
+                index for index in budgeted_sources
+                if combo_index in uncached_by_source[index]
+                and combo_index not in selected_indices[index]
+            ]
+            while candidates and available > 0:
+                selected_source = max(
+                    candidates,
+                    key=lambda index: (
+                        int(connectors[index][0].get("allocation_priority", 50))
+                        - source_counts[index] * 25,
+                        -order.index(index),
+                    ),
+                )
+                selected_indices[selected_source].add(combo_index)
+                source_counts[selected_source] += 1
                 available -= 1
+                candidates.remove(selected_source)
 
     for source_index in budgeted_sources:
         selected = selected_indices[source_index]
         combos = source_combos[source_index]
         scheduled[source_index] = [
             combo for index, combo in enumerate(combos)
-            if index not in uncached_by_source[source_index] or index in selected
+            if _source_applies_to_country(connectors[source_index][0], combo)
+            and (
+                index not in uncached_by_source[source_index]
+                or index in selected
+            )
         ]
         deferred_by_source[source_index] = (
             len(uncached_by_source[source_index]) - len(selected)
@@ -490,38 +596,36 @@ def _remaining_tavily_requests(connector) -> int:
 def _cap_scheduled_queries(
     scheduled: list[list[dict]],
     limit: int,
-    connectors: list[tuple[dict, object]],
+    plan: list[dict] | None = None,
 ) -> tuple[list[list[dict]], list[int]]:
-    """Cap searches, preferring uncached unique combinations across sources."""
+    """Cap distinct search-plan combinations and retain their source requests."""
     cap = max(0, int(limit))
     selected = [[] for _ in scheduled]
-    candidates = []
-    for source_index, combos in enumerate(scheduled):
-        connector = connectors[source_index][1]
-        cache_check = getattr(connector, "has_cached_result", None)
-        for combo_index, combo in enumerate(combos):
-            is_cached = bool(
-                callable(cache_check)
-                and cache_check(combo["query"], combo["location"])
-            )
-            candidates.append((
-                is_cached,
-                combo_index,
-                source_index,
-                combo,
-            ))
-    candidates.sort(key=lambda item: (item[0], item[1], item[2]))
-    seen_combinations: set[tuple[str, str, str]] = set()
-    for _cached, _combo_index, source_index, combo in candidates:
-        key = (
-            str(combo["query"]).casefold(),
-            str(combo["location"]).casefold(),
+    combination_order: list[tuple[str, str, str]] = []
+    combo_by_key: dict[tuple[str, str, str], dict] = {}
+    def combo_key(combo: dict) -> tuple[str, str, str]:
+        return (
+            str(combo.get("query", "")).casefold(),
+            str(combo.get("country") or combo.get("location", "")).casefold(),
             str(combo.get("lang", "")).casefold(),
         )
-        if key in seen_combinations or sum(map(len, selected)) >= cap:
-            continue
-        selected[source_index].append(combo)
-        seen_combinations.add(key)
+
+    for combo in plan or []:
+        key = combo_key(combo)
+        if key not in combo_by_key:
+            combo_by_key[key] = combo
+            combination_order.append(key)
+    for combos in scheduled:
+        for combo in combos:
+            key = combo_key(combo)
+            if key not in combo_by_key:
+                combo_by_key[key] = combo
+                combination_order.append(key)
+    selected_keys = set(combination_order[:cap])
+    for source_index, combos in enumerate(scheduled):
+        selected[source_index] = [
+            combo for combo in combos if combo_key(combo) in selected_keys
+        ]
     deferred = [
         len(combos) - len(selected[index])
         for index, combos in enumerate(scheduled)
@@ -544,7 +648,7 @@ async def run_discovery(session: Session, config: AgentConfig, prefs: Preference
                         *,
                         max_queries_override: int | None = None,
                         max_api_attempts_override: int | None = None,
-                        max_total_source_queries: int | None = None,
+                        max_search_combinations: int | None = None,
                         budget_reserver=None,
                         budget_exhauster=None) -> DiscoveryReport:
     report = DiscoveryReport()
@@ -646,16 +750,34 @@ async def run_discovery(session: Session, config: AgentConfig, prefs: Preference
         connectors, plan, max_requests, max_api_attempts=max_api_attempts,
     )
     run_budget_deferred = [0] * len(scheduled_queries)
-    if max_total_source_queries is not None:
+    if max_search_combinations is not None:
         scheduled_queries, run_budget_deferred = _cap_scheduled_queries(
-            scheduled_queries, max_total_source_queries, connectors,
+            scheduled_queries, max_search_combinations, plan,
         )
+    attempted_combinations: set[tuple[str, str, str]] = set()
     for source_index, (source_cfg, connector) in enumerate(connectors):
         source_name = source_cfg.get("name", connector.name)
+        inapplicable_countries: dict[str, int] = {}
+        for combo in plan:
+            if not _source_applies_to_country(source_cfg, combo):
+                country = str(combo.get("country") or combo.get("location") or "UNKNOWN")
+                inapplicable_countries[country] = (
+                    inapplicable_countries.get(country, 0) + 1
+                )
         source_report = {
             "name": source_name,
             "kind": source_cfg.get("kind", getattr(connector, "kind", "?")),
             "mode": source_cfg.get("mode", "real"),
+            "request_scope": {
+                "applies_to_countries": source_cfg.get(
+                    "applies_to_countries",
+                    ["*"] if not source_cfg.get("domains") else [],
+                ),
+                "domains": sorted(source_cfg.get("domains") or []),
+                "official_only": bool(source_cfg.get("official_only", False)),
+                "request_scope_id": getattr(connector, "request_scope_id", ""),
+            },
+            "inapplicable_country_queries": inapplicable_countries,
             "queries": 0,
             "fetched": 0,
             "normalized": 0,
@@ -666,6 +788,9 @@ async def run_discovery(session: Session, config: AgentConfig, prefs: Preference
             "queries_cached": 0,
             "queries_api": 0,
             "queries_empty": 0,
+            "live_empty_responses": 0,
+            "cached_empty_results": 0,
+            "queries_filtered": 0,
             "queries_failed": 0,
             "queries_budget_deferred": deferred_queries[source_index],
             "queries_run_budget_deferred": run_budget_deferred[source_index],
@@ -678,8 +803,15 @@ async def run_discovery(session: Session, config: AgentConfig, prefs: Preference
             "query_error_codes": {},
             "queries_by_country": {},
             "queries_by_language": {},
+            "provider_attempts_by_country": {},
+            "provider_attempts_by_language": {},
+            "cache_hits_by_country": {},
+            "cache_hits_by_language": {},
             "fetched_api_results": 0,
             "fetched_cache_results": 0,
+            "provider_results_returned": 0,
+            "provider_results_filtered": 0,
+            "cached_provider_results_filtered": 0,
             "error": "",
             "rate_status": "ok",
             "health": "ready",
@@ -827,6 +959,11 @@ async def run_discovery(session: Session, config: AgentConfig, prefs: Preference
             return await _connector.search(combo["query"], combo["location"])
 
         def record_query_coverage(combo, _source_report=source_report) -> None:
+            attempted_combinations.add((
+                str(combo.get("query", "")).casefold(),
+                str(combo.get("country") or combo.get("location", "")).casefold(),
+                str(combo.get("lang", "")).casefold(),
+            ))
             country_counts = _source_report["queries_by_country"]
             country = str(combo.get("country", ""))
             country_counts[country] = country_counts.get(country, 0) + 1
@@ -834,17 +971,56 @@ async def run_discovery(session: Session, config: AgentConfig, prefs: Preference
             language = str(combo.get("lang", "unknown"))
             language_counts[language] = language_counts.get(language, 0) + 1
 
-        def record_query_outcome(results, _connector=connector, source=source_report):
+        def record_query_outcome(
+            results, combo, _connector=connector, source=source_report,
+        ):
             origin = getattr(_connector, "last_origin", "")
             status = getattr(_connector, "last_status", "")
             error_code = getattr(_connector, "last_error_code", "")
             deferred_reason = getattr(_connector, "last_deferred_reason", "")
+            country = str(combo.get("country") or combo.get("location") or "UNKNOWN")
+            language = str(combo.get("lang") or "unknown")
             if origin == "cache":
                 source["queries_cached"] += 1
+                if status == "filtered":
+                    source["queries_filtered"] += 1
+                    source["cached_provider_results_filtered"] += int(
+                        getattr(_connector, "last_provider_result_count", 0),
+                    )
+                for value, key in (
+                    (country, "cache_hits_by_country"),
+                    (language, "cache_hits_by_language"),
+                ):
+                    counts = source[key]
+                    counts[value] = counts.get(value, 0) + 1
             elif origin == "api":
                 source["queries_api"] += 1
+                provider_result_count = int(
+                    getattr(_connector, "last_provider_result_count", len(results)),
+                )
+                accepted_result_count = int(
+                    getattr(_connector, "last_accepted_result_count", len(results)),
+                )
+                source["provider_results_returned"] += provider_result_count
+                source["provider_results_filtered"] += max(
+                    0, provider_result_count - accepted_result_count,
+                )
+                if status == "empty":
+                    source["live_empty_responses"] += 1
+                if status == "filtered":
+                    source["queries_filtered"] += 1
+            provider_attempts = int(getattr(_connector, "last_call_attempts", 0))
+            if provider_attempts:
+                for value, key in (
+                    (country, "provider_attempts_by_country"),
+                    (language, "provider_attempts_by_language"),
+                ):
+                    counts = source[key]
+                    counts[value] = counts.get(value, 0) + provider_attempts
             if not results and status == "empty":
                 source["queries_empty"] += 1
+                if origin == "cache":
+                    source["cached_empty_results"] += 1
             if status in {"degraded", "unconfigured", "blocked"}:
                 if error_code in {
                     "daily_request_budget_exhausted",
@@ -865,14 +1041,13 @@ async def run_discovery(session: Session, config: AgentConfig, prefs: Preference
         failure = ""
         try:
             if parallel:  # §26 — all searches dispatched at once, writes stay ordered
-                report.combinations_attempted += len(combos)
                 source_report["queries"] += len(combos)
                 batch = await asyncio.gather(*(search(c) for c in combos), return_exceptions=True)
                 for combo, results in zip(combos, batch, strict=True):
                     if isinstance(results, BaseException):
                         raise results  # connector-level isolation below
                     record_query_coverage(combo)
-                    record_query_outcome(results)
+                    record_query_outcome(results, combo)
                     items_found += process(combo, results, source_name, source_report)
             else:
                 for combo in combos:
@@ -898,11 +1073,10 @@ async def run_discovery(session: Session, config: AgentConfig, prefs: Preference
                             source_report["queries_budget_deferred"] += 1
                             source_report["rate_status"] = "limited"
                         continue
-                    report.combinations_attempted += 1
                     source_report["queries"] += 1
                     record_query_coverage(combo)
                     results = await search(combo)
-                    record_query_outcome(results)
+                    record_query_outcome(results, combo)
                     items_found += process(combo, results, source_name, source_report)
         except Exception as exc:  # connector-level isolation
             if not source_report["error"]:
@@ -953,10 +1127,37 @@ async def run_discovery(session: Session, config: AgentConfig, prefs: Preference
             else:
                 health = "ok"
             source_report["health"] = health or "ok"
+            source_report["result_state"] = (
+                "results_received"
+                if source_report["fetched"]
+                else "provider_results_filtered"
+                if source_report["provider_results_returned"]
+                else "cached_results_filtered"
+                if source_report["cached_provider_results_filtered"]
+                else "successful_empty_response"
+                if source_report["live_empty_responses"]
+                else "cached_empty_result"
+                if source_report["cached_empty_results"]
+                else "successful_empty_response"
+                if source_report["queries_empty"] and not source_report["queries_failed"]
+                else "budget_deferred"
+                if source_report["queries"] == 0
+                and (
+                    source_report["queries_budget_deferred"]
+                    or source_report["queries_run_budget_deferred"]
+                )
+                else "not_attempted"
+                if source_report["queries"] == 0
+                else "failed_or_unresolved"
+            )
             mem.store.mark_source_fetched(session, source, items_found, error=failure)
             report.source_reports.append(source_report)
 
     raw_results = sum(item["fetched"] for item in report.source_reports)
+    report.combinations_attempted = len(attempted_combinations)
+    report.source_requests_attempted = sum(
+        item["queries"] for item in report.source_reports
+    )
     normalization_rejected = sum(
         item["normalization_rejected"] for item in report.source_reports
     )

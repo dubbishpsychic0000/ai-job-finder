@@ -33,9 +33,22 @@ def build_adaptive_plan(session: Session, prefs: Preferences, config: AgentConfi
     base = SearchPlan(prefs, vocab=vocab).build(max_per_country=max_per_country,
                                                 max_queries_per_run=max_queries_per_run)
     dcfg = config.discovery or {}
-    ranking = {cs.country: idx for idx, cs in enumerate(
-        rank_countries(prefs.countries, prefs, profile, session=session,
-                       weights=dcfg.get("country_ranking_weights")))}
+    ranked_countries = [
+        score.country for score in rank_countries(
+            prefs.countries, prefs, profile, session=session,
+            weights=dcfg.get("country_ranking_weights"),
+        )
+    ]
+    # The first configured target is the owner's explicit top priority. Keep
+    # learned affinity ordering for the remaining countries, but do not let
+    # historical demand or language scores starve that target under a cap.
+    if prefs.countries:
+        preferred_first = prefs.countries[0]
+        ranked_countries = [preferred_first] + [
+            country for country in ranked_countries
+            if country.casefold() != preferred_first.casefold()
+        ]
+    ranking = {country: index for index, country in enumerate(ranked_countries)}
     has_history = any(aggregate_query_stat(session, item["query"], item["country"], learning_sources) is not None
                       for item in base)
     remaining = budget_remaining(session, int(dcfg.get("max_daily_search_queries") or 0))
@@ -79,9 +92,4 @@ def build_adaptive_plan(session: Session, prefs: Preferences, config: AgentConfi
         if limit is not None
     ]
     cap = min(limits) if limits else None
-    ranked_countries = [
-        country for country, _index in sorted(
-            ranking.items(), key=lambda pair: pair[1],
-        )
-    ]
     return _fair_cap(plan, cap, ranked_countries)

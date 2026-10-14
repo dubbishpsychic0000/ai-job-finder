@@ -46,8 +46,8 @@ def _budget_thread_lock(identity: str) -> threading.RLock:
         return _budget_locks.setdefault(identity, threading.RLock())
 
 
-def _cache_key(query: str, location: str) -> str:
-    payload = f"tavily\x00{query}\x00{location}".encode()
+def _cache_key(query: str, location: str, request_scope: str = "") -> str:
+    payload = f"tavily\x00{query}\x00{location}\x00{request_scope}".encode()
     return hashlib.sha256(payload).hexdigest()
 
 
@@ -131,6 +131,10 @@ class TavilyCache:
             self._data = {}
 
     def get(self, key: str) -> Any:
+        entry = self.get_with_metadata(key)
+        return entry["results"] if entry is not None else None
+
+    def get_with_metadata(self, key: str) -> dict[str, Any] | None:
         entry = self._data.get(key)
         if not isinstance(entry, dict) or "cached_at" not in entry:
             return None
@@ -141,17 +145,28 @@ class TavilyCache:
         age = datetime.now(timezone.utc).timestamp() - cached_at
         if age < 0 or age >= self.ttl_seconds:
             return None
-        return entry.get("results")
+        return {
+            "results": entry.get("results"),
+            "metadata": entry.get("metadata", {}),
+        }
 
     def has_stale_entry(self, key: str) -> bool:
         return key in self._data and self.get(key) is None
 
-    def put(self, key: str, value: Any) -> None:
+    def put(
+        self,
+        key: str,
+        value: Any,
+        *,
+        metadata: dict[str, Any] | None = None,
+    ) -> None:
         with self._lock:
             self._data[key] = {
                 "cached_at": datetime.now(timezone.utc).timestamp(),
                 "results": value,
             }
+            if metadata is not None:
+                self._data[key]["metadata"] = metadata
             if len(self._data) > self.max_entries:
                 for old in list(self._data)[: len(self._data) - self.max_entries]:
                     self._data.pop(old, None)
@@ -510,6 +525,18 @@ class ResilientTavily:
         self.source_name = source_name
         self.result_source_type = result_source_type
         self.query_suffix = query_suffix
+        scope_payload = json.dumps({
+            "source_name": source_name,
+            "domains": sorted(self.domains),
+            "official_only": self.official_only,
+            "query_suffix": query_suffix,
+            "search_depth": os.getenv("TAVILY_SEARCH_DEPTH", "basic"),
+            "results_per_query": results_per_query,
+            "result_source_type": result_source_type,
+        }, sort_keys=True, separators=(",", ":"))
+        self.request_scope_id = hashlib.sha256(
+            scope_payload.encode("utf-8")
+        ).hexdigest()[:12]
         self.max_key_attempts = max_key_attempts
         self.attempt_budget = attempt_budget or ApiAttemptBudget(GENERAL_TAVILY_DAILY_LIMIT)
         self.name = f"tavily_resilient:{self.keys[0].fp}"
@@ -518,6 +545,8 @@ class ResilientTavily:
         self.last_error_code = ""
         self.last_deferred_reason = ""
         self.last_call_attempts = 0
+        self.last_provider_result_count = 0
+        self.last_accepted_result_count = 0
         self._attempt_stats = {
             "attempts": 0,
             "successes": 0,
@@ -530,11 +559,15 @@ class ResilientTavily:
 
     def has_cached_result(self, query: str, location: str = "") -> bool:
         q = self._build_query(query, location)
-        return self.cache.get(_cache_key(q, location)) is not None
+        return self.cache.get(
+            _cache_key(q, location, self.request_scope_id),
+        ) is not None
 
     def has_stale_cached_result(self, query: str, location: str = "") -> bool:
         q = self._build_query(query, location)
-        return self.cache.has_stale_entry(_cache_key(q, location))
+        return self.cache.has_stale_entry(
+            _cache_key(q, location, self.request_scope_id),
+        )
 
     def _build_query(self, query: str, location: str) -> str:
         q = f"{query} {location} {self.query_suffix}".strip()
@@ -568,13 +601,25 @@ class ResilientTavily:
         self.last_error_code = ""
         self.last_deferred_reason = ""
         self.last_call_attempts = 0
+        self.last_provider_result_count = 0
+        self.last_accepted_result_count = 0
         q = self._build_query(query, location)
 
-        cache_key = _cache_key(q, location)
-        cached = self.cache.get(cache_key)
-        if cached is not None:
+        cache_key = _cache_key(q, location, self.request_scope_id)
+        cache_entry = self.cache.get_with_metadata(cache_key)
+        if cache_entry is not None and cache_entry["results"] is not None:
+            cached = cache_entry["results"]
+            metadata = cache_entry.get("metadata") or {}
             self.last_origin = "cache"
-            self.last_status = "ok" if cached else "empty"
+            self.last_provider_result_count = int(
+                metadata.get("provider_result_count", len(cached)),
+            )
+            self.last_accepted_result_count = int(
+                metadata.get("accepted_result_count", len(cached)),
+            )
+            self.last_status = metadata.get(
+                "result_state", "ok" if cached else "empty",
+            )
             # Convert cached dicts back to Opportunity objects
             return [Opportunity(**d) for d in cached]
 
@@ -656,6 +701,7 @@ class ResilientTavily:
                         logger.warning('Failed to write tavily debug: %s', _dbg_exc)
 
                 results = data.get("results", [])
+                self.last_provider_result_count = len(results)
 
                 out: list[Opportunity] = []
                 from app.connectors.ats_detect import detect_ats
@@ -688,18 +734,34 @@ class ResilientTavily:
                         raw={"query": q},
                     ))
 
-                # An empty, successful response is a valid negative result.
-                # Cache it and charge the one request so key rotation cannot
-                # turn an empty query into one request per credential.
+                self.last_accepted_result_count = len(out)
+                self.last_status = (
+                    "ok" if out else "filtered" if results else "empty"
+                )
+                # Cache successful results, including an empty accepted set,
+                # so key rotation cannot repeat a completed request.
                 self.attempt_budget.record_success()
                 self._attempt_stats["successes"] += 1
-                self.cache.put(cache_key, [o.to_dict() for o in out])
+                self.cache.put(
+                    cache_key,
+                    [o.to_dict() for o in out],
+                    metadata={
+                        "provider_result_count": self.last_provider_result_count,
+                        "accepted_result_count": self.last_accepted_result_count,
+                        "result_state": self.last_status,
+                    },
+                )
                 if out:
                     logger.info("Tavily key %s success, %d results", key.fp, len(out))
+                elif results:
+                    logger.info(
+                        "Tavily key %s returned %d results; none passed source filters",
+                        key.fp,
+                        len(results),
+                    )
                 else:
                     logger.info("Tavily key %s returned empty results", key.fp)
                 self.last_origin = "api"
-                self.last_status = "ok" if out else "empty"
                 return out
 
             except Exception as exc:

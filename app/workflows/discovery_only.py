@@ -61,7 +61,7 @@ async def run_bounded_discovery(
         llm=None,
         max_queries_override=MAX_SEARCH_COMBINATIONS,
         max_api_attempts_override=MAX_TAVILY_ATTEMPTS,
-        max_total_source_queries=MAX_SEARCH_COMBINATIONS,
+        max_search_combinations=MAX_SEARCH_COMBINATIONS,
         budget_reserver=budget_store.reserve if budget_store is not None else None,
         budget_exhauster=budget_store.exhaust if budget_store is not None else None,
     )
@@ -292,9 +292,38 @@ def build_sanitized_report(
             "name": _clean_text(item.get("name"), 80),
             "kind": _clean_text(item.get("kind"), 40),
             "status": _clean_text(item.get("health"), 32),
+            "result_state": _clean_text(item.get("result_state"), 40),
+            "request_scope": {
+                "applies_to_countries": [
+                    _clean_text(country, 80)
+                    for country in (item.get("request_scope") or {}).get(
+                        "applies_to_countries", [],
+                    )
+                ],
+                "domains": [
+                    _clean_text(domain, 120)
+                    for domain in (item.get("request_scope") or {}).get("domains", [])
+                ],
+                "official_only": bool(
+                    (item.get("request_scope") or {}).get("official_only", False)
+                ),
+                "request_scope_id": _clean_text(
+                    (item.get("request_scope") or {}).get("request_scope_id"), 16,
+                ),
+            },
+            "inapplicable_country_queries": {
+                _clean_text(country, 80): int(count)
+                for country, count in (
+                    item.get("inapplicable_country_queries") or {}
+                ).items()
+            },
             "queries_attempted": int(item.get("queries", 0)),
             "queries_live_api": int(item.get("queries_api", 0)),
             "queries_cached": int(item.get("queries_cached", 0)),
+            "queries_empty": int(item.get("queries_empty", 0)),
+            "live_empty_responses": int(item.get("live_empty_responses", 0)),
+            "cached_empty_results": int(item.get("cached_empty_results", 0)),
+            "queries_filtered": int(item.get("queries_filtered", 0)),
             "queries_failed": int(item.get("queries_failed", 0)),
             "queries_budget_deferred": int(item.get("queries_budget_deferred", 0)),
             "queries_run_limit_deferred": int(item.get("queries_run_budget_deferred", 0)),
@@ -302,6 +331,15 @@ def build_sanitized_report(
             "external_results": int(item.get("fetched", 0)),
             "results_from_live_api": int(item.get("fetched_api_results", 0)),
             "results_from_cache": int(item.get("fetched_cache_results", 0)),
+            "provider_results_returned": int(
+                item.get("provider_results_returned", 0),
+            ),
+            "provider_results_filtered": int(
+                item.get("provider_results_filtered", 0),
+            ),
+            "cached_provider_results_filtered": int(
+                item.get("cached_provider_results_filtered", 0),
+            ),
             "normalized": int(item.get("normalized", 0)),
             "duplicates": int(item.get("duplicates", 0)),
             "duplicate_reasons": {
@@ -312,6 +350,31 @@ def build_sanitized_report(
             "error_codes": errors,
             "queried_by_country": dict(item.get("queries_by_country") or {}),
             "queried_by_language": dict(item.get("queries_by_language") or {}),
+            "provider_attempts_by_country": {
+                _clean_text(country, 80): int(count)
+                for country, count in (
+                    item.get("provider_attempts_by_country") or {}
+                ).items()
+            },
+            "provider_attempts_by_language": {
+                _clean_text(language, 20): int(count)
+                for language, count in (
+                    item.get("provider_attempts_by_language") or {}
+                ).items()
+            },
+            "cache_hits_by_country": {
+                _clean_text(country, 80): int(count)
+                for country, count in (item.get("cache_hits_by_country") or {}).items()
+            },
+            "cache_hits_by_language": {
+                _clean_text(language, 20): int(count)
+                for language, count in (item.get("cache_hits_by_language") or {}).items()
+            },
+            "successful_empty_responses": int(item.get("queries_empty", 0)),
+            "requests_not_attempted_due_to_budget": int(
+                item.get("queries_budget_deferred", 0)
+                + item.get("queries_run_budget_deferred", 0)
+            ),
         })
 
     configured = (sources_config or {}).get("connectors", [])
@@ -330,9 +393,24 @@ def build_sanitized_report(
                 if source.get("kind") != "tavily"
                 else "not_initialized"
             ),
+            "result_state": "not_attempted",
+            "request_scope": {
+                "applies_to_countries": source.get(
+                    "applies_to_countries",
+                    ["*"] if not source.get("domains") else [],
+                ),
+                "domains": sorted(source.get("domains") or []),
+                "official_only": bool(source.get("official_only", False)),
+                "request_scope_id": "",
+            },
+            "inapplicable_country_queries": {},
             "queries_attempted": 0,
             "queries_live_api": 0,
             "queries_cached": 0,
+            "queries_empty": 0,
+            "live_empty_responses": 0,
+            "cached_empty_results": 0,
+            "queries_filtered": 0,
             "queries_failed": 0,
             "queries_budget_deferred": 0,
             "queries_run_limit_deferred": 0,
@@ -340,6 +418,9 @@ def build_sanitized_report(
             "external_results": 0,
             "results_from_live_api": 0,
             "results_from_cache": 0,
+            "provider_results_returned": 0,
+            "provider_results_filtered": 0,
+            "cached_provider_results_filtered": 0,
             "normalized": 0,
             "duplicates": 0,
             "duplicate_reasons": {},
@@ -347,6 +428,10 @@ def build_sanitized_report(
             "error_codes": {},
             "queried_by_country": {},
             "queried_by_language": {},
+            "provider_attempts_by_country": {},
+            "provider_attempts_by_language": {},
+            "cache_hits_by_country": {},
+            "cache_hits_by_language": {},
         })
 
     type_counts: Counter[str] = Counter()
@@ -410,6 +495,53 @@ def build_sanitized_report(
 
     budget = report.api_request_budget or {}
     sources_with_errors = sum(1 for item in source_reports if item["queries_failed"])
+    external_results = sum(item["external_results"] for item in source_reports)
+    provider_results_returned = sum(
+        item["provider_results_returned"] for item in source_reports
+    )
+    provider_results_filtered = sum(
+        item["provider_results_filtered"] for item in source_reports
+    )
+    cached_provider_results_filtered = sum(
+        item["cached_provider_results_filtered"] for item in source_reports
+    )
+    source_queries = sum(item["queries_attempted"] for item in source_reports)
+    live_api_queries = sum(item["queries_live_api"] for item in source_reports)
+    successful_empty_queries = sum(
+        item["live_empty_responses"] for item in source_reports
+    )
+    cached_empty_queries = sum(
+        item["cached_empty_results"] for item in source_reports
+    )
+    failed_queries = sum(item["queries_failed"] for item in source_reports)
+    not_attempted_due_budget = sum(
+        item["queries_budget_deferred"] + item["queries_run_limit_deferred"]
+        for item in source_reports
+    )
+    source_country_exclusions = sum(
+        sum(item["inapplicable_country_queries"].values())
+        for item in source_reports
+    )
+    if external_results:
+        result_state = "provider_results_received"
+    elif provider_results_returned:
+        result_state = "provider_results_filtered_by_source"
+    elif cached_provider_results_filtered:
+        result_state = "cached_results_filtered_by_source"
+    elif live_api_queries and successful_empty_queries == live_api_queries:
+        result_state = "all_live_provider_responses_successfully_empty"
+    elif not live_api_queries and cached_empty_queries:
+        result_state = "cached_empty_results_no_live_requests"
+    elif source_queries and successful_empty_queries + cached_empty_queries == source_queries and not failed_queries:
+        result_state = "all_attempted_requests_successfully_empty"
+    elif not source_queries and not_attempted_due_budget:
+        result_state = "all_requests_deferred_by_budget"
+    elif not source_queries:
+        result_state = "no_source_requests_attempted"
+    elif failed_queries:
+        result_state = "requests_failed_or_unresolved"
+    else:
+        result_state = "mixed_empty_and_unresolved_requests"
     return {
         "schema_version": REPORT_SCHEMA_VERSION,
         "status": "COMPLETED",
@@ -420,7 +552,9 @@ def build_sanitized_report(
             "daily_query_limit_setting_unchanged": True,
         },
         "counts": {
-            "external_results_fetched": sum(item["external_results"] for item in source_reports),
+            "search_combinations_attempted": int(report.combinations_attempted),
+            "source_requests_attempted": int(report.source_requests_attempted),
+            "external_results_fetched": external_results,
             "normalized_results": int(report.opportunities_fetched),
             "duplicates": int(report.duplicates),
             "unique_new_opportunities": int(report.new_jobs),
@@ -431,6 +565,18 @@ def build_sanitized_report(
                 if status in {"STALE_BY_POSTING_DATE", "EXPIRED_BY_CLOSING_DATE"}
             ),
             "unverifiable_posting_date_new": freshness_counts["UNVERIFIABLE_DATE"],
+        },
+        "query_outcome": {
+            "result_state": result_state,
+            "source_requests_attempted": source_queries,
+            "successful_empty_responses": successful_empty_queries,
+            "cached_empty_results": cached_empty_queries,
+            "failed_requests": failed_queries,
+            "requests_not_attempted_due_to_budget": not_attempted_due_budget,
+            "source_country_combinations_inapplicable": source_country_exclusions,
+            "provider_results_returned": provider_results_returned,
+            "provider_results_filtered": provider_results_filtered,
+            "cached_provider_results_filtered": cached_provider_results_filtered,
         },
         "coverage": {
             "new_by_country": dict(country_counts),

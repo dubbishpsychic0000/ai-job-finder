@@ -52,7 +52,7 @@ def test_bounded_discovery_invokes_discovery_only_with_fixed_caps(monkeypatch):
     assert seen["llm"] is None
     assert seen["max_queries_override"] == 12
     assert seen["max_api_attempts_override"] == 8
-    assert seen["max_total_source_queries"] == 12
+    assert seen["max_search_combinations"] == 12
     assert all(not seen["config"].discovery[name] for name in (
         "website_research", "company_universe_discovery",
         "social_signal_discovery", "vocab_llm",
@@ -372,6 +372,99 @@ def test_discovery_report_is_sanitized_and_distinguishes_cached_new_listing():
     assert "secret-value" not in serialized
     assert "candidate profile" not in opportunity["discovery_relevance"]
     assert "candidate fit was not evaluated" in opportunity["discovery_relevance"]
+
+
+def test_zero_result_report_distinguishes_empty_from_deferred_queries():
+    report = DiscoveryReport(
+        combinations_attempted=1,
+        source_requests_attempted=1,
+        source_reports=[
+            {
+                "name": "broad",
+                "kind": "tavily",
+                "health": "partial_budget",
+                "result_state": "successful_empty_response",
+                "request_scope": {
+                    "applies_to_countries": ["*"],
+                    "domains": [],
+                    "official_only": False,
+                    "request_scope_id": "scope-id",
+                },
+                "queries": 1,
+                "queries_api": 1,
+                "queries_empty": 1,
+                "live_empty_responses": 1,
+                "cached_empty_results": 0,
+                "queries_filtered": 0,
+                "queries_failed": 0,
+                "queries_budget_deferred": 2,
+                "queries_run_budget_deferred": 0,
+                "queries_by_country": {"Morocco": 1},
+                "queries_by_language": {"fr": 1},
+                "provider_attempts_by_country": {"Morocco": 1},
+                "provider_attempts_by_language": {"fr": 1},
+                "cache_hits_by_country": {},
+                "cache_hits_by_language": {},
+                "inapplicable_country_queries": {},
+                "provider_results_returned": 0,
+                "provider_results_filtered": 0,
+                "cached_provider_results_filtered": 0,
+            },
+            {
+                "name": "morocco-board",
+                "kind": "tavily",
+                "health": "not_run",
+                "result_state": "not_attempted",
+                "request_scope": {
+                    "applies_to_countries": ["Morocco"],
+                    "domains": ["rekrute.com"],
+                    "official_only": False,
+                    "request_scope_id": "another-scope",
+                },
+                "queries": 0,
+                "queries_empty": 0,
+                "queries_failed": 0,
+                "queries_budget_deferred": 0,
+                "queries_run_budget_deferred": 0,
+                "queries_by_country": {},
+                "queries_by_language": {},
+                "inapplicable_country_queries": {"France": 4},
+            },
+        ],
+        api_request_budget={
+            "limit": 8,
+            "attempts": 1,
+            "successes": 1,
+            "failed_attempts": 0,
+            "retry_attempts": 0,
+            "remaining": 7,
+        },
+    )
+
+    output = discovery_only.build_sanitized_report(
+        report,
+        [],
+        AgentConfig(),
+        {"limit_per_key": 17, "remaining_by_key": [16]},
+    )
+
+    assert output["query_outcome"] == {
+        "result_state": "all_live_provider_responses_successfully_empty",
+        "source_requests_attempted": 1,
+        "successful_empty_responses": 1,
+        "cached_empty_results": 0,
+        "failed_requests": 0,
+        "requests_not_attempted_due_to_budget": 2,
+        "source_country_combinations_inapplicable": 4,
+        "provider_results_returned": 0,
+        "provider_results_filtered": 0,
+        "cached_provider_results_filtered": 0,
+    }
+    assert output["counts"]["search_combinations_attempted"] == 1
+    assert output["counts"]["source_requests_attempted"] == 1
+    assert output["sources"][0]["queried_by_country"] == {"Morocco": 1}
+    assert output["sources"][0]["provider_attempts_by_country"] == {"Morocco": 1}
+    assert output["sources"][1]["inapplicable_country_queries"] == {"France": 4}
 
 
 def test_workflow_discovery_task_skips_outbound_vault_and_full_pipeline_steps():

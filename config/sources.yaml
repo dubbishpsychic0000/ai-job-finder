@@ -10,6 +10,8 @@ connectors:
     name: tavily_web_search
     mode: real
     enabled: true
+    applies_to_countries: ["*"]
+    allocation_priority: 100
     results_per_query: 12
 
   # Direct public ATS listings only. They are independently deduplicated and
@@ -19,22 +21,24 @@ connectors:
     mode: real
     enabled: true
     official_only: true
+    applies_to_countries: ["*"]
+    allocation_priority: 95
     results_per_query: 8
 
   # Moroccan platforms are discovered through their publicly indexed pages;
   # the agent does not scrape or log into these sites. Disable any source
   # independently if its terms, robots policy, or availability changes.
-  - {kind: tavily, name: tavily_rekrute, mode: real, enabled: true, domains: [rekrute.com], result_source_type: job_board, results_per_query: 8}
-  - {kind: tavily, name: tavily_emploi_ma, mode: real, enabled: true, domains: [emploi.ma], result_source_type: job_board, results_per_query: 8}
-  - {kind: tavily, name: tavily_amaljob, mode: real, enabled: true, domains: [amaljob.com], result_source_type: job_board, results_per_query: 8}
-  - {kind: tavily, name: tavily_anapec, mode: real, enabled: true, domains: [anapec.org], result_source_type: government, results_per_query: 8}
-  - {kind: tavily, name: tavily_emploi_public_ma, mode: real, enabled: true, domains: [emploi-public.ma], result_source_type: government, results_per_query: 8}
-  - {kind: tavily, name: tavily_marocannonces, mode: real, enabled: true, domains: [marocannonces.com], result_source_type: job_board, results_per_query: 8}
-  - {kind: tavily, name: tavily_dreamjob, mode: real, enabled: true, domains: [dreamjob.ma], result_source_type: job_board, results_per_query: 8}
-  - {kind: tavily, name: tavily_indeed_morocco, mode: real, enabled: true, domains: [ma.indeed.com], result_source_type: job_board, results_per_query: 8}
-  - {kind: tavily, name: tavily_bghit_nekhdem, mode: real, enabled: true, domains: [bghit-nekhdem.com], result_source_type: job_board, results_per_query: 8}
-  - {kind: tavily, name: tavily_jobzyn, mode: real, enabled: true, domains: [jobzyn.com], result_source_type: job_board, results_per_query: 8}
-  - {kind: tavily, name: tavily_moncallcenter, mode: real, enabled: true, domains: [moncallcenter.ma], result_source_type: job_board, results_per_query: 8}
+  - {kind: tavily, name: tavily_rekrute, mode: real, enabled: true, applies_to_countries: [Morocco], allocation_priority: 80, domains: [rekrute.com], result_source_type: job_board, results_per_query: 8}
+  - {kind: tavily, name: tavily_emploi_ma, mode: real, enabled: true, applies_to_countries: [Morocco], allocation_priority: 80, domains: [emploi.ma], result_source_type: job_board, results_per_query: 8}
+  - {kind: tavily, name: tavily_amaljob, mode: real, enabled: true, applies_to_countries: [Morocco], allocation_priority: 80, domains: [amaljob.com], result_source_type: job_board, results_per_query: 8}
+  - {kind: tavily, name: tavily_anapec, mode: real, enabled: true, applies_to_countries: [Morocco], allocation_priority: 90, domains: [anapec.org], result_source_type: government, results_per_query: 8}
+  - {kind: tavily, name: tavily_emploi_public_ma, mode: real, enabled: true, applies_to_countries: [Morocco], allocation_priority: 90, domains: [emploi-public.ma], result_source_type: government, results_per_query: 8}
+  - {kind: tavily, name: tavily_marocannonces, mode: real, enabled: true, applies_to_countries: [Morocco], allocation_priority: 75, domains: [marocannonces.com], result_source_type: job_board, results_per_query: 8}
+  - {kind: tavily, name: tavily_dreamjob, mode: real, enabled: true, applies_to_countries: [Morocco], allocation_priority: 75, domains: [dreamjob.ma], result_source_type: job_board, results_per_query: 8}
+  - {kind: tavily, name: tavily_indeed_morocco, mode: real, enabled: true, applies_to_countries: [Morocco], allocation_priority: 80, domains: [ma.indeed.com], result_source_type: job_board, results_per_query: 8}
+  - {kind: tavily, name: tavily_bghit_nekhdem, mode: real, enabled: true, applies_to_countries: [Morocco], allocation_priority: 70, domains: [bghit-nekhdem.com], result_source_type: job_board, results_per_query: 8}
+  - {kind: tavily, name: tavily_jobzyn, mode: real, enabled: true, applies_to_countries: [Morocco], allocation_priority: 70, domains: [jobzyn.com], result_source_type: job_board, results_per_query: 8}
+  - {kind: tavily, name: tavily_moncallcenter, mode: real, enabled: true, applies_to_countries: [Morocco], allocation_priority: 70, domains: [moncallcenter.ma], result_source_type: job_board, results_per_query: 8}
 
   # Public ATS/company sources. They are intentionally disabled until a real
   # public company identifier is supplied; no placeholder source can emit jobs.

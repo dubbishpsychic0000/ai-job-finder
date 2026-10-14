@@ -136,6 +136,46 @@ The ephemeral database was writable only within the runner. This measures
 insufficient discoverable supply for any live-limit increase; retain the
 10/day outbound cap.
 
+## Phase 2.3 source-country allocation correction
+
+The zero-result run's source/country pairs exposed two routing defects. The
+allocator's `used_query_keys` treated a role/country/language/query combination
+as globally consumed after one source used it, even when broad search, ATS
+search, and domain-restricted boards represented distinct requests. It also
+had no source-country applicability rule, allowing Morocco-only domains to
+consume foreign-country requests. Finally, an adaptive country re-rank could
+place the first configured target behind learned affinity scores before a tight
+combination cap was applied.
+
+Source eligibility is now explicit in `config/sources.yaml`: broad web and
+official ATS sources apply to all markets; every Morocco job-board/government
+domain is limited to Morocco. Under budget pressure the allocator first gives
+an applicable request to distinct broad, official-ATS, and market-specific
+scopes, then covers remaining distinct combinations in adaptive plan order.
+It retains source priority metadata, country/language fairness, the 12 unique
+search-combination cap, and the 8 aggregate Tavily attempt cap. The first
+country in candidate target preferences remains the top priority; learned
+country affinity continues to order the remaining countries.
+
+Cache identity now includes the source name, domain and ATS filters, query
+suffix, result type/limit, and search depth. Reports distinguish plan
+combinations from source requests and expose source scope, inapplicable
+country combinations, API-attempt and cache-hit country/language pairs, and
+provider-returned versus source-filtered counts. A zero-result report
+distinguishes live successful-empty responses from cached empties, filtered
+results, budget deferrals, failures, and requests that were not scheduled.
+Opportunity eligibility remains `NOT_EVALUATED`.
+
+Regression coverage includes Morocco-first planning under a one-combination
+cap, Morocco/French/Arabic query coverage under the 12-combination cap,
+Morocco-only source routing, international broad/ATS routing, source-scope
+cache isolation, filtered-result diagnostics, and the existing durable-budget,
+retry, duplicate-key, and BTP-reserve guarantees. Focused tests passed
+**110 tests**; the full suite passed **473 tests, 1 skipped**. Ruff, Python
+compilation, and `git diff --check` passed. The change has not yet been
+published or evaluated in production; durable Tavily ledger reservations,
+daily limits, the BTP reserve, and the 10/day outbound limit are unchanged.
+
 Gmail mailbox reconciliation remains `NOT_CHECKED`. The supported OAuth flow
 is `wca gmail-auth`; in live mode it requests the existing `gmail.send` and
 `gmail.compose` scopes plus optional `gmail.readonly`, and uses the configured
