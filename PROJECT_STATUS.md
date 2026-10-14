@@ -178,7 +178,7 @@ as commit
 [CI run 38520602510](https://github.com/dubbishpsychic0000/ai-job-finder/actions/runs/38520602510)
 passed.
 
-The one bounded production evaluation,
+The first bounded production evaluation,
 [run 38520712850](https://github.com/dubbishpsychic0000/ai-job-finder/actions/runs/38520712850),
 uploaded its sanitized report but failed with `BLOCKED`,
 `discovery_report_serialization_failed` during `report_serialization`
@@ -202,9 +202,57 @@ follow-up passed the full suite (**474 passed, 1 skipped**), Ruff, Python
 compilation, and `git diff --check`. It was published as commit
 [`5c372be77e64492dc23fd0a3bfb391424f83bbd9`](https://github.com/dubbishpsychic0000/ai-job-finder/commit/5c372be77e64492dc23fd0a3bfb391424f83bbd9);
 [CI run 38521913666](https://github.com/dubbishpsychic0000/ai-job-finder/actions/runs/38521913666)
-passed. No second production evaluation has been dispatched. Durable Tavily
-reservations, daily limits, the BTP reserve, and the 10/day outbound limit
-remain unchanged.
+passed. After explicit authorization, one bounded retry completed successfully
+in [run 38522536530](https://github.com/dubbishpsychic0000/ai-job-finder/actions/runs/38522536530)
+on commit `95ba94439db6c09e8f81235e7e6cd643927381c5`.
+
+The sanitized retry report recorded 7 distinct search-plan combinations and
+8 source requests / Tavily attempts (8 successes, 0 failures, 0 retries, 0
+rate-limit errors); 38 source requests were deferred by budget. There were no
+cache hits. Providers returned 80 results; source filtering excluded 36,
+leaving 44 external results, all normalized, of which 19 were duplicates and
+25 were new records (all from live results). Those 25 are **normalized
+discovery records, not 25 verified vacancies**: report titles include salary
+pages, occupational-reference pages, and discussion threads. The report's
+type classifier counted 21 JOB, 2 INTERNSHIP_STAGE, 1 GRADUATE_TRAINEE, and 1
+UNKNOWN; it did not separately identify a PFE placement. Eligibility for all
+records remains `NOT_EVALUATED`.
+
+The plan searched Morocco 3 times, Belgium 2, France 2, and Canada 1; language
+coverage was Arabic 2, Dutch 1, French 3, and English 2. The report does not
+retain a joint country/language matrix. The 8 live attempts were broad web
+search 4 (countries: Morocco, Belgium, France, Canada; languages: Arabic 1,
+Dutch 1, French 2), official-ATS search 3 (countries: Morocco, Belgium,
+France; languages: French 1, English 2), and Morocco-only ANAPEC 1 (Morocco,
+Arabic). All 25 new normalized records came from broad web search: Morocco
+11, Belgium 1, France 7, Canada 6; result-language counts were Arabic 11,
+Dutch 1, French 13. Morocco-only source applicability excluded 110
+foreign-country source/combination pairs. Broad web search returned 48
+provider results (4 filtered); official-ATS search returned 24 (all 24
+filtered); ANAPEC returned 8 (all 8 filtered). No direct official vacancy or
+verified application route was established. For example, the
+[VINCI careers search page](https://jobs.vinci.com/en/location/morocco-jobs/1440/2542007/2)
+is an employer careers portal, but is not a specific verified vacancy; the
+[Canada Job Bank result](https://www.jobbank.gc.ca/marketreport/summary-occupation/17969/ca)
+is occupational information, not a job listing. Other representative URLs
+were third-party search/index pages and should not be treated as direct
+employer vacancies.
+
+The report labels all 25 records `DATED_WITHIN_WINDOW`, but this is **not
+source-verified freshness**: the Tavily connector supplies no posting date and
+`app/normalization.py` currently substitutes the collection time when a date
+is missing. Actual vacancy dates are therefore unknown. This and the noisy
+result classification are remaining discovery-quality limitations.
+
+Seven unique budget ledgers were restored; after the 8 durable reservation
+commits, the report showed 78 aggregate daily attempts remaining
+(per-key remaining: 0, 0, 10, 17, 17, 17, 17). The BTP reserve and daily
+limits were preserved. The successful run reports 0 Gmail access, application
+attempts, drafts, sent email, WhatsApp messages, and production-database
+writes; the 8 private-vault writes were exclusively the intended Tavily
+budget-ledger commits, and runtime database writes were ephemeral. The 12
+combination / 8 attempt caps remained enforced. No further production run was
+dispatched; the 10/day outbound limit remains unchanged.
 
 Gmail mailbox reconciliation remains `NOT_CHECKED`. The supported OAuth flow
 is `wca gmail-auth`; in live mode it requests the existing `gmail.send` and
