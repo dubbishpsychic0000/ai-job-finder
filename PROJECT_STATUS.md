@@ -1007,13 +1007,24 @@ verified vacancies, unverified candidates, research leads, rejected
 non-vacancies, duplicates and unsupported verification sources; it will also
 report source and query coverage. Unsupported pages remain unverified, and
 posting-date confidence remains independent from current vacancy status.
-There has been no Phase 2.6 live evaluation. The change performs no eligibility
-assessment, production candidate/application write, draft, email, WhatsApp
-message, or MEGEC retry.
+The implementation performs no eligibility assessment, production
+candidate/application write, draft, email, WhatsApp message, or MEGEC retry.
 
 Validation: full suite **507 passed, 1 skipped**; focused discovery/filtering
 suite **61 passed**; Ruff on all changed Python files, Python compilation, and
 `git diff --check` passed. The verification timestamp regression assertion now
 compares the same UTC instant regardless of whether SQLite returns an aware or
 naive datetime. Publication, CI confirmation, and any bounded discovery-only
-evaluation remain pending.
+evaluation were pending at implementation validation.
+
+After publication, CI passed in
+[run 38549577407](https://github.com/dubbishpsychic0000/ai-job-finder/actions/runs/38549577407).
+One bounded discovery-only evaluation then completed successfully in
+[run 38549804215](https://github.com/dubbishpsychic0000/ai-job-finder/actions/runs/38549804215).
+The workflow ran only the bounded discovery step; application, employer preflight, BTP, WhatsApp, and general pipeline steps
+were skipped. The 7,141-byte sanitized artifact was created, but repeated
+archive downloads failed with GitHub artifact-storage DNS/connection errors,
+so its result counts and post-run durable budget have not yet been parsed and
+are intentionally not reported here. Before dispatch, the latest inspected
+artifact showed 41 aggregate daily attempts remaining and no intervening
+provider run. No second evaluation was dispatched.
