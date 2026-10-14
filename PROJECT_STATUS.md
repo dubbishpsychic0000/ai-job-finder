@@ -831,5 +831,47 @@ table and the restored database's integrity before calling the existing
 idempotent schema initializer on the ephemeral runner copy. Provider reporting
 also distinguishes confirmed durable reservations from other ledger writes.
 The full suite passes **484 tests, 1 skipped**; focused tests, Ruff on changed
-files, compilation, and `git diff --check` pass. The fix remains unpublished;
-no follow-up production evaluation has been dispatched.
+files, compilation, and `git diff --check` pass. The fix is published, and the
+follow-up evaluation has completed after CI passed.
+
+Recovery commit
+[`a00b54b0f94a184d83c1f5d6d0dc9cb7c9fa92d8`](https://github.com/dubbishpsychic0000/ai-job-finder/commit/a00b54b0f94a184d83c1f5d6d0dc9cb7c9fa92d8)
+is on `main`; [CI run 38531463259](https://github.com/dubbishpsychic0000/ai-job-finder/actions/runs/38531463259)
+passed. The one bounded follow-up
+[discovery-only run 38531637992](https://github.com/dubbishpsychic0000/ai-job-finder/actions/runs/38531637992)
+completed successfully and uploaded only the sanitized report. Its status is
+`COMPLETED`, with 7 search-plan combinations and 8 source requests / Tavily
+attempts (8 successful, 0 failed, 0 retries, 0 cache hits); 38 queries were
+deferred by the daily provider budget. The source split was 4 broad web-search,
+3 official-ATS search, and 1 ANAPEC Morocco request. All 8 reservations were
+durably recorded before dispatch. The report shows 7 restored ledgers, 49
+aggregate daily attempts remaining afterward, and no changed daily query
+limit.
+
+Providers returned 80 results; 28 were filtered and 52 normalized, including
+29 duplicates and 23 new discovery records. Those records comprise 5
+unverified vacancy candidates, 16 research-required records, and 2 rejected
+non-vacancies; there were **0 verified individual vacancies** and therefore
+**0 genuinely new verified opportunities**. All 23 new records lack
+verifiable posting-date evidence, and eligibility remains `NOT_EVALUATED`.
+Reported query coverage was Morocco 3 (Arabic 2, French 1), Belgium 2 (Dutch
+1, French 1), France 2 (French 1, English 1), and Canada 1 (English 1).
+Opportunity-type labels were 18 jobs, 1 internship/stage, 3 graduate/trainee,
+and 1 unknown. New-record country labels were Morocco 3, Belgium 7, France
+7, and Canada 6.
+
+The report detected 7 unverified application-route indications (5 company
+portals and 2 phone indications); none was verified. Representative direct
+ATS URLs include [City of Fort Worth Engineering Technician II on
+Greenhouse](https://boards.greenhouse.io/cityoffortworth/jobs/8015004003)
+and [Junior Civil Engineer on
+SmartRecruiters](https://jobs.smartrecruiters.com/JobsForHumanity/744000064236969-junior-civil-engineer).
+These are discovery evidence only: the report marks them unverified, gives no
+posting date, and does not establish that they remain open or that the
+candidate is eligible.
+
+The run reports 8 private-vault writes, all restricted to Tavily budget
+ledgers; production-database writes, Gmail access, applications, drafts, sent
+email, and WhatsApp messages were all zero. Ephemeral database writes were
+reported as enabled for local discovery state. Outbound limits remain
+unchanged at 10/day; the confirmed MEGEC application was not retried.
