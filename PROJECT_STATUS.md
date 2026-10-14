@@ -1190,4 +1190,7 @@ bounded live validation is considered.
 
 Validation completed: full suite **536 passed, 1 skipped**; Ruff on changed
 Python files, Python compilation, and `git diff --check` passed. Publication
-and CI status are recorded below after the `main` push.
+of the implementation is commit
+[`e907b3eb50bdecbd6651dc2f932091e7f4405133`](https://github.com/dubbishpsychic0000/ai-job-finder/commit/e907b3eb50bdecbd6651dc2f932091e7f4405133);
+its CI passed in
+[run 38570895688](https://github.com/dubbishpsychic0000/ai-job-finder/actions/runs/38570895688).
