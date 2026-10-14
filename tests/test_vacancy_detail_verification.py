@@ -473,7 +473,7 @@ def test_discovery_persists_detail_evidence_and_source_verification_counts(
     assert job.entity_state == "VACANCY_VERIFIED"
     assert job.entity_reason_code == "matching_public_ats_posting_record"
     assert job.entity_evidence_url == GREENHOUSE_URL
-    assert job.last_verified_at == NOW.replace(tzinfo=None)
+    assert job.last_verified_at.replace(tzinfo=None) == NOW.replace(tzinfo=None)
     assert job.company.name == "Acme Construction"
     assert job.location == "Casablanca, Morocco"
     assert job.country == "Morocco"

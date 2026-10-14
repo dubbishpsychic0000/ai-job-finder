@@ -377,7 +377,7 @@ def test_discovery_report_is_sanitized_and_distinguishes_cached_new_listing():
     serialized = json.dumps(output, ensure_ascii=False)
     opportunity = output["opportunities"][0]
 
-    assert output["schema_version"] == 3
+    assert output["schema_version"] == 4
     assert output["counts"]["unique_new_opportunities"] == 0
     assert output["counts"]["unique_new_candidate_vacancies"] == 1
     assert output["counts"]["unique_new_discovery_records"] == 1
@@ -548,12 +548,94 @@ def test_zero_result_report_distinguishes_empty_from_deferred_queries():
         "provider_results_returned": 0,
         "provider_results_filtered": 0,
         "cached_provider_results_filtered": 0,
+        "provider_results_by_country": {},
+        "provider_results_by_language": {},
+        "filter_reason_counts": {},
+        "normalization_rejection_reasons": {},
+        "deferred_requests_by_reason": {},
     }
     assert output["counts"]["search_combinations_attempted"] == 1
     assert output["counts"]["source_requests_attempted"] == 1
     assert output["sources"][0]["queried_by_country"] == {"Morocco": 1}
     assert output["sources"][0]["provider_attempts_by_country"] == {"Morocco": 1}
     assert output["sources"][1]["inapplicable_country_queries"] == {"France": 4}
+
+
+def test_sanitized_report_exposes_filter_and_budget_reasons_without_raw_urls():
+    source = {
+        "name": "official",
+        "kind": "tavily",
+        "health": "partial_budget",
+        "request_scope": {
+            "applies_to_countries": ["*"],
+            "domains": [],
+            "official_only": True,
+            "request_scope_id": "scope",
+        },
+        "queries": 1,
+        "queries_api": 1,
+        "provider_results_returned": 2,
+        "provider_results_filtered": 1,
+        "last_filter_reason_counts": {},
+        "filter_reason_counts": {"unrecognized_official_ats_host": 1},
+        "filtered_url_examples": [{
+            "reason_code": "unrecognized_official_ats_host",
+            "host": "careers.example.test",
+            "path_pattern": "/jobs/{item}",
+        }],
+        "provider_results_by_country": {"Morocco": 2},
+        "provider_results_by_language": {"fr": 2},
+        "accepted_results_by_country": {"Morocco": 1},
+        "accepted_results_by_language": {"fr": 1},
+        "filtered_results_by_country": {"Morocco": 1},
+        "filtered_results_by_language": {"fr": 1},
+        "key_budget_events": {
+            "a1b2c3d4": {"reserved": 1},
+            "not-a-fingerprint": {"reserved": 99},
+        },
+        "queries_deferred_by_reason": {
+            "run_attempt_cap": 4,
+            "aggregate_daily_budget": 2,
+        },
+        "queries_by_country": {"Morocco": 1},
+        "queries_by_language": {"fr": 1},
+        "provider_attempts_by_country": {"Morocco": 1},
+        "provider_attempts_by_language": {"fr": 1},
+        "inapplicable_country_queries": {},
+    }
+    report = DiscoveryReport(
+        source_requests_attempted=1,
+        api_request_budget={
+            "limit": 8,
+            "attempts": 1,
+            "successes": 1,
+            "failed_attempts": 0,
+            "retry_attempts": 0,
+            "remaining": 7,
+        },
+        source_reports=[source],
+    )
+
+    output = discovery_only.build_sanitized_report(
+        report, [], AgentConfig(), {"limit_per_key": 17, "remaining_by_key": [16]},
+    )
+
+    safe_source = output["sources"][0]
+    assert safe_source["filter_reason_counts"] == {
+        "unrecognized_official_ats_host": 1,
+    }
+    assert safe_source["filtered_url_examples"] == [{
+        "reason_code": "unrecognized_official_ats_host",
+        "host": "careers.example.test",
+        "path_pattern": "/jobs/{item}",
+    }]
+    assert safe_source["provider_results_by_country"] == {"Morocco": 2}
+    assert safe_source["filtered_results_by_language"] == {"fr": 1}
+    assert safe_source["key_budget_events"] == {"a1b2c3d4": {"reserved": 1}}
+    assert safe_source["queries_deferred_by_reason"] == {
+        "run_attempt_cap": 4,
+        "aggregate_daily_budget": 2,
+    }
 
 
 def test_workflow_discovery_task_skips_outbound_vault_and_full_pipeline_steps():

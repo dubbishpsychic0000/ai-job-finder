@@ -7,6 +7,8 @@ source and obvious URLs — never probes authenticated endpoints.
 """
 from __future__ import annotations
 
+from urllib.parse import urlsplit
+
 ATS_MARKERS: dict[str, tuple[tuple[str, ...], tuple[str, ...]]] = {
     "greenhouse": (("greenhouse.io", "boards.greenhouse.io", "grnh.se"), ("greenhouse", "gh_src")),
     "lever": (("lever.co", "jobs.lever.co"), ("lever",)),
@@ -24,9 +26,19 @@ ATS_MARKERS: dict[str, tuple[tuple[str, ...], tuple[str, ...]]] = {
 
 def detect_ats(url: str = "", html: str = "") -> str:
     """Return the ATS name for a career URL/page body, or '' when unknown."""
-    blob = (url or "").lower()
+    if not isinstance(url, str):
+        host = ""
+    else:
+        try:
+            host = (urlsplit(url).hostname or "").lower()
+        except ValueError:
+            host = ""
     body = (html or "")[:200_000].lower()
     for name, (hosts, markers) in ATS_MARKERS.items():
-        if any(h in blob for h in hosts) or any(m in body for m in markers):
+        host_match = any(
+            host == marker or host.endswith(f".{marker}")
+            for marker in hosts
+        )
+        if host_match or any(m in body for m in markers):
             return name
     return ""

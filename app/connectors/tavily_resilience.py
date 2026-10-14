@@ -20,6 +20,7 @@ import logging
 import os
 import threading
 import time
+from collections import Counter
 from collections.abc import Callable
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -60,6 +61,27 @@ def _is_quota_error(exc: Exception) -> bool:
 def key_fingerprint(api_key: str, length: int = 8) -> str:
     """Short, non-reversible id for a credential — safe for logs/file names."""
     return hashlib.sha256(api_key.encode("utf-8")).hexdigest()[:length]
+
+
+def _safe_result_pattern(url: str) -> dict[str, str]:
+    from urllib.parse import urlsplit
+
+    try:
+        parsed = urlsplit(url)
+        host = (parsed.hostname or "").lower()[:120]
+        parts = [part for part in parsed.path.split("/") if part]
+    except (TypeError, ValueError):
+        return {"host": "", "path_pattern": ""}
+    stable_parts = {
+        "api", "board", "boards", "career", "careers", "job", "jobs",
+        "offre", "offres", "emploi", "emplois", "posting", "postings",
+        "position", "positions", "recruit", "recruiting", "search",
+    }
+    pattern = "/" + "/".join(
+        part.casefold() if part.casefold() in stable_parts else "{item}"
+        for part in parts[:8]
+    )
+    return {"host": host, "path_pattern": pattern[:180]}
 
 
 @contextmanager
@@ -547,6 +569,9 @@ class ResilientTavily:
         self.last_call_attempts = 0
         self.last_provider_result_count = 0
         self.last_accepted_result_count = 0
+        self.last_filter_reason_counts: dict[str, int] = {}
+        self.last_filter_examples: list[dict[str, str]] = []
+        self.last_key_budget_events: list[dict[str, str]] = []
         self._attempt_stats = {
             "attempts": 0,
             "successes": 0,
@@ -578,14 +603,59 @@ class ResilientTavily:
         return q
 
     def _allowed(self, href: str, *, ats: str = "") -> bool:
-        from urllib.parse import urlparse
-        if not href.startswith("http"):
-            return False
-        host = urlparse(href).netloc.lower()
-        in_domain_scope = not self.domains or any(host == d or host.endswith("." + d) for d in self.domains)
-        BLOCKED_DOMAINS = ["linkedin.com", "facebook.com", "instagram.com"]
-        return (not any(b in host for b in BLOCKED_DOMAINS) and in_domain_scope and
-                (not self.official_only or bool(ats)))
+        return not self._result_filter_reason(href, "present", ats=ats)
+
+    def _result_filter_reason(
+        self, href: str, title: str, *, ats: str = "",
+    ) -> str:
+        from urllib.parse import urlsplit
+
+        if not isinstance(href, str) or not href:
+            return "missing_result_url"
+        try:
+            parsed = urlsplit(href)
+            host = (parsed.hostname or "").lower()
+            if parsed.port not in {None, 80, 443}:
+                return "unsupported_url_port"
+        except (TypeError, ValueError):
+            return "invalid_result_url"
+        if parsed.scheme.lower() not in {"http", "https"} or not host:
+            return "invalid_result_url"
+        if parsed.username is not None or parsed.password is not None:
+            return "embedded_url_credentials"
+        if not title.strip():
+            return "missing_result_title"
+        blocked_domains = ("linkedin.com", "facebook.com", "instagram.com")
+        if any(host == domain or host.endswith(f".{domain}") for domain in blocked_domains):
+            return "blocked_social_domain"
+        in_domain_scope = not self.domains or any(
+            host == domain or host.endswith(f".{domain}")
+            for domain in self.domains
+        )
+        if not in_domain_scope:
+            return "outside_configured_domain_scope"
+        if self.official_only:
+            from app.connectors.ats_detect import detect_ats
+
+            if not detect_ats(href):
+                return "unrecognized_official_ats_host"
+        return ""
+
+    @staticmethod
+    def _record_filter(
+        counts: Counter,
+        examples: list[dict[str, str]],
+        reason: str,
+        url: str,
+        *,
+        count: int = 1,
+    ) -> None:
+        counts[reason] += count
+        if len(examples) >= 12:
+            return
+        example = {"reason_code": reason, **_safe_result_pattern(url)}
+        if example not in examples:
+            examples.append(example)
 
     def _company_from_ats_url(self, url: str) -> str:
         from urllib.parse import urlparse
@@ -603,6 +673,9 @@ class ResilientTavily:
         self.last_call_attempts = 0
         self.last_provider_result_count = 0
         self.last_accepted_result_count = 0
+        self.last_filter_reason_counts = {}
+        self.last_filter_examples = []
+        self.last_key_budget_events = []
         q = self._build_query(query, location)
 
         cache_key = _cache_key(q, location, self.request_scope_id)
@@ -620,6 +693,20 @@ class ResilientTavily:
             self.last_status = metadata.get(
                 "result_state", "ok" if cached else "empty",
             )
+            self.last_filter_reason_counts = {
+                str(reason): int(count)
+                for reason, count in (metadata.get("filter_reason_counts") or {}).items()
+                if isinstance(count, int) and count >= 0
+            }
+            self.last_filter_examples = [
+                {
+                    "reason_code": str(item.get("reason_code", "")),
+                    "host": str(item.get("host", "")),
+                    "path_pattern": str(item.get("path_pattern", "")),
+                }
+                for item in metadata.get("filter_examples", [])
+                if isinstance(item, dict)
+            ][:12]
             # Convert cached dicts back to Opportunity objects
             return [Opportunity(**d) for d in cached]
 
@@ -641,6 +728,10 @@ class ResilientTavily:
             reservation_error = self.attempt_budget.reserve(
                 key.budget, retry=attempts_this_query > 0,
             )
+            self.last_key_budget_events.append({
+                "fingerprint": key.fp,
+                "reason_code": reservation_error or "reserved",
+            })
             if reservation_error == "run_api_attempt_budget_exhausted":
                 saw_run_budget = True
                 self.last_deferred_reason = reservation_error
@@ -707,18 +798,34 @@ class ResilientTavily:
                 from app.connectors.ats_detect import detect_ats
                 from app.connectors.base import infer_country
 
+                filter_reason_counts: Counter[str] = Counter()
+                filter_examples: list[dict[str, str]] = []
                 for i, result in enumerate(results):
                     if i >= self.results_per_query:
+                        self._record_filter(
+                            filter_reason_counts,
+                            filter_examples,
+                            "provider_result_over_requested_limit",
+                            "",
+                            count=len(results) - i,
+                        )
                         break
+                    if not isinstance(result, dict):
+                        self._record_filter(
+                            filter_reason_counts, filter_examples,
+                            "invalid_result_record", "",
+                        )
+                        continue
                     href = result.get("url", "")
-                    if not href:
-                        continue
-                    title = result.get("title", "").strip()
-                    if not title:
-                        continue
+                    title = str(result.get("title") or "").strip()
                     ats = detect_ats(href)
-                    if not self._allowed(href, ats=ats):
+                    reason = self._result_filter_reason(href, title, ats=ats)
+                    if reason:
+                        self._record_filter(
+                            filter_reason_counts, filter_examples, reason, href,
+                        )
                         continue
+                    content = result.get("content")
                     out.append(Opportunity(
                         source=self.source_name,
                         source_type="ats" if ats else self.result_source_type,
@@ -727,7 +834,7 @@ class ResilientTavily:
                         company=self._company_from_ats_url(href) if ats else "",
                         location=location,
                         country=infer_country(location),
-                        description=result.get("content", "")[:3000],
+                        description=content[:3000] if isinstance(content, str) else "",
                         url=href,
                         posted_at=None,
                         employment_type="",
@@ -735,6 +842,8 @@ class ResilientTavily:
                     ))
 
                 self.last_accepted_result_count = len(out)
+                self.last_filter_reason_counts = dict(filter_reason_counts)
+                self.last_filter_examples = filter_examples
                 self.last_status = (
                     "ok" if out else "filtered" if results else "empty"
                 )
@@ -749,6 +858,8 @@ class ResilientTavily:
                         "provider_result_count": self.last_provider_result_count,
                         "accepted_result_count": self.last_accepted_result_count,
                         "result_state": self.last_status,
+                        "filter_reason_counts": self.last_filter_reason_counts,
+                        "filter_examples": self.last_filter_examples,
                     },
                 )
                 if out:

@@ -42,7 +42,7 @@ from app.discovery.verification import freshness_label
 from app.discovery.vocabulary import CandidateVocabulary
 from app.discovery.website_researcher import host_domain, normalize_url
 from app.models import Company, Job
-from app.normalization import normalize
+from app.normalization import normalization_rejection_reason, normalize
 
 logger = logging.getLogger(__name__)
 
@@ -402,6 +402,7 @@ def _allocate_source_queries(
     *,
     rotation_offset: int | None = None,
     max_api_attempts: int | None = None,
+    deferral_reasons: list[dict[str, int]] | None = None,
 ) -> tuple[list[list[dict]], list[int], list[int]]:
     """Allocate applicable source requests against the shared Tavily budget.
 
@@ -413,7 +414,8 @@ def _allocate_source_queries(
     stale_by_source: list[int] = []
     budgeted_sources: list[int] = []
     uncached_by_source: dict[int, list[int]] = {}
-    available = sum(budget.remaining() for budget in _tavily_budgets(connectors))
+    daily_available = sum(budget.remaining() for budget in _tavily_budgets(connectors))
+    available = daily_available
     if max_api_attempts is not None:
         available = min(available, max(0, int(max_api_attempts)))
 
@@ -516,6 +518,45 @@ def _allocate_source_queries(
         )
         available -= 1
 
+    # Give a small amount of the bounded allocation to distinct Morocco-only
+    # source scopes before repeating broad/ATS searches. These are separate
+    # provider requests and each still reserves against the same key ledgers
+    # and aggregate attempt cap.
+    market_sources = [
+        index for index in budgeted_sources
+        if source_group(connectors[index][0]) == "market_specific"
+        and uncached_by_source[index]
+        and not selected_indices[index]
+    ]
+    extra_market_slots = min(2, max(0, available - 3))
+    for _ in range(extra_market_slots):
+        candidates = [
+            index for index in market_sources
+            if not selected_indices[index]
+        ]
+        if not candidates:
+            break
+        source_index = max(
+            candidates,
+            key=lambda index: (
+                int(connectors[index][0].get("allocation_priority", 50)),
+                -order.index(index),
+            ),
+        )
+        combo_index = min(
+            uncached_by_source[source_index],
+            key=lambda index: (
+                grouped_combo_counts.get(index, 0),
+                index,
+            ),
+        )
+        selected_indices[source_index].add(combo_index)
+        source_counts[source_index] += 1
+        grouped_combo_counts[combo_index] = (
+            grouped_combo_counts.get(combo_index, 0) + 1
+        )
+        available -= 1
+
     # Then cover unserved plan combinations in their adaptive priority order.
     # Source-specific requests may repeat a combination because their scopes
     # are distinct; this pass avoids doing so until other combinations had a
@@ -587,6 +628,20 @@ def _allocate_source_queries(
         deferred_by_source[source_index] = (
             len(uncached_by_source[source_index]) - len(selected)
         )
+        if deferral_reasons is not None and deferred_by_source[source_index]:
+            if daily_available <= 0:
+                reason = "aggregate_daily_budget"
+            elif (
+                max_api_attempts is not None
+                and max(0, int(max_api_attempts)) <= daily_available
+            ):
+                reason = "run_attempt_cap"
+            else:
+                reason = "aggregate_daily_budget"
+            deferral_reasons[source_index][reason] = (
+                deferral_reasons[source_index].get(reason, 0)
+                + deferred_by_source[source_index]
+            )
     return scheduled, deferred_by_source, stale_by_source
 
 
@@ -805,8 +860,13 @@ async def run_discovery(session: Session, config: AgentConfig, prefs: Preference
         report.social_signals = sreport.stored
 
     max_requests = int(discovery_cfg.get("max_requests_per_source", 0))
+    allocation_deferred_reasons = [{} for _ in connectors]
     scheduled_queries, deferred_queries, stale_queries = _allocate_source_queries(
-        connectors, plan, max_requests, max_api_attempts=max_api_attempts,
+        connectors,
+        plan,
+        max_requests,
+        max_api_attempts=max_api_attempts,
+        deferral_reasons=allocation_deferred_reasons,
     )
     run_budget_deferred = [0] * len(scheduled_queries)
     if max_search_combinations is not None:
@@ -885,10 +945,12 @@ async def run_discovery(session: Session, config: AgentConfig, prefs: Preference
             "fetched": 0,
             "normalized": 0,
             "normalization_rejected": 0,
+            "normalization_rejection_reasons": {},
             "duplicates": 0,
             "duplicate_reasons": {"exact": 0, "probable": 0, "same_run": 0},
             "new": 0,
             "verification_candidates": 0,
+            "verification_source_unsupported": 0,
             "verified_individual_vacancies": 0,
             "unverified_vacancy_candidates": 0,
             "closed_vacancies": 0,
@@ -902,6 +964,17 @@ async def run_discovery(session: Session, config: AgentConfig, prefs: Preference
             "detail_verifications_reused": 0,
             "detail_verification_attempts": 0,
             "verification_reason_codes": {},
+            "new_by_entity_type": {},
+            "new_by_entity_state": {},
+            "provider_results_by_country": {},
+            "provider_results_by_language": {},
+            "accepted_results_by_country": {},
+            "accepted_results_by_language": {},
+            "filtered_results_by_country": {},
+            "filtered_results_by_language": {},
+            "filter_reason_counts": {},
+            "filtered_url_examples": [],
+            "key_budget_events": {},
             "queries_cached": 0,
             "queries_api": 0,
             "queries_empty": 0,
@@ -910,6 +983,7 @@ async def run_discovery(session: Session, config: AgentConfig, prefs: Preference
             "queries_filtered": 0,
             "queries_failed": 0,
             "queries_budget_deferred": deferred_queries[source_index],
+            "queries_deferred_by_reason": allocation_deferred_reasons[source_index],
             "queries_run_budget_deferred": run_budget_deferred[source_index],
             "queries_stale_cache": stale_queries[source_index],
             "api_attempts": 0,
@@ -966,6 +1040,11 @@ async def run_discovery(session: Session, config: AgentConfig, prefs: Preference
                 })
                 o.raw = raw
             processed = [normalize(o) for o in results]
+            for item in results:
+                reason = normalization_rejection_reason(item)
+                if reason:
+                    reasons = source_report["normalization_rejection_reasons"]
+                    reasons[reason] = reasons.get(reason, 0) + 1
             processed = [o for o in processed if o is not None]
             report.opportunities_fetched += len(processed)
             source_report["fetched"] += len(results)
@@ -1059,6 +1138,8 @@ async def run_discovery(session: Session, config: AgentConfig, prefs: Preference
                             opp.verification_status = "unverified"
                     else:
                         entity_state = "VACANCY_UNVERIFIED"
+                        if verify_vacancy_details and ats_detail is None:
+                            source_report["verification_source_unsupported"] += 1
                         entity_reason = (
                             "detail_verification_disabled"
                             if not verify_vacancy_details
@@ -1079,6 +1160,12 @@ async def run_discovery(session: Session, config: AgentConfig, prefs: Preference
                     source_report["research_leads"] += 1
                 elif entity_state == "REJECTED_NON_VACANCY":
                     source_report["rejected_non_vacancy"] += 1
+                source_report["new_by_entity_type"][entity_type] = (
+                    source_report["new_by_entity_type"].get(entity_type, 0) + 1
+                )
+                source_report["new_by_entity_state"][entity_state] = (
+                    source_report["new_by_entity_state"].get(entity_state, 0) + 1
+                )
                 if (
                     src_type == "ats"
                     and opp.external_id == opp.url
@@ -1217,6 +1304,13 @@ async def run_discovery(session: Session, config: AgentConfig, prefs: Preference
             deferred_reason = getattr(_connector, "last_deferred_reason", "")
             country = str(combo.get("country") or combo.get("location") or "UNKNOWN")
             language = str(combo.get("lang") or "unknown")
+
+            def add_count(field: str, key: str, count: int) -> None:
+                if count <= 0:
+                    return
+                values = source[field]
+                values[key] = values.get(key, 0) + count
+
             if origin == "cache":
                 source["queries_cached"] += 1
                 if status == "filtered":
@@ -1230,6 +1324,26 @@ async def run_discovery(session: Session, config: AgentConfig, prefs: Preference
                 ):
                     counts = source[key]
                     counts[value] = counts.get(value, 0) + 1
+                add_count(
+                    "provider_results_by_country", country,
+                    int(getattr(_connector, "last_provider_result_count", 0)),
+                )
+                add_count(
+                    "provider_results_by_language", language,
+                    int(getattr(_connector, "last_provider_result_count", 0)),
+                )
+                accepted = int(getattr(
+                    _connector, "last_accepted_result_count", len(results),
+                ))
+                filtered = max(
+                    0,
+                    int(getattr(_connector, "last_provider_result_count", len(results)))
+                    - accepted,
+                )
+                add_count("accepted_results_by_country", country, accepted)
+                add_count("accepted_results_by_language", language, accepted)
+                add_count("filtered_results_by_country", country, filtered)
+                add_count("filtered_results_by_language", language, filtered)
             elif origin == "api":
                 source["queries_api"] += 1
                 provider_result_count = int(
@@ -1239,8 +1353,61 @@ async def run_discovery(session: Session, config: AgentConfig, prefs: Preference
                     getattr(_connector, "last_accepted_result_count", len(results)),
                 )
                 source["provider_results_returned"] += provider_result_count
-                source["provider_results_filtered"] += max(
-                    0, provider_result_count - accepted_result_count,
+                filtered_count = max(0, provider_result_count - accepted_result_count)
+                source["provider_results_filtered"] += filtered_count
+                add_count("provider_results_by_country", country, provider_result_count)
+                add_count("provider_results_by_language", language, provider_result_count)
+                add_count("accepted_results_by_country", country, accepted_result_count)
+                add_count("accepted_results_by_language", language, accepted_result_count)
+                add_count("filtered_results_by_country", country, filtered_count)
+                add_count("filtered_results_by_language", language, filtered_count)
+            filter_reasons = getattr(
+                _connector, "last_filter_reason_counts", {},
+            )
+            filtered_total = max(
+                0,
+                int(getattr(_connector, "last_provider_result_count", len(results)))
+                - int(getattr(
+                    _connector, "last_accepted_result_count", len(results),
+                )),
+            )
+            known_filtered = sum(
+                int(count) for count in filter_reasons.values()
+            )
+            if known_filtered < filtered_total:
+                filter_reasons = dict(filter_reasons)
+                filter_reasons["filter_reason_unavailable_from_legacy_cache"] = (
+                    filtered_total - known_filtered
+                )
+            for reason, count in filter_reasons.items():
+                source["filter_reason_counts"][reason] = (
+                    source["filter_reason_counts"].get(reason, 0) + int(count)
+                )
+            for example in getattr(_connector, "last_filter_examples", []):
+                safe_example = {
+                    key: str(example.get(key, ""))[:180]
+                    for key in ("reason_code", "host", "path_pattern")
+                }
+                if (
+                    safe_example not in source["filtered_url_examples"]
+                    and len(source["filtered_url_examples"]) < 12
+                ):
+                    source["filtered_url_examples"].append(safe_example)
+            for event in getattr(_connector, "last_key_budget_events", []):
+                fingerprint = str(event.get("fingerprint", ""))[:8]
+                reason = str(event.get("reason_code", "unknown"))[:64]
+                events = source["key_budget_events"]
+                key_counts = events.setdefault(fingerprint, {})
+                key_counts[reason] = key_counts.get(reason, 0) + 1
+            runtime_defer_reason = (
+                deferred_reason or error_code
+            )
+            if runtime_defer_reason and (
+                "budget" in runtime_defer_reason or "ledger" in runtime_defer_reason
+            ):
+                deferred_reasons = source["queries_deferred_by_reason"]
+                deferred_reasons[runtime_defer_reason] = (
+                    deferred_reasons.get(runtime_defer_reason, 0) + 1
                 )
                 if status == "empty":
                     source["live_empty_responses"] += 1

@@ -11,7 +11,7 @@ from app.discovery.opportunity_details import is_verified_individual_vacancy
 from app.discovery.vacancy_verification import MAX_DETAIL_VERIFICATIONS_PER_RUN
 from app.workflows.discovery import DEFAULT_SOURCES_PATH, DiscoveryReport, run_discovery
 
-REPORT_SCHEMA_VERSION = 3
+REPORT_SCHEMA_VERSION = 4
 MAX_SEARCH_COMBINATIONS = 12
 MAX_TAVILY_ATTEMPTS = 8
 
@@ -300,12 +300,16 @@ def build_sanitized_report(
     queried_country_counts: Counter[str] = Counter()
     queried_language_counts: Counter[str] = Counter()
     query_errors: Counter[str] = Counter()
+    deferred_by_reason: Counter[str] = Counter()
     for item in report.source_reports:
         errors = {
             re.sub(r"[^a-zA-Z0-9_-]", "", str(code)): int(count)
             for code, count in (item.get("query_error_codes") or {}).items()
         }
         query_errors.update(errors)
+        deferred_by_reason.update(
+            item.get("queries_deferred_by_reason") or {},
+        )
         queried_country_counts.update(item.get("queries_by_country") or {})
         queried_language_counts.update(item.get("queries_by_language") or {})
         source_reports.append({
@@ -360,6 +364,27 @@ def build_sanitized_report(
             "cached_provider_results_filtered": int(
                 item.get("cached_provider_results_filtered", 0),
             ),
+            "filter_reason_counts": {
+                str(code): int(count)
+                for code, count in (item.get("filter_reason_counts") or {}).items()
+                if str(code).isalnum() or "_" in str(code)
+            },
+            "filtered_url_examples": [
+                {
+                    "reason_code": _clean_text(example.get("reason_code"), 64),
+                    "host": _clean_text(example.get("host"), 120),
+                    "path_pattern": _clean_text(example.get("path_pattern"), 180),
+                }
+                for example in (item.get("filtered_url_examples") or [])
+                if isinstance(example, dict)
+            ][:12],
+            "normalization_rejection_reasons": {
+                str(code): int(count)
+                for code, count in (
+                    item.get("normalization_rejection_reasons") or {}
+                ).items()
+                if str(code).isalnum() or "_" in str(code)
+            },
             "normalized": int(item.get("normalized", 0)),
             "duplicates": int(item.get("duplicates", 0)),
             "duplicate_reasons": {
@@ -367,6 +392,16 @@ def build_sanitized_report(
                 for key, value in (item.get("duplicate_reasons") or {}).items()
             },
             "new": int(item.get("new", 0)),
+            "new_by_entity_type": {
+                str(code): int(count)
+                for code, count in (item.get("new_by_entity_type") or {}).items()
+                if str(code).isalnum() or "_" in str(code)
+            },
+            "new_by_entity_state": {
+                str(code): int(count)
+                for code, count in (item.get("new_by_entity_state") or {}).items()
+                if str(code).isalnum() or "_" in str(code)
+            },
             "detail_verification_attempts": int(
                 item.get("detail_verification_attempts", 0),
             ),
@@ -374,6 +409,9 @@ def build_sanitized_report(
                 item.get("detail_verifications_reused", 0),
             ),
             "verification_candidates": int(item.get("verification_candidates", 0)),
+            "verification_source_unsupported": int(
+                item.get("verification_source_unsupported", 0),
+            ),
             "verified_individual_vacancies": int(
                 item.get("verified_individual_vacancies", 0),
             ),
@@ -406,6 +444,60 @@ def build_sanitized_report(
                 if str(code).isalnum() or "_" in str(code)
             },
             "error_codes": errors,
+            "provider_results_by_country": {
+                _clean_text(key, 80): int(value)
+                for key, value in (
+                    item.get("provider_results_by_country") or {}
+                ).items()
+            },
+            "provider_results_by_language": {
+                _clean_text(key, 20): int(value)
+                for key, value in (
+                    item.get("provider_results_by_language") or {}
+                ).items()
+            },
+            "accepted_results_by_country": {
+                _clean_text(key, 80): int(value)
+                for key, value in (
+                    item.get("accepted_results_by_country") or {}
+                ).items()
+            },
+            "accepted_results_by_language": {
+                _clean_text(key, 20): int(value)
+                for key, value in (
+                    item.get("accepted_results_by_language") or {}
+                ).items()
+            },
+            "filtered_results_by_country": {
+                _clean_text(key, 80): int(value)
+                for key, value in (
+                    item.get("filtered_results_by_country") or {}
+                ).items()
+            },
+            "filtered_results_by_language": {
+                _clean_text(key, 20): int(value)
+                for key, value in (
+                    item.get("filtered_results_by_language") or {}
+                ).items()
+            },
+            "key_budget_events": {
+                str(fingerprint): {
+                    str(reason): int(count)
+                    for reason, count in reasons.items()
+                    if str(reason).isalnum() or "_" in str(reason)
+                }
+                for fingerprint, reasons in (
+                    item.get("key_budget_events") or {}
+                ).items()
+                if re.fullmatch(r"[a-f0-9]{8}", str(fingerprint))
+            },
+            "queries_deferred_by_reason": {
+                str(reason): int(count)
+                for reason, count in (
+                    item.get("queries_deferred_by_reason") or {}
+                ).items()
+                if str(reason).isalnum() or "_" in str(reason)
+            },
             "queried_by_country": dict(item.get("queries_by_country") or {}),
             "queried_by_language": dict(item.get("queries_by_language") or {}),
             "provider_attempts_by_country": {
@@ -479,13 +571,19 @@ def build_sanitized_report(
             "provider_results_returned": 0,
             "provider_results_filtered": 0,
             "cached_provider_results_filtered": 0,
+            "filter_reason_counts": {},
+            "filtered_url_examples": [],
+            "normalization_rejection_reasons": {},
             "normalized": 0,
             "duplicates": 0,
             "duplicate_reasons": {},
             "new": 0,
+            "new_by_entity_type": {},
+            "new_by_entity_state": {},
             "detail_verification_attempts": 0,
             "detail_verifications_reused": 0,
             "verification_candidates": 0,
+            "verification_source_unsupported": 0,
             "verified_individual_vacancies": 0,
             "unverified_vacancy_candidates": 0,
             "closed_vacancies": 0,
@@ -493,6 +591,14 @@ def build_sanitized_report(
             "research_leads": 0,
             "rejected_non_vacancy": 0,
             "verification_reason_codes": {},
+            "provider_results_by_country": {},
+            "provider_results_by_language": {},
+            "accepted_results_by_country": {},
+            "accepted_results_by_language": {},
+            "filtered_results_by_country": {},
+            "filtered_results_by_language": {},
+            "key_budget_events": {},
+            "queries_deferred_by_reason": {},
             "existing_candidates_reverified": 0,
             "existing_candidates_verified": 0,
             "existing_candidates_closed": 0,
@@ -661,6 +767,17 @@ def build_sanitized_report(
         sum(item["inapplicable_country_queries"].values())
         for item in source_reports
     )
+    filter_reasons = Counter()
+    normalization_reasons = Counter()
+    result_by_country = Counter()
+    result_by_language = Counter()
+    for item in source_reports:
+        filter_reasons.update(item.get("filter_reason_counts") or {})
+        normalization_reasons.update(
+            item.get("normalization_rejection_reasons") or {},
+        )
+        result_by_country.update(item.get("provider_results_by_country") or {})
+        result_by_language.update(item.get("provider_results_by_language") or {})
     existing_verification_updates = {
         outcome: sum(
             item[f"existing_candidates_{outcome}"]
@@ -741,6 +858,11 @@ def build_sanitized_report(
             "provider_results_returned": provider_results_returned,
             "provider_results_filtered": provider_results_filtered,
             "cached_provider_results_filtered": cached_provider_results_filtered,
+            "provider_results_by_country": dict(result_by_country),
+            "provider_results_by_language": dict(result_by_language),
+            "filter_reason_counts": dict(filter_reasons),
+            "normalization_rejection_reasons": dict(normalization_reasons),
+            "deferred_requests_by_reason": dict(deferred_by_reason),
         },
         "coverage": {
             "new_by_country": dict(country_counts),

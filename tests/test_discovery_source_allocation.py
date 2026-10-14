@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import asyncio
+
 from app.config import AgentConfig, Preferences
+from app.connectors.ats_detect import detect_ats
 from app.connectors.tavily_resilience import (
     DailyBudget,
     ResilientTavily,
@@ -280,6 +283,278 @@ def test_provider_results_filtered_by_domain_are_not_reported_as_empty(
     assert source.last_provider_result_count == 1
     assert source.last_origin == "cache"
     assert len(calls) == 1
+
+
+def test_official_ats_filter_uses_host_not_untrusted_url_substrings(
+    tmp_path, monkeypatch,
+):
+    from app.connectors.tavily_resilience import ApiAttemptBudget
+
+    class Response:
+        status_code = 200
+
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {
+                "results": [
+                    {
+                        "url": "https://jobs.lever.co/acme/123",
+                        "title": "Civil Engineering Technician",
+                        "content": "Public ATS result.",
+                    },
+                    {
+                        "url": "https://jobs.smartrecruiters.com/Acme/123-role",
+                        "title": "Junior Civil Engineer",
+                        "content": "Public ATS result.",
+                    },
+                    {
+                        "url": (
+                            "https://example.test/redirect/"
+                            "https://jobs.lever.co/acme/123"
+                        ),
+                        "title": "Spoofed ATS URL",
+                        "content": "Not an ATS host.",
+                    },
+                    {
+                        "url": "https://example.test/careers",
+                        "title": "Careers",
+                        "content": "Not an ATS posting.",
+                    },
+                    {
+                        "url": None,
+                        "title": "Missing URL",
+                        "content": "Malformed provider result.",
+                    },
+                    {
+                        "url": "https://jobs.lever.co/acme/456",
+                        "title": "Malformed content",
+                        "content": {"unexpected": "type"},
+                    },
+                ],
+            }
+
+    monkeypatch.setattr(
+        "app.connectors.tavily_resilience.requests.post",
+        lambda *_args, **_kwargs: Response(),
+    )
+    source = ResilientTavily(
+        keys=[TavilyKey(
+            "official-filter-key",
+            DailyBudget(tmp_path / "official-budget.json", limit=17),
+            key_fingerprint("official-filter-key"),
+        )],
+        cache=TavilyCache(tmp_path / "official-cache.json"),
+        official_only=True,
+        source_name="official-ats",
+        attempt_budget=ApiAttemptBudget(2),
+    )
+
+    results = asyncio.run(source.search("civil engineer", "Morocco"))
+
+    assert {item.url for item in results} == {
+        "https://jobs.lever.co/acme/123",
+        "https://jobs.smartrecruiters.com/Acme/123-role",
+        "https://jobs.lever.co/acme/456",
+    }
+    assert source.last_provider_result_count == 6
+    assert source.last_accepted_result_count == 3
+    assert source.last_filter_reason_counts == {
+        "unrecognized_official_ats_host": 2,
+        "missing_result_url": 1,
+    }
+    assert next(
+        item for item in results if item.title == "Malformed content"
+    ).description == ""
+    path_pattern = source.last_filter_examples[0]["path_pattern"]
+    assert all(
+        part == "{item}" for part in path_pattern.strip("/").split("/")
+    )
+    assert "jobs.lever.co" not in path_pattern
+    assert "acme" not in path_pattern
+    assert detect_ats(None) == ""
+    assert detect_ats(
+        "https://example.test/jobs.lever.co/acme/123",
+    ) == ""
+
+
+def test_anapec_domain_scope_accepts_official_subdomains_and_rejects_others(
+    tmp_path, monkeypatch,
+):
+    class Response:
+        status_code = 200
+
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {
+                "results": [
+                    {
+                        "url": "https://www.anapec.org/offres-emploi/123",
+                        "title": "Technicien travaux publics",
+                        "content": "ANAPEC public listing.",
+                    },
+                    {
+                        "url": "https://jobs.example.test/offres-emploi/123",
+                        "title": "Technicien travaux publics",
+                        "content": "Outside the configured source scope.",
+                    },
+                ],
+            }
+
+    monkeypatch.setattr(
+        "app.connectors.tavily_resilience.requests.post",
+        lambda *_args, **_kwargs: Response(),
+    )
+    source = ResilientTavily(
+        keys=[TavilyKey(
+            "anapec-scope-key",
+            DailyBudget(tmp_path / "anapec-budget.json", limit=17),
+            key_fingerprint("anapec-scope-key"),
+        )],
+        cache=TavilyCache(tmp_path / "anapec-cache.json"),
+        domains=["anapec.org"],
+        source_name="tavily_anapec",
+        result_source_type="government",
+    )
+
+    results = asyncio.run(source.search("technicien BTP", "Morocco"))
+
+    assert [item.url for item in results] == [
+        "https://www.anapec.org/offres-emploi/123",
+    ]
+    assert source.last_filter_reason_counts == {
+        "outside_configured_domain_scope": 1,
+    }
+    assert source.last_filter_examples[0]["host"] == "jobs.example.test"
+
+
+def test_eight_attempt_allocator_uses_multiple_morocco_source_scopes(tmp_path):
+    key = "phase-2-6-shared-key"
+    budget = DailyBudget(tmp_path / "shared-budget.json", limit=17)
+
+    class Source:
+        def __init__(self):
+            self.keys = [TavilyKey(key, budget, key_fingerprint(key))]
+
+        @staticmethod
+        def has_cached_result(_query, _location):
+            return False
+
+        @staticmethod
+        def has_stale_cached_result(_query, _location):
+            return False
+
+    connectors = [
+        (
+            {
+                "name": "web",
+                "applies_to_countries": ["*"],
+                "allocation_priority": 100,
+            },
+            Source(),
+        ),
+        (
+            {
+                "name": "official-ats",
+                "official_only": True,
+                "applies_to_countries": ["*"],
+                "allocation_priority": 95,
+            },
+            Source(),
+        ),
+    ]
+    connectors.extend(
+        (
+            {
+                "name": f"morocco-{domain}",
+                "domains": [domain],
+                "applies_to_countries": ["Morocco"],
+                "allocation_priority": priority,
+            },
+            Source(),
+        )
+        for domain, priority in (
+            ("anapec.org", 90),
+            ("emploi-public.ma", 90),
+            ("rekrute.com", 80),
+            ("emploi.ma", 80),
+            ("amaljob.com", 80),
+        )
+    )
+    plan = [
+        {
+            "query": f"role-{country}-{language}",
+            "location": country,
+            "country": country,
+            "lang": language,
+        }
+        for country, language in (
+            ("Morocco", "fr"),
+            ("Morocco", "ar"),
+            ("Morocco", "fr"),
+            ("France", "fr"),
+            ("Belgium", "fr"),
+            ("Canada", "en"),
+            ("Germany", "de"),
+        )
+    ]
+    deferrals = [{} for _ in connectors]
+
+    scheduled, deferred, _stale = _allocate_source_queries(
+        connectors,
+        plan,
+        max_requests_per_source=0,
+        rotation_offset=0,
+        max_api_attempts=8,
+        deferral_reasons=deferrals,
+    )
+
+    assert sum(map(len, scheduled)) == 8
+    selected_market = [
+        (connectors[index][0]["name"], combo)
+        for index, combos in enumerate(scheduled[2:], start=2)
+        for combo in combos
+    ]
+    assert len(selected_market) == 3
+    assert {combo["country"] for _, combo in selected_market} == {"Morocco"}
+    assert {"anapec.org", "emploi-public.ma", "rekrute.com"} == {
+        connectors[index][0]["domains"][0]
+        for index, combos in enumerate(scheduled)
+        if combos and connectors[index][0].get("domains")
+    }
+    assert sum(deferred) == 21
+    assert sum(
+        reasons.get("run_attempt_cap", 0) for reasons in deferrals
+    ) == sum(deferred)
+    assert not any(
+        reasons.get("aggregate_daily_budget", 0) for reasons in deferrals
+    )
+
+
+def test_normalization_rejection_has_a_stable_reason_code():
+    from app.connectors.base import Opportunity
+    from app.normalization import normalization_rejection_reason, normalize
+
+    invalid = Opportunity(
+        source="fixture",
+        external_id="bad",
+        title="Civil technician",
+        url="javascript:alert(1)",
+    )
+    too_short = Opportunity(
+        source="fixture",
+        external_id="short",
+        title="x",
+        url="https://example.test/job/123",
+    )
+
+    assert normalization_rejection_reason(invalid) == "invalid_listing_url"
+    assert normalization_rejection_reason(too_short) == "title_too_short"
+    assert normalize(invalid) is None
+    assert normalize(too_short) is None
 
 
 def _cache_entry_key(source, query: str, location: str) -> str:

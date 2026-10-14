@@ -24,13 +24,20 @@ def is_valid_url(url: str) -> bool:
         return False
 
 
+def normalization_rejection_reason(opp: Opportunity) -> str:
+    title = re.sub(r"\s+", " ", (opp.title or "")).strip()
+    if len(title) < _MIN_TITLE:
+        return "title_too_short"
+    if not is_valid_url(opp.url):
+        return "invalid_listing_url"
+    return ""
+
+
 def normalize(opp: Opportunity, *, now: datetime | None = None) -> Opportunity | None:
     """Return a cleaned copy, or None when the opportunity must be dropped."""
     now = now or datetime.now(timezone.utc)
     title = re.sub(r"\s+", " ", (opp.title or "")).strip()
-    if len(title) < _MIN_TITLE:
-        return None
-    if not is_valid_url(opp.url):
+    if normalization_rejection_reason(opp):
         return None
     if opp.posted_at is not None and opp.posted_at.timestamp() > now.timestamp() + 86400:
         opp.posted_at = None

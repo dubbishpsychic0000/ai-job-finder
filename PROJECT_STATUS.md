@@ -966,3 +966,54 @@ BTP-reserve, and 10/day outbound limits remain unchanged. The run reports zero
 Gmail access, applications, drafts, email, WhatsApp, and production database
 writes; its 8 private-vault writes were exclusively budget-ledger reservations.
 No application, candidate/application state, or MEGEC retry occurred.
+
+## Phase 2.6 source filtering and allocation diagnostics
+
+The Phase 2.5 artifact proves the outcome counts, but it does **not** preserve
+the rejected provider URLs or filter reason codes. Therefore, the specific
+reason all 24 official-ATS and 8 ANAPEC results were filtered cannot be
+reconstructed from that run. The source implementation did apply an official
+ATS restriction and ANAPEC domain scope, but attributing those historical
+rejections to either rule would be speculation. The one new individual-vacancy
+candidate was on Expertini, which has no supported detail verifier here; one
+unsupported example is not sufficient evidence to add a source adapter.
+
+The Morocco-specific requests were deferred by the **8-attempt run cap**, not
+by exhausted daily key ledgers: the sanitized artifact recorded 41 aggregate
+daily attempts remaining after eight durable reservations. Code inspection
+showed allocation gave first coverage to broad search, official ATS and one
+market-specific scope, then prioritized uncovered plan combinations before
+additional Morocco-only source scopes. This explains the recorded four broad,
+three ATS and one ANAPEC attempts without incorrectly treating remaining
+per-key capacity as an unreserved allowance.
+
+Phase 2.6 now prioritizes up to two additional distinct Morocco-only source
+scopes within the existing run allowance before repeating broad/ATS searches,
+while preserving applicability, source-scoped cache identity, distinct plan
+coverage, durable per-key reservations and the shared eight-attempt cap. It
+does not increase provider volume or relax vacancy verification. Diagnostics
+now retain filter reason counts and sanitized host/path-pattern examples,
+normalization rejection reasons, provider/accepted/filtered result counts by
+country and language, per-key reservation outcomes by short fingerprint,
+source-applicability exclusions, and run-cap versus daily-budget deferrals.
+The official-ATS filter now validates the parsed URL hostname rather than
+trusting ATS text embedded elsewhere in a URL; ANAPEC scope also validates the
+parsed hostname. Excess results beyond the requested provider-result limit are
+counted as filtered rather than silently disappearing.
+
+The old run cannot establish which URL patterns were rejected, so no claim of
+improved vacancy yield is made yet. A later sanitized report will distinguish
+verified vacancies, unverified candidates, research leads, rejected
+non-vacancies, duplicates and unsupported verification sources; it will also
+report source and query coverage. Unsupported pages remain unverified, and
+posting-date confidence remains independent from current vacancy status.
+There has been no Phase 2.6 live evaluation. The change performs no eligibility
+assessment, production candidate/application write, draft, email, WhatsApp
+message, or MEGEC retry.
+
+Validation: full suite **507 passed, 1 skipped**; focused discovery/filtering
+suite **61 passed**; Ruff on all changed Python files, Python compilation, and
+`git diff --check` passed. The verification timestamp regression assertion now
+compares the same UTC instant regardless of whether SQLite returns an aware or
+naive datetime. Publication, CI confirmation, and any bounded discovery-only
+evaluation remain pending.
