@@ -810,6 +810,7 @@ def test_workflow_discovery_task_skips_outbound_vault_and_full_pipeline_steps():
     )
     task_input = workflow["on"]["workflow_dispatch"]["inputs"]["task"]
     assert "discovery_only" in task_input["options"]
+    assert "discovery_restore_preflight" in task_input["options"]
 
     steps = {
         step.get("name"): step for step in workflow["jobs"]["pipeline"]["steps"]
@@ -865,3 +866,26 @@ def test_workflow_discovery_task_skips_outbound_vault_and_full_pipeline_steps():
     assert "upload sanitized discovery-only report" in {
         name.casefold() for name in steps
     }
+
+
+def test_restore_only_workflow_job_cannot_dispatch_discovery_or_outbound_actions():
+    repo_root = Path(__file__).resolve().parents[1]
+    workflow = yaml.load(
+        (repo_root / ".github" / "workflows" / "agent.yml").read_text(encoding="utf-8"),
+        Loader=yaml.BaseLoader,
+    )
+    jobs = workflow["jobs"]
+    restore = jobs["discovery_restore_preflight"]
+    restore_steps = {step.get("name"): step for step in restore["steps"]}
+    assert "inputs.task == 'discovery_restore_preflight'" in restore["if"]
+    assert "TAVILY_BUDGET_VAULT_REPO" not in json.dumps(restore)
+    assert "VAULT_TOKEN" in restore_steps[
+        "Restore and validate private-vault budget (read-only)"
+    ]["env"]
+    assert "discovery_only_restore" in restore_steps[
+        "Restore and validate private-vault budget (read-only)"
+    ]["run"]
+    assert "app.cli" not in json.dumps(restore)
+    assert "tavily" not in json.dumps(restore_steps["Upload sanitized restore-only report"]).casefold()
+    assert "discovery_restore_preflight" in jobs["pipeline"]["if"]
+    assert "Upload sanitized restore-only report" in restore_steps

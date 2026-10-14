@@ -1194,3 +1194,27 @@ of the implementation is commit
 [`e907b3eb50bdecbd6651dc2f932091e7f4405133`](https://github.com/dubbishpsychic0000/ai-job-finder/commit/e907b3eb50bdecbd6651dc2f932091e7f4405133);
 its CI passed in
 [run 38570895688](https://github.com/dubbishpsychic0000/ai-job-finder/actions/runs/38570895688).
+
+## Phase 2.8b restore-only GitHub Actions preflight
+
+Added a dedicated `discovery_restore_preflight` manual workflow task and job.
+It runs the same hardened private-vault restore validator against the
+configured vault `main` checkout, but is isolated from the application
+pipeline: the normal pipeline job is skipped, and the restore job has no
+discovery, Tavily connector, reservation store, application, email, WhatsApp,
+or BTP command. The only uploaded artifact is a sanitized restore report.
+
+The report includes expected/restored required-input and ledger counts,
+validated origin/branch/reservation-checkout booleans, UTC-day ledger status,
+aggregate and per-key remaining capacity using only short SHA-256 key
+fingerprints, and the state of the 3-request BTP reserve. Capacity is reported
+only for current-UTC-day ledgers; stale, malformed, exhausted, or reserve-
+consuming state yields a blocked report. The restore flow never edits vault
+ledger contents or reconstructs balances from past artifacts.
+
+Offline validation: full suite **541 passed, 1 skipped**; after the final
+reservation-checkout assertion, focused restore-only suite **40 passed**.
+Ruff, Python compilation, and `git diff --check` passed. The live restore-only
+Actions task has not yet been dispatched; its artifact result and run link are
+to be recorded after the isolated task completes. No provider request or
+reservation was made during local validation.

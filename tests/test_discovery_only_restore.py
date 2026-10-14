@@ -10,6 +10,7 @@ import pytest
 
 from app.workflows.discovery_only_restore import (
     DiscoveryRestoreError,
+    build_restore_preflight_report,
     restore_discovery_inputs,
 )
 
@@ -167,3 +168,127 @@ def test_valid_private_vault_fixture_restores_without_changing_ledger_balance(
         "exhausted": False,
     }
     assert (workspace / "data" / "agent.db").read_bytes() == b"offline db fixture"
+
+    report = build_restore_preflight_report(
+        repository,
+        workspace,
+        restoration=status,
+        reservation_path=repository,
+        today=date(2026, 10, 14),
+    )
+    assert report["status"] == "COMPLETED"
+    assert report["reason_code"] == "restoration_validated"
+    assert report["provider_budget"]["requests_dispatched"] == 0
+    assert report["provider_budget"]["reservations_created"] == 0
+    assert report["provider_budget"]["per_key"] == [{
+        "fingerprint": FINGERPRINT,
+        "ledger_present": True,
+        "ledger_valid": True,
+        "ledger_utc_day_matches": True,
+        "count": 6,
+        "exhausted": False,
+        "total_remaining": 14,
+        "general_remaining": 11,
+        "btp_reserve_remaining": 3,
+        "btp_reserve_intact": True,
+        "reason_code": "",
+        "source_ledger_present": True,
+        "restored_ledger_present": True,
+    }]
+    assert report["restoration"]["expected_input_count"] == 4
+    assert report["restoration"]["restored_input_count"] == 4
+    assert report["restoration"]["expected_budget_ledger_count"] == 1
+    assert report["restoration"]["restored_budget_ledger_count"] == 1
+    assert KEY not in json.dumps(report)
+    assert str(repository) not in json.dumps(report)
+
+
+@pytest.mark.parametrize(
+    ("ledger", "reason_code"),
+    [
+        ('{"date":"2026-10-13","count":6,"exhausted":false}', "provider_budget_ledger_stale"),
+        ('{"date":"2026-10-14","count":17,"exhausted":true}', "provider_budget_exhausted"),
+        ('{"date":"2026-10-14","count":18,"exhausted":false}', "btp_reserve_not_intact"),
+    ],
+)
+def test_restore_preflight_fails_closed_for_stale_or_depleted_budget(
+    tmp_path, ledger, reason_code,
+):
+    repository = _vault(tmp_path, ledger=ledger)
+    workspace = tmp_path / "workspace"
+    status = restore_discovery_inputs(
+        repository,
+        workspace,
+        expected_origin=ORIGIN,
+        today=date(2026, 10, 14),
+    )
+
+    report = build_restore_preflight_report(
+        repository,
+        workspace,
+        restoration=status,
+        today=date(2026, 10, 14),
+    )
+
+    assert report["status"] == "BLOCKED"
+    assert report["reason_code"] == reason_code
+    assert report["provider_budget"]["requests_dispatched"] == 0
+    assert report["provider_budget"]["reservations_created"] == 0
+    assert report["provider_budget"]["btp_reserve_validation"] == "blocked"
+    assert KEY not in json.dumps(report)
+
+
+def test_restore_preflight_reports_missing_expected_ledger_by_fingerprint(tmp_path):
+    repository = _vault(tmp_path, ledger=None)
+    workspace = tmp_path / "workspace"
+    with pytest.raises(DiscoveryRestoreError):
+        restore_discovery_inputs(
+            repository,
+            workspace,
+            expected_origin=ORIGIN,
+            today=date(2026, 10, 14),
+        )
+    restoration = json.loads(
+        (workspace / "data" / "discovery_only_inputs_status.json")
+        .read_text(encoding="utf-8"),
+    )
+
+    report = build_restore_preflight_report(
+        repository,
+        workspace,
+        restoration=restoration,
+        today=date(2026, 10, 14),
+    )
+
+    assert report["status"] == "BLOCKED"
+    assert report["reason_code"] == "provider_budget_ledger_missing_or_invalid"
+    assert report["restoration"]["expected_budget_ledger_count"] == 1
+    assert report["restoration"]["restored_budget_ledger_count"] == 0
+    assert report["provider_budget"]["per_key"][0]["fingerprint"] == FINGERPRINT
+    assert report["provider_budget"]["per_key"][0]["source_ledger_present"] is False
+    assert report["provider_budget"]["per_key"][0]["reason_code"] == (
+        "provider_budget_ledger_missing"
+    )
+
+
+def test_restore_preflight_rejects_mismatched_reservation_checkout(tmp_path):
+    repository = _vault(tmp_path)
+    workspace = tmp_path / "workspace"
+    status = restore_discovery_inputs(
+        repository,
+        workspace,
+        expected_origin=ORIGIN,
+        today=date(2026, 10, 14),
+    )
+
+    report = build_restore_preflight_report(
+        repository,
+        workspace,
+        restoration=status,
+        reservation_path=tmp_path / "other-vault",
+        today=date(2026, 10, 14),
+    )
+
+    assert report["status"] == "BLOCKED"
+    assert "vault_repository_path_mismatch" in report["reason_codes"]
+    assert report["restoration"]["vault_path_verified"] is False

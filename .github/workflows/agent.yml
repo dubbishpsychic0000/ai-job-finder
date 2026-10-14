@@ -19,7 +19,7 @@ on:
         description: "Workflow to run"
         type: choice
         default: pipeline
-        options: [pipeline, btp_outreach, history_preflight, discovery_only]
+        options: [pipeline, btp_outreach, history_preflight, discovery_only, discovery_restore_preflight]
       email_mode:
         description: "Email mode; live sends require the separate BTP authorization checkbox"
         type: choice
@@ -49,7 +49,89 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  discovery_restore_preflight:
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.task == 'discovery_restore_preflight' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout public repo
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install restore dependencies
+        run: pip install -r requirements.txt
+
+      - name: Restore and validate private-vault budget (read-only)
+        env:
+          VAULT_TOKEN: ${{ secrets.VAULT_TOKEN }}
+          VAULT_URL: https://github.com/dubbishpsychic0000/ai-job-finder-vault.git
+        run: |
+          set +e
+          mkdir -p /tmp/wca-discovery-vault
+          report=/tmp/discovery_restore_preflight_report.json
+          trap 'rm -f secrets/tavily_keys.txt /tmp/restore_preflight_internal.log; rm -rf /tmp/wca-discovery-vault' EXIT
+          rm -rf /tmp/wca-discovery-vault
+          if [ -n "$VAULT_TOKEN" ] && [ -n "$VAULT_URL" ]; then
+            git clone --depth 1 --filter=blob:none --sparse --branch main --single-branch \
+              "https://x-access-token:${VAULT_TOKEN}@${VAULT_URL#https://}" \
+              /tmp/wca-discovery-vault >/dev/null 2>&1
+            if [ "$?" -eq 0 ]; then
+              git -C /tmp/wca-discovery-vault sparse-checkout set --no-cone \
+                state/agent.db state/tavily_cache.json \
+                candidate/profile.yaml candidate/preferences.yaml \
+                secrets/tavily_keys.txt >/dev/null 2>&1
+              git -C /tmp/wca-discovery-vault checkout >/dev/null 2>&1
+            fi
+            if [ -s /tmp/wca-discovery-vault/secrets/tavily_keys.txt ]; then
+              mapfile -t budget_paths < <(python - <<'PY'
+          import hashlib
+          from pathlib import Path
+          values = Path("/tmp/wca-discovery-vault/secrets/tavily_keys.txt").read_text(encoding="utf-8").replace("\r", "").replace("\n", ",").split(",")
+          seen = set()
+          for value in values:
+              key = value.strip()
+              if key:
+                  name = "state/tavily_budget_" + hashlib.sha256(key.encode("utf-8")).hexdigest()[:8] + ".json"
+                  if name not in seen:
+                      print(name)
+                      seen.add(name)
+          PY
+              )
+              git -C /tmp/wca-discovery-vault sparse-checkout set --no-cone \
+                state/agent.db state/tavily_cache.json \
+                candidate/profile.yaml candidate/preferences.yaml \
+                secrets/tavily_keys.txt "${budget_paths[@]}" >/dev/null 2>&1
+              git -C /tmp/wca-discovery-vault checkout >/dev/null 2>&1
+            fi
+          fi
+          python -m app.workflows.discovery_only_restore \
+            --vault /tmp/wca-discovery-vault \
+            --workspace "$GITHUB_WORKSPACE" \
+            --origin "$VAULT_URL" \
+            --branch main \
+            --reservation-path /tmp/wca-discovery-vault \
+            --report "$report" >/dev/null 2>/tmp/restore_preflight_internal.log
+          status=$?
+          if [ ! -s "$report" ]; then
+            printf '{"schema_version":1,"mode":"restore_only","status":"BLOCKED","reason_code":"restore_report_unavailable","side_effects":{"discovery_dispatched":false,"tavily_requests":0,"budget_reservations":0,"application_actions":0,"drafts_created":0,"emails_sent":0,"whatsapp_messages_sent":0,"btp_actions":0,"production_candidate_writes":0}}\n' > "$report"
+            status=1
+          fi
+          exit "$status"
+
+      - name: Upload sanitized restore-only report
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: discovery-restore-preflight-${{ github.run_id }}
+          path: /tmp/discovery_restore_preflight_report.json
+          if-no-files-found: error
+
   pipeline:
+    if: ${{ !(github.event_name == 'workflow_dispatch' && inputs.task == 'discovery_restore_preflight') }}
     runs-on: ubuntu-latest
     timeout-minutes: ${{ inputs.task == 'discovery_only' && 15 || 55 }}
     env:
