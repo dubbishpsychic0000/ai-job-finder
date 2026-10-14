@@ -1268,5 +1268,26 @@ Added offline coverage for mixed 20/17/1 key states, general-cap reservation,
 and non-mutating prior-day reporting. A mocked-provider regression checks that
 only the 1/20 key can dispatch in that mixed state. Full suite: **548 passed,
 1 skipped**. Ruff, Python compilation, and `git diff --check` passed. A single
-restore-only Actions preflight will be run only after publication and CI; it
-will not dispatch discovery.
+restore-only Actions preflight was run after publication and CI; it did not
+dispatch discovery.
+
+Publication and post-publication check:
+
+- Implementation commit [`ec3617d20b1f3a99548fd21e97bd96d4727c9b6b`](https://github.com/dubbishpsychic0000/ai-job-finder/commit/ec3617d20b1f3a99548fd21e97bd96d4727c9b6b)
+  was pushed to `main`; CI passed in [run 38653751046](https://github.com/dubbishpsychic0000/ai-job-finder/actions/runs/38653751046).
+- One restore-only task ran as [run 38653889188](https://github.com/dubbishpsychic0000/ai-job-finder/actions/runs/38653889188).
+  Its sanitized report artifact uploaded, and the normal pipeline job was
+  skipped.
+- On UTC day `2026-10-14`, the actual configured vault origin, `main` ref, and
+  reservation checkout path were verified. Inputs restored: **4/4**; valid
+  durable ledgers: **7/7**. All ledgers matched the current UTC day.
+- The seven keys were at counts **20, 20, 20, 18, 17, 17, 17**. Aggregate
+  capacity remaining under the 20-request total cap was **11**; general
+  capacity was **0**. The computed remaining BTP capacity was **11**, but
+  3-request BTP-reserve validation was blocked because some keys had already
+  consumed reserve capacity. No key was eligible for general discovery, so the
+  result was `BLOCKED` with `no_general_budget_available`.
+- This run made **0** Tavily requests and **0** reservations. Application or
+  outbound actions, BTP actions, production candidate writes, and the normal
+  pipeline were all **0**. The preflight did not authorize discovery, and no
+  live discovery was dispatched.
