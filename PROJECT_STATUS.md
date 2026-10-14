@@ -1214,7 +1214,33 @@ ledger contents or reconstructs balances from past artifacts.
 
 Offline validation: full suite **541 passed, 1 skipped**; after the final
 reservation-checkout assertion, focused restore-only suite **40 passed**.
-Ruff, Python compilation, and `git diff --check` passed. The live restore-only
-Actions task has not yet been dispatched; its artifact result and run link are
-to be recorded after the isolated task completes. No provider request or
-reservation was made during local validation.
+Ruff, Python compilation, and `git diff --check` passed.
+
+The restore-only task was dispatched once after CI passed for commit
+[`158d2b042d8af0b0b9c62c1ff4d0783a3c4ba42c`](https://github.com/dubbishpsychic0000/ai-job-finder/commit/158d2b042d8af0b0b9c62c1ff4d0783a3c4ba42c).
+The exact run is [38576950879](https://github.com/dubbishpsychic0000/ai-job-finder/actions/runs/38576950879).
+The sanitized `discovery-restore-preflight-38576950879` artifact uploaded
+successfully. The restore-only job failed closed with
+`provider_budget_exhausted`; the normal `pipeline` job was skipped.
+
+Measured artifact results (UTC day `2026-10-14`):
+
+- Vault origin, `main` branch, and exact reservation checkout path: verified.
+- Required inputs: **4 expected, 4 restored**.
+- Provider keys and current-day durable ledgers: **7 expected, 7 restored**;
+  all ledgers passed format/date/range validation and no content was modified.
+- Per-key daily request counts: two keys at 20/20; four at 17/20; one at 1/20.
+  The artifact reports only short key fingerprints, not credentials.
+- General (non-BTP) remaining capacity: **16 aggregate**, available on the
+  key at count 1; no general capacity remains on keys at 17 or 20.
+- BTP reserve remaining: **15 aggregate**, with three reserved requests still
+  available on each of five keys. Two keys at the total 20-request cap have no
+  remaining BTP capacity, so the report marks BTP reserve validation blocked
+  and the overall preflight does not authorize discovery.
+- Requests dispatched: **0**. Reservations created: **0**. Applications,
+  drafts, emails, WhatsApp, BTP actions, and production candidate writes: **0**.
+
+The one restore-only run was not repeated. No live discovery was chained from
+the partial remaining aggregate capacity; the failed closed artifact is the
+current evidence and does not authorize a provider run. Further provider use
+requires a separate fresh budget preflight and explicit authorization.
