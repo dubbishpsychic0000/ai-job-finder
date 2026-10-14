@@ -1,8 +1,10 @@
 """Worldwide Discovery V3: safe contacts, routes, and non-spam notifications."""
 from __future__ import annotations
 
+from app.connectors.base import Opportunity
 from app.discovery.email_verification import EmailVerificationService, is_safe_email
 from app.discovery.opportunity_details import (
+    classify_entity,
     classify_opportunity,
     detect_application_method,
 )
@@ -11,8 +13,9 @@ from app.memory.store import (
     get_or_create_company,
     opportunity_id,
 )
-from app.models import Job
+from app.models import Decision, Job
 from app.notifications.service import NotificationService
+from app.workflows.action import pending_actions
 
 
 def test_email_verification_rejects_placeholders_and_only_trusts_evidence(db):
@@ -49,6 +52,118 @@ def test_type_and_route_detection_do_not_make_up_email_routes():
     method, url = detect_application_method(text="Apply online today", url="https://example.test/app")
     assert (method, url) == ("ONLINE_FORM", "https://example.test/app")
     assert detect_application_method(text="A great job", has_verified_email=False)[0] == "UNKNOWN"
+
+
+def test_entity_classification_distinguishes_vacancies_from_research_pages():
+    detail = Opportunity(
+        source="tavily_web_search",
+        source_type="search_engine",
+        external_id="https://jobs.example.test/jobs/technician-123",
+        title="Civil Engineering Technician",
+        company="",
+        location="Casablanca, Morocco",
+        url="https://jobs.example.test/jobs/technician-123",
+        raw={"query": "civil engineering technician"},
+    )
+    assert classify_entity(detail) == (
+        "INDIVIDUAL_VACANCY",
+        "VACANCY_UNVERIFIED",
+        "specific_listing_url_unverified",
+    )
+
+    salary_page = Opportunity(
+        source="tavily_web_search",
+        source_type="search_engine",
+        external_id="https://reference.example.test/civil-engineer-salary",
+        title="Civil Engineer Salary Guide",
+        url="https://reference.example.test/civil-engineer-salary",
+    )
+    assert classify_entity(salary_page) == (
+        "SALARY_INFORMATION",
+        "REJECTED_NON_VACANCY",
+        "salary_reference",
+    )
+
+    forum = Opportunity(
+        source="tavily_web_search",
+        source_type="search_engine",
+        external_id="https://forum.example.test/civil-engineering",
+        title="Civil engineering technician discussion forum",
+        url="https://forum.example.test/civil-engineering",
+    )
+    assert classify_entity(forum) == (
+        "FORUM_DISCUSSION",
+        "REJECTED_NON_VACANCY",
+        "forum_or_discussion",
+    )
+
+    category = Opportunity(
+        source="job_board",
+        source_type="job_board",
+        external_id="https://jobs.example.test/jobs",
+        title="Civil engineering jobs in Morocco",
+        url="https://jobs.example.test/jobs",
+    )
+    assert classify_entity(category) == (
+        "JOB_BOARD_CATEGORY",
+        "RESEARCH_REQUIRED",
+        "job_category_page",
+    )
+
+    official_record = Opportunity(
+        source="greenhouse:example",
+        source_type="ats",
+        external_id="greenhouse:example:123",
+        title="Civil Engineering Technician",
+        company="Example Construction",
+        location="Casablanca, Morocco",
+        url="https://boards.greenhouse.io/example/jobs/123",
+        raw={"ats": "greenhouse"},
+    )
+    assert classify_entity(official_record) == (
+        "INDIVIDUAL_VACANCY",
+        "VACANCY_VERIFIED",
+        "structured_official_ats_record",
+    )
+
+    official_record.company = "example"
+    assert classify_entity(official_record)[1] == "VACANCY_UNVERIFIED"
+
+
+def test_unverified_entities_are_excluded_from_pending_actions(db):
+    unverified = Job(
+        source="tavily",
+        external_id="listing",
+        dedup_key="unverified-listing",
+        title="Civil Engineer",
+        url="https://jobs.example.test/jobs/123",
+        status="analyzed",
+    )
+    verified = Job(
+        source="greenhouse",
+        external_id="official",
+        dedup_key="verified-listing",
+        title="Civil Engineer",
+        url="https://boards.greenhouse.io/example/jobs/123",
+        status="analyzed",
+        source_type="ats",
+        entity_type="INDIVIDUAL_VACANCY",
+        entity_state="VACANCY_VERIFIED",
+        entity_reason_code="structured_official_ats_record",
+        entity_evidence_url="https://boards.greenhouse.io/example/jobs/123",
+    )
+    db.add_all([unverified, verified])
+    db.flush()
+    db.add_all([
+        Decision(
+            job_id=job.id, decision="APPLY", overall_score=90,
+            scores={}, reason="test", rules_fired=[], ai_reason="",
+        )
+        for job in (unverified, verified)
+    ])
+    db.flush()
+
+    assert pending_actions(db) == [verified]
 
 
 def test_daily_limit_draft_is_an_immediate_notification(db):

@@ -8,7 +8,6 @@ from __future__ import annotations
 
 import json
 import logging
-from datetime import datetime, timezone
 from pathlib import Path
 
 import requests
@@ -26,15 +25,6 @@ def _matches(title: str, query: str) -> bool:
         return True
     tl = title.lower()
     return any(w in tl for w in words) or words[0] in tl
-
-
-def _ms_epoch(value) -> datetime | None:
-    if not value:
-        return None
-    try:
-        return datetime.fromtimestamp(int(value) / 1000, tz=timezone.utc)
-    except (TypeError, ValueError, OSError):
-        return None
 
 
 class LeverSource:
@@ -73,7 +63,7 @@ class LeverSource:
             country=infer_country(loc),
             description=(posting.get("descriptionPlain") or posting.get("description", ""))[:20000],
             url=posting.get("hostedUrl") or posting.get("applyUrl") or "",
-            posted_at=_ms_epoch(posting.get("createdAt")),
+            posted_at=None,
             employment_type="full_time",
             raw={"site": site, "ats": "lever"},
         )

@@ -70,6 +70,8 @@ class Job(Base):
     description: Mapped[str] = mapped_column(Text, default="")
     url: Mapped[str] = mapped_column(String(1024), default="")
     posted_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    posted_at_source: Mapped[str] = mapped_column(String(128), default="")
+    posted_at_evidence_url: Mapped[str] = mapped_column(String(1024), default="")
     discovered_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
     employment_type: Mapped[str] = mapped_column(String(32), default="")
     salary: Mapped[str] = mapped_column(String(128), default="")
@@ -97,6 +99,10 @@ class Job(Base):
     opportunity_type: Mapped[str] = mapped_column(String(32), default="JOB", index=True)
     application_method: Mapped[str] = mapped_column(String(32), default="UNKNOWN")
     application_url: Mapped[str] = mapped_column(String(1024), default="")
+    entity_type: Mapped[str] = mapped_column(String(40), default="UNKNOWN", index=True)
+    entity_state: Mapped[str] = mapped_column(String(40), default="RESEARCH_REQUIRED", index=True)
+    entity_reason_code: Mapped[str] = mapped_column(String(64), default="legacy_record_unverified")
+    entity_evidence_url: Mapped[str] = mapped_column(String(1024), default="")
 
 
 class OpportunitySource(Base):

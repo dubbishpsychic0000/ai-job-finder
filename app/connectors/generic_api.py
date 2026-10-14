@@ -22,7 +22,12 @@ from typing import Any
 
 import requests
 
-from app.connectors.base import Opportunity, infer_country, parse_date
+from app.connectors.base import (
+    Opportunity,
+    infer_country,
+    is_posting_date_field,
+    parse_date,
+)
 
 logger = logging.getLogger(__name__)
 USER_AGENT = "WorldwideCareerAgent/0.1 (public API; respects ToS)"
@@ -83,6 +88,12 @@ class GenericAPISource:
         company = _get_path(raw, mapping.get("company", "")) or ""
         location = _get_path(raw, mapping.get("location", "")) or ""
         url = _get_path(raw, mapping.get("url", "")) or ""
+        posted_field = mapping.get("posted_at", "")
+        posted_raw = (
+            _get_path(raw, posted_field) or None
+            if is_posting_date_field(posted_field)
+            else None
+        )
         return Opportunity(
             source=self.config.get("name", "generic_api"),
             source_type=self.config.get("source_type", "job_board"),
@@ -93,7 +104,9 @@ class GenericAPISource:
             country=infer_country(location) or _get_path(raw, mapping.get("country", "")) or "",
             description=_get_path(raw, mapping.get("description", "")) or "",
             url=url,
-            posted_at=parse_date(_get_path(raw, mapping.get("posted_at", "")) or None),
+            posted_at=parse_date(posted_raw),
+            posted_at_source=posted_field if posted_raw else "",
+            posted_at_evidence_url=url if posted_raw else "",
             employment_type=(_get_path(raw, mapping.get("employment_type", "")) or "full_time"),
             salary=_get_path(raw, mapping.get("salary", "")),
             raw={"config": self.config.get("name", ""), "query_note": "generic_api"},

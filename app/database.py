@@ -95,6 +95,12 @@ def _upgrade_schema() -> None:
         "opportunity_type": "VARCHAR(32) DEFAULT 'JOB'",
         "application_method": "VARCHAR(32) DEFAULT 'UNKNOWN'",
         "application_url": "VARCHAR(1024) DEFAULT ''",
+        "posted_at_source": "VARCHAR(128) DEFAULT ''",
+        "posted_at_evidence_url": "VARCHAR(1024) DEFAULT ''",
+        "entity_type": "VARCHAR(40) DEFAULT 'UNKNOWN'",
+        "entity_state": "VARCHAR(40) DEFAULT 'RESEARCH_REQUIRED'",
+        "entity_reason_code": "VARCHAR(64) DEFAULT 'legacy_record_unverified'",
+        "entity_evidence_url": "VARCHAR(1024) DEFAULT ''",
     })
 
     _add_missing_columns(insp, "companies", {

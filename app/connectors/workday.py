@@ -66,6 +66,7 @@ class WorkdaySource:
         path = posting.get("externalPath", "") or ""
         host = cfg.get("host", "")
         url = f"https://{host}{path}" if path else ""
+        posted_raw = posting.get("postedOn")
         return Opportunity(
             source=f"workday:{cfg.get('name') or host}",
             source_type="ats",
@@ -76,7 +77,9 @@ class WorkdaySource:
             country=infer_country(loc),
             description=_clean_html(posting.get("jobDescription", ""))[:20000],
             url=url,
-            posted_at=parse_date(posting.get("postedOn")),
+            posted_at=parse_date(posted_raw),
+            posted_at_source="workday:postedOn" if posted_raw else "",
+            posted_at_evidence_url=url if posted_raw else "",
             employment_type="full_time",
             raw={"ats": "workday", "host": host},
         )

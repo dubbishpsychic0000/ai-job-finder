@@ -166,6 +166,13 @@ def validate(
         if age > max_age:
             report.block(f"posting is {age} days old (> {max_age})", "freshness")
 
+    if job.closing_at:
+        closing = job.closing_at
+        if closing.tzinfo is None:
+            closing = closing.replace(tzinfo=timezone.utc)
+        if closing <= now:
+            report.block("posting closing date has passed", "closing_date")
+
     if not attachments:
         report.block("no CV attachment resolved", "attachment")
     else:

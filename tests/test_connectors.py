@@ -41,6 +41,84 @@ def test_normalize_drops_bad():
     assert g.country == "France"
 
 
+def test_normalize_preserves_unknown_posting_date_and_drops_future_evidence():
+    from datetime import timedelta
+
+    from app.connectors.base import Opportunity
+
+    instant = datetime(2026, 10, 13, tzinfo=timezone.utc)
+    unknown = Opportunity(
+        source="tavily",
+        external_id="https://example.test/jobs/1",
+        title="Civil Engineering Technician",
+        url="https://example.test/jobs/1",
+        raw={"query": "civil technician", "posted": "2026-10-12"},
+    )
+    normalized = normalize(unknown, now=instant)
+    assert normalized is not None
+    assert normalized.posted_at is None
+
+    future = Opportunity(
+        source="fixture",
+        external_id="future-1",
+        title="Civil Engineering Technician",
+        url="https://example.test/jobs/2",
+        posted_at=instant + timedelta(days=3),
+        posted_at_source="fixture:posted_at",
+        posted_at_evidence_url="https://example.test/jobs/2",
+    )
+    normalized_future = normalize(future, now=instant)
+    assert normalized_future is not None
+    assert normalized_future.posted_at is None
+    assert normalized_future.posted_at_source == ""
+    assert normalized_future.posted_at_evidence_url == ""
+
+
+def test_rss_does_not_use_page_updated_date_as_posting_date():
+    from types import SimpleNamespace
+
+    from app.connectors.rss import RSSJobSource
+
+    source = RSSJobSource()
+    entry = SimpleNamespace(
+        title="Civil Engineer",
+        link="https://employer.example/jobs/123",
+        summary="A civil engineering vacancy.",
+        updated="2026-10-12",
+        tags=[],
+    )
+    opportunity = source._from_entry(entry, "https://employer.example/feed")
+    assert opportunity.posted_at is None
+    assert opportunity.posted_at_source == ""
+
+
+def test_greenhouse_and_lever_update_timestamps_are_not_posting_dates():
+    from app.connectors.greenhouse import GreenhouseSource
+    from app.connectors.lever import LeverSource
+
+    greenhouse = GreenhouseSource(boards=["example"])
+    greenhouse_item = greenhouse._from_job("example", {
+        "id": 12,
+        "title": "Civil Engineer",
+        "updated_at": "2026-10-12T00:00:00Z",
+        "absolute_url": "https://boards.greenhouse.io/example/jobs/12",
+        "company_name": "Example Engineering",
+        "location": {"name": "Casablanca, Morocco"},
+        "content": "Public civil engineering job record.",
+    })
+    lever = LeverSource(sites=["example"])
+    lever_item = lever._from_posting("example", {
+        "id": "abc-123",
+        "text": "Civil Engineer",
+        "createdAt": 1791763200000,
+        "hostedUrl": "https://jobs.lever.co/example/abc-123",
+        "company": "Example Engineering",
+        "categories": {"location": "Casablanca, Morocco"},
+    })
+    assert greenhouse_item.posted_at is None
+    assert lever_item.posted_at is None
+
+
 def test_static_source_returns_opportunities():
     from tests.conftest import ROOT
 

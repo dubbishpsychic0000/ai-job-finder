@@ -82,6 +82,11 @@ def _job(db, status="analyzed"):
         description="road construction", url="https://example.com/j", status=status,
         contact_email="jobs@colas.example",
         posted_at=datetime.now(timezone.utc) - timedelta(days=2),
+        source_type="ats",
+        entity_type="INDIVIDUAL_VACANCY",
+        entity_state="VACANCY_VERIFIED",
+        entity_reason_code="structured_official_ats_record",
+        entity_evidence_url="https://boards.greenhouse.io/example/jobs/1",
     )
     db.add(job)
     db.flush()

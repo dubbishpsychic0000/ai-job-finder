@@ -20,6 +20,7 @@ from sqlalchemy.orm import Session
 from app import memory as mem
 from app.agents.llm import LLMProvider
 from app.config import AgentConfig, Preferences
+from app.discovery.opportunity_details import is_verified_individual_vacancy
 
 logger = logging.getLogger(__name__)
 
@@ -121,6 +122,8 @@ class DecisionAgent:
 
         if job.status in ("acted", "closed", "ignored"):
             return "IGNORE", ["already_processed"]
+        if not is_verified_individual_vacancy(job):
+            fired.append("vacancy_not_verified")
         if mem.store.find_job_by_key(session, job.dedup_key) and job.status == "new":
             pass  # duplicate guard lives in discovery; keep decision pure
 
@@ -156,6 +159,12 @@ class DecisionAgent:
             age_days = (datetime.now(timezone.utc) - posted).days
             if age_days > max_age:
                 fired.append(f"stale_posting_{age_days}d")
+        if job.closing_at:
+            closing = job.closing_at
+            if closing.tzinfo is None:
+                closing = closing.replace(tzinfo=timezone.utc)
+            if closing <= datetime.now(timezone.utc):
+                fired.append("closing_date_expired")
 
         # experience requirement vs candidate ceiling
         analysis = mem.store.get_analysis(session, job.id)
@@ -174,6 +183,7 @@ class DecisionAgent:
         if fired and "low_score" in fired:
             return "IGNORE", fired
         if any(rule.startswith("stale_posting_") or rule.startswith("experience_requires_")
+               or rule == "closing_date_expired"
                for rule in fired):
             return "IGNORE", fired
         if "student_enrollment_required" in fired:
@@ -181,6 +191,8 @@ class DecisionAgent:
         if "student_enrollment_unverified" in fired:
             return "HOLD", fired
         if "international_sponsorship_not_verified" in fired:
+            return "HOLD", fired
+        if "vacancy_not_verified" in fired:
             return "HOLD", fired
         return None, fired
 

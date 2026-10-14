@@ -172,7 +172,26 @@ def test_generic_api_mapping():
     assert first.company == "Vinci"
     assert first.country == "Netherlands"
     assert first.external_id == "x1"
-    assert first.posted_at is not None
+    assert first.posted_at is None
+    assert first.posted_at_source == ""
+
+    posting = src._item({
+        "title": "Civil Engineering Technician",
+        "employer": {"name": "Vinci"},
+        "city": "Amsterdam, Netherlands",
+        "permalink": "https://example.test/jobs/1",
+        "uuid": "x2",
+        "datePosted": "2026-10-12",
+    }, {
+        "title": "title",
+        "company": "employer.name",
+        "location": "city",
+        "url": "permalink",
+        "external_id": "uuid",
+        "posted_at": "datePosted",
+    })
+    assert posting.posted_at is not None
+    assert posting.posted_at_source == "datePosted"
 
 
 # ---- company careers / ATS detection -------------------------------------------
@@ -242,7 +261,7 @@ def test_lever_happy_path():
     assert ops and all(o.source_type == "ats" for o in ops)
     assert all(o.url.startswith("https://") for o in ops)
     assert any(o.country == "France" for o in ops)
-    assert any(o.posted_at is not None for o in ops)
+    assert all(o.posted_at is None for o in ops)
 
 
 def test_lever_query_filter_and_offline_degrade(tmp_path):

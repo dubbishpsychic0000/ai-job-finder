@@ -23,7 +23,12 @@ from typing import Any
 import feedparser
 import requests
 
-from app.connectors.base import Opportunity, infer_country, parse_date
+from app.connectors.base import (
+    Opportunity,
+    infer_country,
+    is_posting_date_field,
+    parse_date,
+)
 from app.connectors.generic_api import _get_path
 
 logger = logging.getLogger(__name__)
@@ -98,7 +103,7 @@ class GovernmentPortalSource:
         title = _clean_html(getattr(entry, "title", "") or "")
         link = getattr(entry, "link", "") or ""
         summary = _clean_html(getattr(entry, "summary", "") or getattr(entry, "description", "") or "")
-        published = getattr(entry, "published", "") or getattr(entry, "updated", "")
+        published = getattr(entry, "published", "")
 
         company = ""
         location = self.country
@@ -116,6 +121,8 @@ class GovernmentPortalSource:
             description=summary[:20000],
             url=link,
             posted_at=parse_date(published),
+            posted_at_source="government_rss:published" if published else "",
+            posted_at_evidence_url=link if published else "",
             employment_type="full_time",
             language=self.language,
             raw={"portal": source_name, "kind": "rss"},
@@ -126,6 +133,12 @@ class GovernmentPortalSource:
         location = _get_path(raw, self.mapping.get("location", "")) or ""
         url = _get_path(raw, self.mapping.get("url", "")) or ""
         title = _get_path(raw, self.mapping.get("title", "")) or ""
+        posted_field = self.mapping.get("posted_at", "")
+        posted_raw = (
+            _get_path(raw, posted_field) or None
+            if is_posting_date_field(posted_field)
+            else None
+        )
         return Opportunity(
             source=source_name,
             source_type="government",
@@ -136,7 +149,9 @@ class GovernmentPortalSource:
             country=infer_country(location) or self.country,
             description=_get_path(raw, self.mapping.get("description", "")) or "",
             url=url,
-            posted_at=parse_date(_get_path(raw, self.mapping.get("posted_at", "")) or None),
+            posted_at=parse_date(posted_raw),
+            posted_at_source=posted_field if posted_raw else "",
+            posted_at_evidence_url=url if posted_raw else "",
             employment_type="full_time",
             language=self.language,
             raw={"portal": source_name, "kind": "api"},

@@ -123,6 +123,23 @@ def test_stale_posting_blocked(db, profile, config, cv_file):
     assert any("days old" in r for r in report.reasons)
 
 
+def test_expired_closing_date_is_blocked(db, profile, config, cv_file):
+    job = _job(db)
+    job.closing_at = datetime.now(timezone.utc) - timedelta(days=1)
+    report = validate(
+        to_addr=job.contact_email,
+        subject="Application",
+        body="I have 4 years of experience in civil engineering.",
+        attachments=[cv_file],
+        job=job,
+        profile=profile,
+        config=config,
+        session=db,
+    )
+    assert not report.allowed
+    assert any("closing date has passed" in reason for reason in report.reasons)
+
+
 def test_employer_cooldown_blocked(db, profile, config, cv_file):
     """Any contact with the same company within the cooldown window blocks."""
     body = "I have 4 years of experience in civil engineering."

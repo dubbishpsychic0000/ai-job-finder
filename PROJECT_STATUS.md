@@ -778,3 +778,36 @@ change remain unverified. Focused recovery/discovery/company-pipeline/BTP
 tests: **115 passed**; full suite: **354 passed, 1 skipped**. Ruff passed on
 all changed Python files and `git diff --check` passed. The patch is unstaged
 on `main`; no untracked files were created.
+
+## Phase 2.4 vacancy verification and posting-date evidence
+
+Discovery records now distinguish an individual vacancy from a research page
+and separately track whether a vacancy is verified. Search results and
+unstructured job-board links remain unverified; a vacancy is verified only
+when its structured record has a stable source ID, employer, title, location,
+and an official ATS URL. The application backstop rechecks the persisted
+verification state, reason code, ATS source type, and official ATS host before
+allowing an application action. Analysis and pending-action selection also
+hold unverified vacancies; spontaneous BTP handling remains separate.
+
+Unknown posting dates remain unknown instead of being replaced with
+collection time. Connectors retain only explicit publication/posting dates
+with source-field and evidence-URL provenance; record creation and update
+timestamps are not treated as posting dates. Reports distinguish verified
+vacancies, unverified vacancy candidates, research records, and rejected
+non-vacancies, and expose date/entity evidence with sanitized public URLs.
+Legacy database rows receive conservative unknown/research-required
+classification defaults without rewriting their existing dates. Expired
+closing dates block application.
+
+The existing discovery-only isolation, Morocco-first allocation, durable
+per-attempt Tavily reservations, 12-combination and 8-attempt caps, daily
+budgets, BTP reserve, and 10/day outbound limit are unchanged. No live
+provider calls, candidate/application writes, outbound actions, or MEGEC
+reprocessing have occurred for this implementation.
+
+Validation: full suite **483 passed, 1 skipped**; Ruff passed on all changed
+Python files; Python compilation and `git diff --check` passed. Repository-wide
+Ruff still reports 25 findings in untouched files. Publication, CI, and the
+authorized single bounded discovery-only evaluation are pending; no production
+discovery measurements are claimed yet.

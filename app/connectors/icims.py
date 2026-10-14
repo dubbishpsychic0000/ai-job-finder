@@ -66,6 +66,7 @@ class ICIMSSource:
         loc_obj = job.get("location") or {}
         loc = ", ".join(p for p in (loc_obj.get("city", ""), loc_obj.get("countryCode", "")) if p)
         url = job.get("jobUrl") or job.get("jobLink") or ""
+        posted_raw = job.get("postedDate") or job.get("datePosted")
         return Opportunity(
             source=f"icims:{host}",
             source_type="ats",
@@ -76,7 +77,12 @@ class ICIMSSource:
             country=infer_country(loc),
             description="",
             url=url,
-            posted_at=parse_date(job.get("postedDate") or job.get("datePosted")),
+            posted_at=parse_date(posted_raw),
+            posted_at_source=(
+                "icims:postedDate" if job.get("postedDate") else
+                "icims:datePosted" if job.get("datePosted") else ""
+            ),
+            posted_at_evidence_url=url if posted_raw else "",
             employment_type="full_time",
             raw={"ats": "icims", "host": host},
         )

@@ -7,6 +7,7 @@ email application route.
 from __future__ import annotations
 
 import re
+from urllib.parse import urlsplit
 
 OPPORTUNITY_TYPES = {
     "JOB", "INTERNSHIP", "APPRENTICESHIP", "TRAINING", "RECRUITMENT_EVENT",
@@ -15,6 +16,23 @@ OPPORTUNITY_TYPES = {
 APPLICATION_METHODS = {
     "EMAIL", "ONLINE_FORM", "COMPANY_PORTAL", "JOB_BOARD", "RECRUITER",
     "PHONE", "WHATSAPP", "IN_PERSON", "UNKNOWN",
+}
+ENTITY_TYPES = {
+    "INDIVIDUAL_VACANCY",
+    "EMPLOYER_CAREERS_PAGE",
+    "JOB_BOARD_CATEGORY",
+    "OCCUPATIONAL_REFERENCE",
+    "SALARY_INFORMATION",
+    "FORUM_DISCUSSION",
+    "RECRUITMENT_EVENT",
+    "TRAINING_PROGRAM",
+    "UNKNOWN",
+}
+ENTITY_STATES = {
+    "VACANCY_VERIFIED",
+    "VACANCY_UNVERIFIED",
+    "RESEARCH_REQUIRED",
+    "REJECTED_NON_VACANCY",
 }
 
 _TYPE_PATTERNS = (
@@ -27,6 +45,159 @@ _TYPE_PATTERNS = (
     ("RECRUITMENT_EVENT", r"\b(job fair|recruitment event|forum emploi|salon emploi)\b"),
     ("RECRUITER_OPPORTUNITY", r"\b(recruiter|recruitment agency|cabinet de recrutement|intérim)\b"),
 )
+_NON_VACANCY_PATTERNS = (
+    (
+        "SALARY_INFORMATION",
+        r"\b(?:salary|salaries|wage|pay)\b.{0,35}\b(?:guide|report|survey|benchmark|by occupation|range by)\b"
+        r"|\b(?:salary|wage) (?:guide|report|survey|calculator|benchmark)\b",
+        "salary_reference",
+    ),
+    (
+        "OCCUPATIONAL_REFERENCE",
+        r"\b(?:occupational outlook|career profile|occupation profile|what does .{1,60} do|career information)\b",
+        "occupational_reference",
+    ),
+    (
+        "FORUM_DISCUSSION",
+        r"\b(?:forum|discussion|reddit|quora|question and answer|q&a|thread)\b",
+        "forum_or_discussion",
+    ),
+    (
+        "RECRUITMENT_EVENT",
+        r"\b(?:job fair|career fair|recruitment event|forum emploi|salon emploi)\b",
+        "recruitment_event",
+    ),
+    (
+        "TRAINING_PROGRAM",
+        r"\b(?:training course|formation professionnelle|bootcamp|online course|certification course)\b",
+        "training_program",
+    ),
+)
+_DETAIL_PATH_PARTS = {
+    "job", "jobs", "vacancy", "vacancies", "position", "positions",
+    "offre", "offres", "emploi", "emplois", "opening", "openings",
+}
+_GENERIC_PATH_PARTS = {
+    "job", "jobs", "vacancy", "vacancies", "position", "positions",
+    "offre", "offres", "emploi", "emplois", "opening", "openings",
+    "careers", "career", "search", "results", "all", "category",
+}
+_DIRECT_ATS_DOMAINS = {
+    "greenhouse": ("boards.greenhouse.io", "job-boards.greenhouse.io"),
+    "lever": ("jobs.lever.co",),
+    "workday": ("myworkdayjobs.com",),
+    "icims": ("icims.com",),
+    "smartrecruiters": ("smartrecruiters.com",),
+}
+_GENERIC_LISTING_TITLES = {
+    "career", "careers", "job", "jobs", "job opening", "job opportunity",
+    "open position", "open positions", "career opportunities",
+    "current openings", "all jobs",
+}
+
+
+def classify_entity(opportunity) -> tuple[str, str, str]:
+    """Conservatively classify a result separately from its employment type.
+
+    Only an identified record from a structured official ATS feed is treated
+    as a verified individual vacancy. Search-result pages and snippets remain
+    unverified even when their URLs appear job-shaped.
+    """
+    title = str(getattr(opportunity, "title", "") or "")
+    url = str(getattr(opportunity, "url", "") or "")
+    path_parts = [
+        part.casefold() for part in urlsplit(url).path.split("/") if part
+    ]
+    text = f"{title}\n{' '.join(path_parts)}".casefold()
+
+    for entity_type, pattern, reason in _NON_VACANCY_PATTERNS:
+        if re.search(pattern, text, re.I):
+            return entity_type, "REJECTED_NON_VACANCY", reason
+
+    host = (urlsplit(url).hostname or "").casefold()
+    if any(name in host for name in ("reddit.", "quora.", "forum.")):
+        return "FORUM_DISCUSSION", "REJECTED_NON_VACANCY", "forum_domain"
+
+    if (
+        re.search(
+            r"\b(?:jobs?|careers?|open positions|current openings)\s+(?:in|at|with)\b",
+            title,
+            re.I,
+        )
+        and not _has_detail_path(path_parts)
+    ):
+        return "JOB_BOARD_CATEGORY", "RESEARCH_REQUIRED", "job_category_page"
+
+    if path_parts and path_parts[-1] in {"careers", "career", "jobs", "openings"}:
+        if getattr(opportunity, "effective_source_type", lambda: "")() in {
+            "company_career", "employer",
+        }:
+            return "EMPLOYER_CAREERS_PAGE", "RESEARCH_REQUIRED", "employer_careers_page"
+        return "JOB_BOARD_CATEGORY", "RESEARCH_REQUIRED", "job_category_page"
+
+    raw = getattr(opportunity, "raw", None)
+    raw = raw if isinstance(raw, dict) else {}
+    ats_name = str(raw.get("ats") or "").casefold()
+    external_id = str(getattr(opportunity, "external_id", "") or "")
+    company = str(getattr(opportunity, "company", "") or "").strip()
+    source = str(getattr(opportunity, "source", "") or "")
+    configured_slug = source.split(":", 1)[-1].casefold()
+    company_is_source_slug = company.casefold().replace(" ", "-") == configured_slug
+    official_ats_host = any(
+        host == domain or host.endswith(f".{domain}")
+        for domain in _DIRECT_ATS_DOMAINS.get(ats_name, ())
+    )
+    direct_ats_record = (
+        getattr(opportunity, "effective_source_type", lambda: "")() == "ats"
+        and official_ats_host
+        and getattr(opportunity, "verification_status", "verified") == "verified"
+        and bool(external_id)
+        and not external_id.casefold().startswith(("http://", "https://"))
+        and bool(company)
+        and not company_is_source_slug
+        and bool(str(getattr(opportunity, "location", "") or "").strip())
+        and bool(title.strip())
+        and title.casefold().strip() not in _GENERIC_LISTING_TITLES
+        and bool(url)
+    )
+    if direct_ats_record:
+        return "INDIVIDUAL_VACANCY", "VACANCY_VERIFIED", "structured_official_ats_record"
+
+    if _has_detail_path(path_parts) or re.search(
+        r"(?:req(?:uisition)?[-_ ]?\d{3,}|job[-_ ]?\d{3,})",
+        "/".join(path_parts),
+        re.I,
+    ):
+        return "INDIVIDUAL_VACANCY", "VACANCY_UNVERIFIED", "specific_listing_url_unverified"
+
+    return "UNKNOWN", "RESEARCH_REQUIRED", "insufficient_vacancy_evidence"
+
+
+def _has_detail_path(path_parts: list[str]) -> bool:
+    for index, part in enumerate(path_parts[:-1]):
+        if part in _DETAIL_PATH_PARTS and path_parts[index + 1] not in _GENERIC_PATH_PARTS:
+            return True
+    return False
+
+
+def is_verified_individual_vacancy(job) -> bool:
+    """Require the full provenance tuple before permitting application actions."""
+    url = str(getattr(job, "entity_evidence_url", "") or "")
+    parsed = urlsplit(url)
+    host = (parsed.hostname or "").casefold()
+    official_ats_host = any(
+        host == domain or host.endswith(f".{domain}")
+        for domains in _DIRECT_ATS_DOMAINS.values()
+        for domain in domains
+    )
+    return (
+        getattr(job, "entity_type", "") == "INDIVIDUAL_VACANCY"
+        and getattr(job, "entity_state", "") == "VACANCY_VERIFIED"
+        and getattr(job, "entity_reason_code", "") == "structured_official_ats_record"
+        and getattr(job, "source_type", "") == "ats"
+        and parsed.scheme in {"http", "https"}
+        and official_ats_host
+    )
 
 
 def classify_opportunity(title: str = "", description: str = "", source_type: str = "") -> str:

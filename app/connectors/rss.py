@@ -11,7 +11,6 @@ from __future__ import annotations
 
 import logging
 import re
-from datetime import datetime, timezone
 from typing import Any
 
 import feedparser
@@ -59,7 +58,7 @@ class RSSJobSource:
         title = _clean_html(getattr(entry, "title", "") or query)
         link = getattr(entry, "link", "") or ""
         summary = _clean_html(getattr(entry, "summary", "") or getattr(entry, "description", "") or "")
-        published = getattr(entry, "published", "") or getattr(entry, "updated", "")
+        published = getattr(entry, "published", "")
 
         # Many job RSS feeds pack "Title — Company — Location" into the title
         company = ""
@@ -80,7 +79,7 @@ class RSSJobSource:
         except Exception:
             etype = ""
 
-        posted = parse_date(published) or datetime.now(timezone.utc)
+        posted = parse_date(published)
         return Opportunity(
             source=f"rss:{self.name}",
             external_id=self._external_id(entry, link),
@@ -91,6 +90,8 @@ class RSSJobSource:
             description=summary[:20000],
             url=link,
             posted_at=posted,
+            posted_at_source="rss:published" if published else "",
+            posted_at_evidence_url=link if published else "",
             employment_type=etype or "full_time",
             salary=None,
             contact_email=None,

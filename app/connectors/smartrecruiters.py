@@ -54,6 +54,7 @@ class SmartRecruitersSource:
         country = infer_country(loc) or (posting.get("location") or {}).get("country", "")
         comp = (posting.get("company") or {}).get("name", "") or cid
         pid = posting.get("id", "")
+        posted_raw = posting.get("releasedDate")
         return Opportunity(
             source=f"smartrecruiters:{cid}",
             source_type="ats",
@@ -64,7 +65,9 @@ class SmartRecruitersSource:
             country=country,
             description="",
             url=DETAIL_TMPL.format(cid=cid, pid=pid),
-            posted_at=parse_date(posting.get("releasedDate")),
+            posted_at=parse_date(posted_raw),
+            posted_at_source="smartrecruiters:releasedDate" if posted_raw else "",
+            posted_at_evidence_url=DETAIL_TMPL.format(cid=cid, pid=pid) if posted_raw else "",
             employment_type=(posting.get("typeOfEmployment") or "").lower() or "full_time",
             raw={"company_id": cid, "ats": "smartrecruiters", "ref": posting.get("ref", "")},
         )

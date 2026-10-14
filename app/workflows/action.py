@@ -13,6 +13,7 @@ from app import memory as mem
 from app.agents.communication_agent import CommunicationAgent
 from app.agents.llm import LLMProvider
 from app.config import AgentConfig, CandidateProfile, RunnerSettings
+from app.discovery.opportunity_details import is_verified_individual_vacancy
 from app.email.service import ApplicationEngine
 
 logger = logging.getLogger(__name__)
@@ -36,7 +37,7 @@ def pending_actions(session: Session) -> list:
     decided = select(models.Decision.job_id).where(
         models.Decision.decision.in_(["APPLY", "ASK_EMPLOYER", "INVESTIGATE"]))
     acted = select(models.Job.id).where(models.Job.status.in_(["acted", "closed"]))
-    return list(session.execute(
+    candidates = list(session.execute(
         select(models.Job).where(
             models.Job.status == "analyzed",
             models.Job.opportunity_type != "SPONTANEOUS_APPLICATION",
@@ -44,6 +45,7 @@ def pending_actions(session: Session) -> list:
             models.Job.id.not_in(acted),
         )
     ).scalars().all())
+    return [job for job in candidates if is_verified_individual_vacancy(job)]
 
 
 def lang_for_country(country: str) -> str:

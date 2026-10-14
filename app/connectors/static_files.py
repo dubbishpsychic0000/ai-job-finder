@@ -38,6 +38,7 @@ class StaticFilesSource:
             words = [w for w in query.lower().split() if len(w) > 3]
             if words and not any(w in text for w in words):
                 continue
+            posted_raw = it.get("posted_at")
             out.append(Opportunity(
                 source="static_files",
                 external_id=str(it.get("external_id", it.get("url", ""))),
@@ -47,7 +48,9 @@ class StaticFilesSource:
                 country=it.get("country") or infer_country(it.get("location", "")),
                 description=it.get("description", ""),
                 url=it.get("url", ""),
-                posted_at=parse_date(it.get("posted_at")),
+                posted_at=parse_date(posted_raw),
+                posted_at_source="static_file:posted_at" if posted_raw else "",
+                posted_at_evidence_url=it.get("url", "") if posted_raw else "",
                 employment_type=it.get("employment_type", "full_time"),
                 salary=it.get("salary"),
                 contact_email=it.get("contact_email"),

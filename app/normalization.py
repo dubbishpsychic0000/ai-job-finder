@@ -32,11 +32,10 @@ def normalize(opp: Opportunity, *, now: datetime | None = None) -> Opportunity |
         return None
     if not is_valid_url(opp.url):
         return None
-    if opp.posted_at is None or opp.posted_at.timestamp() > now.timestamp() + 86400:
-        from app.connectors.base import parse_date
-
-        raw = opp.raw.get("posted") if isinstance(opp.raw, dict) else None
-        opp.posted_at = parse_date(str(raw)) if raw else now
+    if opp.posted_at is not None and opp.posted_at.timestamp() > now.timestamp() + 86400:
+        opp.posted_at = None
+        opp.posted_at_source = ""
+        opp.posted_at_evidence_url = ""
     if not opp.country and opp.location:
         opp.country = infer_country(opp.location)
     opp.description = (opp.description or "")[:_MAX_DESCRIPTION]

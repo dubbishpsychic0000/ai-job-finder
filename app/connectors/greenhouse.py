@@ -12,7 +12,7 @@ from pathlib import Path
 
 import requests
 
-from app.connectors.base import Opportunity, infer_country, parse_date
+from app.connectors.base import Opportunity, infer_country
 
 logger = logging.getLogger(__name__)
 USER_AGENT = "WorldwideCareerAgent/0.1 (public boards.greenhouse.io API)"
@@ -67,7 +67,7 @@ class GreenhouseSource:
             country=infer_country(loc),
             description=_clean_html(job.get("content", ""))[:20000],
             url=job.get("absolute_url", ""),
-            posted_at=parse_date(job.get("updated_at")),
+            posted_at=None,
             employment_type="full_time",
             raw={"board": token, "ats": "greenhouse"},
         )

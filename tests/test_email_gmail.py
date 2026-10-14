@@ -39,6 +39,11 @@ def _job(db, title="Technicien VRD", email="jobs@colas.example", posted_days_ago
         description="road construction VRD", url="https://example.com/j",
         posted_at=datetime.now(timezone.utc) - timedelta(days=posted_days_ago),
         contact_email=email, status="analyzed",
+        source_type="ats",
+        entity_type="INDIVIDUAL_VACANCY",
+        entity_state="VACANCY_VERIFIED",
+        entity_reason_code="structured_official_ats_record",
+        entity_evidence_url="https://boards.greenhouse.io/example/jobs/1",
     )
     db.add(job)
     db.flush()
@@ -73,6 +78,30 @@ def _draft_communicator(body):
         async def generate(self, job, action, target_language="en", recipient_name=""):
             return {"subject": "Application", "body": body}
     return _Fake()
+
+
+def test_application_engine_blocks_unverified_non_spontaneous_vacancy(db, config, profile, settings):
+    job = models.Job(
+        source="search_engine",
+        external_id="research-page",
+        dedup_key="research-page",
+        title="Civil Engineering Technician",
+        url="https://example.test/jobs/technician",
+        status="analyzed",
+    )
+    db.add(job)
+    db.flush()
+    decision = _decision(db, job)
+    result = asyncio.run(ApplicationEngine(
+        db, config, settings, profile, _draft_communicator("test"),
+    ).run(job, decision, "APPLY", "jobs@example.test", "en"))
+
+    assert result == {
+        "sent": False,
+        "status": "blocked",
+        "reason": "vacancy_not_verified",
+    }
+    assert db.query(models.Application).all() == []
 
 
 # ---------------------------------------------------------------------------
@@ -811,6 +840,11 @@ def test_distinct_companies_can_each_receive_a_draft(
         posted_at=datetime.now(timezone.utc) - timedelta(days=2),
         contact_email="jobs@other.example",
         status="analyzed",
+        source_type="ats",
+        entity_type="INDIVIDUAL_VACANCY",
+        entity_state="VACANCY_VERIFIED",
+        entity_reason_code="structured_official_ats_record",
+        entity_evidence_url="https://boards.greenhouse.io/example/jobs/2",
     )
     db.add(second_job)
     db.flush()

@@ -299,8 +299,19 @@ def test_discovery_report_is_sanitized_and_distinguishes_cached_new_listing():
         search_country="France",
         location="Lyon",
         posted_at=None,
+        posted_at_source="workday:postedOn",
+        posted_at_evidence_url=(
+            "https://jobs.example.org/listing/42?access_token=secret-value"
+        ),
         closing_at=None,
+        discovered_at=datetime(2026, 10, 13, tzinfo=timezone.utc),
         opportunity_type="INTERNSHIP",
+        entity_type="INDIVIDUAL_VACANCY",
+        entity_state="VACANCY_UNVERIFIED",
+        entity_reason_code="specific_listing_url_unverified",
+        entity_evidence_url=(
+            "https://jobs.example.org/listing/42?access_token=secret-value"
+        ),
         source="tavily_web_search",
         source_confidence=65,
         search_language="fr",
@@ -359,10 +370,20 @@ def test_discovery_report_is_sanitized_and_distinguishes_cached_new_listing():
     serialized = json.dumps(output, ensure_ascii=False)
     opportunity = output["opportunities"][0]
 
-    assert output["counts"]["unique_new_opportunities"] == 1
+    assert output["counts"]["unique_new_opportunities"] == 0
+    assert output["counts"]["unique_new_candidate_vacancies"] == 1
+    assert output["counts"]["unique_new_discovery_records"] == 1
     assert output["counts"]["new_from_cache"] == 1
     assert opportunity["result_origin"] == "CACHE"
     assert opportunity["date_status"] == "UNVERIFIABLE_DATE"
+    assert opportunity["posting_date_evidence"]["status"] == "UNVERIFIABLE"
+    assert opportunity["entity_state"] == "VACANCY_UNVERIFIED"
+    assert opportunity["application_route"]["verified"] is False
+    assert opportunity["posting_date_evidence"]["status"] == "UNVERIFIABLE"
+    assert opportunity["posting_date_evidence"]["evidence_url"] == (
+        "https://jobs.example.org/listing/42"
+    )
+    assert opportunity["entity_evidence_url"] == "https://jobs.example.org/listing/42"
     assert opportunity["eligibility"] == "NOT_EVALUATED"
     assert opportunity["listing_url"] == "https://jobs.example.org/listing/42"
     assert "AutoCAD" in serialized
@@ -372,6 +393,26 @@ def test_discovery_report_is_sanitized_and_distinguishes_cached_new_listing():
     assert "secret-value" not in serialized
     assert "candidate profile" not in opportunity["discovery_relevance"]
     assert "candidate fit was not evaluated" in opportunity["discovery_relevance"]
+
+
+def test_discovery_freshness_requires_source_date_evidence():
+    from types import SimpleNamespace
+
+    now = datetime(2026, 10, 13, tzinfo=timezone.utc)
+    job = SimpleNamespace(
+        posted_at=datetime(2026, 10, 12, tzinfo=timezone.utc),
+        posted_at_source="",
+        posted_at_evidence_url="",
+        closing_at=None,
+    )
+    assert discovery_only._freshness(job, 45, now) == "UNVERIFIABLE_DATE"
+
+    job.posted_at_source = "workday:postedOn"
+    job.posted_at_evidence_url = "https://employer.example/jobs/123"
+    assert discovery_only._freshness(job, 45, now) == "DATED_WITHIN_WINDOW"
+
+    job.closing_at = datetime(2026, 10, 12, tzinfo=timezone.utc)
+    assert discovery_only._freshness(job, 45, now) == "EXPIRED_BY_CLOSING_DATE"
 
 
 def test_sanitized_report_can_serialize_new_jobs_after_session_closes(db):
@@ -408,7 +449,9 @@ def test_sanitized_report_can_serialize_new_jobs_after_session_closes(db):
         {"limit_per_key": 17, "remaining_by_key": [17]},
     )
 
-    assert output["counts"]["unique_new_opportunities"] == 1
+    assert output["counts"]["unique_new_opportunities"] == 0
+    assert output["counts"]["unique_new_candidate_vacancies"] == 0
+    assert output["counts"]["unique_new_discovery_records"] == 1
     assert output["opportunities"][0]["employer"] == "Example Employer"
 
 

@@ -54,8 +54,12 @@ def test_golden_decisions(db, config, prefs, profile):
                 return d["decision"]
         raise AssertionError(f"job not found: {title} / {company}")
 
-    assert dec("Technicien Génie Civil", "Bouygues Construction") == "APPLY", "sponsored FR role should APPLY"
-    assert dec("Civil Engineering Technician", "EllisDon") == "APPLY", "LMIA-sponsored CA role should APPLY"
+    assert dec("Technicien Génie Civil", "Bouygues Construction") == "HOLD", (
+        "a specific but unverified listing must not be recommended for application"
+    )
+    assert dec("Civil Engineering Technician", "EllisDon") == "HOLD", (
+        "a specific but unverified listing must not be recommended for application"
+    )
     assert dec("Técnico de Obras Civiles") == "IGNORE", "es-only role should IGNORE"
     assert dec("Técnico de Engenharia Civil") == "IGNORE", "pt-only role should IGNORE"
     assert dec("Technicien VRD", "Colas") == "HOLD", (
@@ -73,11 +77,12 @@ def test_dedup_idempotent(db, config, prefs):
     assert len(first) == len(second), "re-running discovery must not duplicate jobs"
 
 
-def test_applications_recorded_but_blocked_without_email(db, config, prefs, profile, settings):
+def test_unverified_listings_never_enter_the_application_action_path(
+    db, config, prefs, profile, settings,
+):
     _discover(db, config, prefs)
     _refresh_demo_posting_dates(db)
     _analyze(db, config, prefs, profile)
     _act(db, config, prefs, profile, settings)
     apps = db.execute(select(models.Application)).scalars().all()
-    assert apps, "decided APPLY/ASK must create application records"
-    assert all(a.status == "blocked" for a in apps), "no email -> no send, only blocked records"
+    assert apps == []

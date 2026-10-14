@@ -9,7 +9,7 @@ from urllib.parse import urlsplit, urlunsplit
 from app.config import AgentConfig, CandidateProfile, Preferences, load_yaml
 from app.workflows.discovery import DEFAULT_SOURCES_PATH, DiscoveryReport, run_discovery
 
-REPORT_SCHEMA_VERSION = 1
+REPORT_SCHEMA_VERSION = 2
 MAX_SEARCH_COMBINATIONS = 12
 MAX_TAVILY_ATTEMPTS = 8
 
@@ -158,6 +158,13 @@ def blocked_report(
             "normalized_results": 0,
             "duplicates": 0,
             "unique_new_opportunities": 0,
+            "unique_new_candidate_vacancies": 0,
+            "unique_new_discovery_records": 0,
+            "individual_vacancies_verified": 0,
+            "individual_vacancies_unverified": 0,
+            "research_required": 0,
+            "rejected_non_vacancy": 0,
+            "requiring_eligibility_assessment": 0,
             "new_from_live_api": 0,
             "new_from_cache": 0,
         },
@@ -167,6 +174,8 @@ def blocked_report(
             "new_by_search_language": {},
             "new_by_source": {},
             "new_by_opportunity_type": {},
+            "new_by_entity_type": {},
+            "new_by_entity_state": {},
             "date_status_new": {},
             "searched_country_queries": {},
             "searched_language_queries": {},
@@ -245,7 +254,11 @@ def _freshness(job, max_age_days: int, now: datetime) -> str:
         if closing <= now:
             return "EXPIRED_BY_CLOSING_DATE"
     posted = getattr(job, "posted_at", None)
-    if posted is None:
+    if (
+        posted is None
+        or not getattr(job, "posted_at_source", "")
+        or not getattr(job, "posted_at_evidence_url", "")
+    ):
         return "UNVERIFIABLE_DATE"
     if posted.tzinfo is None:
         posted = posted.replace(tzinfo=timezone.utc)
@@ -439,6 +452,8 @@ def build_sanitized_report(
     language_counts: Counter[str] = Counter()
     source_counts: Counter[str] = Counter()
     freshness_counts: Counter[str] = Counter()
+    entity_type_counts: Counter[str] = Counter()
+    entity_state_counts: Counter[str] = Counter()
     opportunities = []
     for job in jobs:
         origin = report.new_opportunity_origins.get(job.id, "unknown")
@@ -456,6 +471,10 @@ def build_sanitized_report(
         language_counts[language] += 1
         source_counts[source] += 1
         freshness_counts[freshness] += 1
+        entity_type = _clean_text(getattr(job, "entity_type", "UNKNOWN"), 40).upper()
+        entity_state = _clean_text(getattr(job, "entity_state", "RESEARCH_REQUIRED"), 40).upper()
+        entity_type_counts[entity_type] += 1
+        entity_state_counts[entity_state] += 1
         method = _clean_text(job.application_method or "UNKNOWN", 40).upper()
         listing_url = _public_url(job.url)
         route_url = _public_url(job.application_url)
@@ -464,14 +483,43 @@ def build_sanitized_report(
             "employer": _clean_text(job.company.name if job.company else "", 120) or None,
             "listing_url": listing_url,
             "country": country,
-            "country_basis": "connector_inferred_from_search_location",
+            "country_basis": "connector_or_search_location_not_independently_verified",
             "location": _clean_text(job.location, 120),
             "posted_at": (
                 job.posted_at.isoformat()
                 if getattr(job, "posted_at", None) else None
             ),
+            "posting_date_evidence": {
+                "status": (
+                    "SOURCE_REPORTED"
+                    if getattr(job, "posted_at_source", "")
+                    and getattr(job, "posted_at_evidence_url", "")
+                    and getattr(job, "posted_at", None) is not None
+                    else "UNVERIFIABLE"
+                ),
+                "source_field": re.sub(
+                    r"[^A-Za-z0-9_.:-]",
+                    "",
+                    str(getattr(job, "posted_at_source", "") or ""),
+                )[:128],
+                "evidence_url": _public_url(
+                    getattr(job, "posted_at_evidence_url", ""),
+                ),
+            },
+            "discovered_at": (
+                job.discovered_at.isoformat()
+                if getattr(job, "discovered_at", None) else None
+            ),
             "date_status": freshness,
             "opportunity_type": category,
+            "entity_type": entity_type,
+            "entity_state": entity_state,
+            "entity_reason_code": _clean_text(
+                getattr(job, "entity_reason_code", "legacy_record_unverified"), 64,
+            ),
+            "entity_evidence_url": _public_url(
+                getattr(job, "entity_evidence_url", ""),
+            ),
             "source": source,
             "source_confidence": job.source_confidence,
             "result_origin": "LIVE_API_RESPONSE" if origin == "api" else (
@@ -482,6 +530,7 @@ def build_sanitized_report(
             "application_route": {
                 "status": "DETECTED_UNVERIFIED" if method != "UNKNOWN" else "NOT_DETECTED",
                 "type": method,
+                "verified": False,
                 "url": route_url or (listing_url if method != "UNKNOWN" else ""),
                 "evidence_url": listing_url if method != "UNKNOWN" else "",
             },
@@ -557,7 +606,14 @@ def build_sanitized_report(
             "external_results_fetched": external_results,
             "normalized_results": int(report.opportunities_fetched),
             "duplicates": int(report.duplicates),
-            "unique_new_opportunities": int(report.new_jobs),
+            "unique_new_opportunities": entity_state_counts["VACANCY_VERIFIED"],
+            "unique_new_candidate_vacancies": entity_type_counts["INDIVIDUAL_VACANCY"],
+            "unique_new_discovery_records": int(report.new_jobs),
+            "individual_vacancies_verified": entity_state_counts["VACANCY_VERIFIED"],
+            "individual_vacancies_unverified": entity_state_counts["VACANCY_UNVERIFIED"],
+            "research_required": entity_state_counts["RESEARCH_REQUIRED"],
+            "rejected_non_vacancy": entity_state_counts["REJECTED_NON_VACANCY"],
+            "requiring_eligibility_assessment": entity_state_counts["VACANCY_VERIFIED"],
             "new_from_live_api": sum(1 for value in report.new_opportunity_origins.values() if value == "api"),
             "new_from_cache": sum(1 for value in report.new_opportunity_origins.values() if value == "cache"),
             "stale_or_expired_new": sum(
@@ -583,6 +639,8 @@ def build_sanitized_report(
             "new_by_search_language": dict(language_counts),
             "new_by_source": dict(source_counts),
             "new_by_opportunity_type": dict(type_counts),
+            "new_by_entity_type": dict(entity_type_counts),
+            "new_by_entity_state": dict(entity_state_counts),
             "date_status_new": dict(freshness_counts),
             "searched_country_queries": dict(queried_country_counts),
             "searched_language_queries": dict(queried_language_counts),

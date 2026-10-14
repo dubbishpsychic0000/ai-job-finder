@@ -27,7 +27,11 @@ from app.connectors.tavily_resilience import (
 )
 from app.deduplication import find_duplicates
 from app.discovery.email_verification import EmailVerificationService
-from app.discovery.opportunity_details import classify_opportunity, detect_application_method
+from app.discovery.opportunity_details import (
+    classify_entity,
+    classify_opportunity,
+    detect_application_method,
+)
 from app.discovery.verification import freshness_label
 from app.discovery.vocabulary import CandidateVocabulary
 from app.discovery.website_researcher import host_domain, normalize_url
@@ -875,6 +879,7 @@ async def run_discovery(session: Session, config: AgentConfig, prefs: Preference
                 company, company_urls = _upsert_opportunity_company(
                     session, opp, src_type
                 )
+                entity_type, entity_state, entity_reason = classify_entity(opp)
                 raw_channel = (opp.raw or {}).get("channel", "")
                 kind = "RECRUITMENT_POST" if src_type == "recruitment_post" else "JOB"
                 if src_type in {"company_career", "ats"}:
@@ -906,6 +911,8 @@ async def run_discovery(session: Session, config: AgentConfig, prefs: Preference
                     "description": opp.description,
                     "url": opp.url,
                     "posted_at": opp.posted_at,
+                    "posted_at_source": opp.posted_at_source,
+                    "posted_at_evidence_url": opp.posted_at_evidence_url,
                     "employment_type": opp.employment_type or "full_time",
                     "salary": opp.salary or "",
                     "contact_email": opp.contact_email or "",
@@ -928,10 +935,19 @@ async def run_discovery(session: Session, config: AgentConfig, prefs: Preference
                     "opportunity_type": classify_opportunity(opp.title, opp.description, src_type),
                     "application_method": "UNKNOWN",
                     "application_url": "",
+                    "entity_type": entity_type,
+                    "entity_state": entity_state,
+                    "entity_reason_code": entity_reason,
+                    "entity_evidence_url": opp.url,
                 }
                 job, created = mem.store.upsert_job(session, job_data)
                 if created:
-                    if researcher is not None and src_type == "company_career" and opp.url:
+                    if (
+                        researcher is not None
+                        and src_type == "company_career"
+                        and entity_state == "VACANCY_VERIFIED"
+                        and opp.url
+                    ):
                         researcher.research_and_apply(
                             opp.url, company_id=company.id, job_id=job.id,
                             official_domain=company.official_domain,

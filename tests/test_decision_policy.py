@@ -34,6 +34,11 @@ def _job(db, status="new", country="France"):
         country=country, description="road works",
         posted_at=datetime.now(timezone.utc) - timedelta(days=2),
         contact_email="jobs@colas.example", status=status,
+        source_type="ats",
+        entity_type="INDIVIDUAL_VACANCY",
+        entity_state="VACANCY_VERIFIED",
+        entity_reason_code="structured_official_ats_record",
+        entity_evidence_url="https://boards.greenhouse.io/example/jobs/1",
     )
     db.add(job)
     db.flush()
@@ -79,6 +84,14 @@ def test_apply_allowed_at_or_above_policy(db, config):
     job = _job(db, status="analyzed")
     result = _decide(db, job, config, _FakeLLM(), overall=88)
     assert result.decision == "APPLY"
+
+
+def test_unverified_entity_cannot_be_recommended_for_application(db, config):
+    job = _job(db, status="analyzed")
+    job.entity_state = "VACANCY_UNVERIFIED"
+    result = _decide(db, job, config, _FakeLLM(), overall=95)
+    assert result.decision == "HOLD"
+    assert "vacancy_not_verified" in result.rules_fired
 
 
 def test_hard_low_score_rule_ignores_before_model(db, config):

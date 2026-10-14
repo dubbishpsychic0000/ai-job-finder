@@ -100,6 +100,16 @@ def infer_country(location: str) -> str:
     return ""
 
 
+def is_posting_date_field(field_name: str) -> bool:
+    """Accept fields whose names identify a publication/posting date, not an update."""
+    leaf = re.sub(r"[-_]", "", str(field_name or "").split(".")[-1]).casefold()
+    return leaf in {
+        "postedat", "postedon", "posteddate", "dateposted",
+        "releaseddate", "releasedate", "publicationdate", "published",
+        "publishedat", "publisheddate",
+    }
+
+
 @dataclass
 class Opportunity:
     source: str
@@ -111,6 +121,8 @@ class Opportunity:
     description: str = ""
     url: str = ""
     posted_at: datetime | None = None
+    posted_at_source: str = ""
+    posted_at_evidence_url: str = ""
     employment_type: str = "full_time"
     salary: str | None = None
     contact_email: str | None = None

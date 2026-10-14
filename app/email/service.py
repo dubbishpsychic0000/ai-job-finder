@@ -26,6 +26,7 @@ from sqlalchemy.orm import Session
 from app import memory as mem
 from app.agents.communication_agent import CommunicationAgent
 from app.config import AgentConfig, CandidateProfile, RunnerSettings
+from app.discovery.opportunity_details import is_verified_individual_vacancy
 from app.email import provider
 from app.email.safety_gate import validate
 from app.models import Application, Email, LiveSendAttempt, utcnow
@@ -88,6 +89,12 @@ class ApplicationEngine:
         is_spontaneous = (
             getattr(job, "opportunity_type", "") == "SPONTANEOUS_APPLICATION"
         )
+        if not is_spontaneous and not is_verified_individual_vacancy(job):
+            return {
+                "sent": False,
+                "status": "blocked",
+                "reason": "vacancy_not_verified",
+            }
         if is_spontaneous and mode == "live" and not getattr(
             self.settings, "authorize_live_spontaneous", False
         ):
