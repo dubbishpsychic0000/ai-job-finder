@@ -1316,3 +1316,9 @@ The preflight dispatched **0** Tavily requests and created **0** reservations.
 Applications, drafts, emails, WhatsApp messages, BTP actions, and production
 candidate writes were all **0**. Only the sanitized report artifact was
 uploaded.
+
+The first CI run for the status-record commit exposed a rollover test that
+hard-coded October 14/15, which became invalid after UTC midnight. The test now
+uses dates relative to the current UTC day; the focused Tavily budget-vault
+suite passed (**12 passed**), and Ruff, compilation, and `git diff --check`
+passed. A follow-up CI run is required for this test-only correction.

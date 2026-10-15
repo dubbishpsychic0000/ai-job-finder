@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import subprocess
 from concurrent.futures import ThreadPoolExecutor
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from threading import Barrier
 
@@ -365,13 +365,14 @@ def test_discovery_rollover_resets_stale_ledger_only_at_reservation_boundary(
     store = GitVaultBudgetStore(clone)
     local_path = tmp_path / "runtime" / Path(relative_path).name
     local_path.parent.mkdir()
-    next_day = "2026-10-15"
-    store.synchronize(local_path, today="2026-10-14")
+    today = datetime.now(timezone.utc).date().isoformat()
+    next_day = (datetime.now(timezone.utc).date() + timedelta(days=1)).isoformat()
+    store.synchronize(local_path, today=today)
     before = _remote_ledger(bare, relative_path)
 
     reservation = store.reserve_general(local_path, next_day, 20)
 
-    assert before["date"] == "2026-10-14"
+    assert before["date"] == today
     assert before["count"] == 20
     assert reservation["reserved"] is True
     assert reservation["date"] == next_day
