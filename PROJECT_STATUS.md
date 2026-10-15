@@ -1402,3 +1402,152 @@ requests and **0** reservations and performed **0** application, outbound,
 BTP, or production-write actions. No discovery was chained. This is not a
 current-day ledger balance: the 119 attempts remain conditional on each
 durable reservation succeeding in the discovery run.
+
+## Phase 2.8g bounded discovery-only evaluation
+
+Exactly one `discovery_only` workflow ran on current `main` at
+[`2735af1bf283067f503be2b9c94e541eab5ca1d5`](https://github.com/dubbishpsychic0000/ai-job-finder/commit/2735af1bf283067f503be2b9c94e541eab5ca1d5):
+[run 38664200891](https://github.com/dubbishpsychic0000/ai-job-finder/actions/runs/38664200891),
+on **2026-10-15 UTC**. The hardened discovery restore/readiness step
+succeeded, validating the configured vault origin, `main` ref, reservation
+checkout, all **4 required inputs**, and all **7 ledgers**. The restore
+manifest passed its readiness gate, and the seven-ledger count is confirmed in
+the sanitized run report. Prior-day ledgers rolled through successful durable
+reservations only; no ledger was manually reset.
+
+The run used **5/12** search-plan combinations and **8/8** permitted Tavily
+attempts: 8 successes, 0 failures, 0 retries, 8 durable reservations, and 8
+durable ledger writes. It deferred **38** additional provider requests at the
+run-attempt cap. Ten source queries were attempted overall: 8 Tavily requests
+and 2 Emploi-Public adapter queries (one direct Arabic query and one cached
+French query). Tavily coverage comprised Morocco 5, Belgium 2, and France 1
+attempt; languages were Arabic 3, French 3, Dutch 1, and English 1. The
+dedicated Emploi-Public adapter reported 6 direct portal HTTP requests,
+attributed to Arabic; its French query was cached. Other Tavily source
+attempts were web search (3), official ATS search (2), Rekrute (1), Anapec
+(1), and the Emploi-Public domain search (1). Other configured sources were
+deferred by the run cap or disabled in source configuration.
+
+The provider returned **76** search results; **40** were filtered (15
+unrecognized official ATS hosts, 4 social domains, 21 outside configured
+domain scope). The run fetched and normalized **39** results total, including
+3 returned by the Emploi-Public adapter. There were **16 duplicates** and
+**21 new discovery records**, all from Tavily: **16 research leads** and
+**5 rejected non-vacancies**. All 21 new records had unverifiable posting
+dates. No new individual vacancy was verified, and no new individual
+vacancy candidate was reported as unverified; eligibility remained
+`NOT_EVALUATED`, with owner review still required before any future
+application decision.
+
+Emploi-Public returned 3 normalized records: **2 procedural notices**
+(1 `EXAM_CONVOCATION`, 1 `RESULTS_PUBLICATION`), neither matched to an
+existing vacancy, plus one existing competition reverified as closed with
+reason `application_deadline_elapsed`. No open competition was verified;
+no cancellation was counted. The report records no unknown-status vacancy
+or unverified vacancy candidate. It does not emit an ambiguous-submission-route
+count. Its public-page counter combines `robots.txt`, listings, and detail
+requests rather than separating those categories, so exact listing-versus-
+detail attempts/fetches/parses cannot be recovered from this artifact.
+Language attribution is also inconsistent: all 6 direct portal requests are
+reported under Arabic, while the 2 parsed public-competition notices are
+attributed to French. No language-specific listing/detail split is claimed.
+
+After the run, the report showed **7 restored ledgers**, per-key general
+capacity `[9, 17, 17, 17, 17, 17, 17]` (key identities intentionally not
+included), **111 aggregate general attempts remaining**, and 0 run attempts
+remaining. Each ledger stayed within the 17-request general limit, preserving
+the 3-request-per-key BTP reserve. The remaining capacity is durable state
+after the eight reservations; any further request still requires its own
+successful reservation.
+
+The sanitized artifact `discovery-only-38664200891` was uploaded and
+retrieved. The bounded discovery step and artifact upload succeeded; restore
+only ran for this task, and the general pipeline, employer-history and BTP
+actions, normal vault restore, `.env` creation, WhatsApp steps, and vault
+state persistence were skipped. The report records zero Gmail access,
+applications, drafts, email, WhatsApp, and production database writes.
+Only the eight budget-ledger reservations were written to the private vault;
+no discovery run was retried.
+
+## Phase 2.8h discovery precision improvements (offline only)
+
+The Phase 2.8g sanitized artifact is now reconciled into this status entry.
+The **76 provider results**, **39 normalized records**, **16 duplicates**,
+**21 new discovery records**, and **0 verified open vacancies** are distinct
+measures. The 21 records were 16 research leads and 5 rejected salary /
+occupational references; they were not 21 vacancy candidates. The 38
+deferrals were `run_attempt_cap`, not provider failures: all 8 allowed Tavily
+attempts succeeded, and the 12-combination cap itself was not reached. The
+allocator distributed requests across broad search, official ATS, and
+Morocco-specific scopes; the fixed 8-request budget—not a broken connector—
+prevented the other source/plan pairs from running. The report also counted
+120 inapplicable country/source combinations, primarily because Morocco-only
+sources were evaluated against international plan entries.
+
+The official-ATS filter recorded 15 rejections, but the artifact intentionally
+contains only deduplicated sanitized host/path examples, not all 15 result
+URLs. Nine distinct rejected hosts are exposed: Bayt profile/job-board,
+Bayt, Indeed, StepStone, Engineering.jobs, EnglishJobs.be/.no, Joobaz, and
+the Sweco careers host; the remaining displayed example is blocked LinkedIn.
+These are job-board/profile/careers/social hosts, not evidence of an
+unrecognized ATS vendor endpoint. The artifact does not establish all
+individual rejected host occurrences, and no raw URL/log evidence is
+available in the sanitized artifact. No host was added to the ATS allowlist:
+loosening it would admit aggregators or employer career pages as ATS results
+without proving the application system or posting. Recognized ATS results
+remain subject to detail verification, current-status, employer, date, and
+route checks.
+
+The 16 research leads comprised 5 collection/career-category pages and 11
+`UNKNOWN` records. The artifact titles show clear occupational-reference,
+discussion, legal/case, technology-project, and civil-protection false
+positives alongside one explicitly labeled job-vacancy article. Deterministic
+classification now rejects the identifiable non-employment references and
+social/video pages, identifies free-job-post and job-description pages, and
+keeps an explicitly titled vacancy as an **unverified individual-vacancy
+candidate**. This does not establish that the article is current: posting
+date remains unknown and the candidate must still pass official detail,
+deadline, employer, and route verification. Salary/occupational references
+continue to be rejected. Collection pages remain research leads rather than
+vacancies.
+
+The 8-request allocator now uses up to five distinct market-specific source
+scopes while retaining coverage slots for broad search, official ATS, and an
+unserved plan combination. Existing Morocco-only applicability and plan
+language behavior are unchanged; tests assert Morocco French/Arabic plan
+coverage, distinct domestic sources, the same 8-attempt limit, and accurate
+run-cap deferrals. No daily limit, durable reservation, or three-request BTP
+reserve was changed.
+
+The Emploi-Public adapter now records robots checks separately from actual
+listing/detail HTTP attempts, successful HTML responses, parsed listing pages
+and cards, and parsed detail pages. Per-query-language counters are included
+in the sanitized source report, so request language is no longer inferred
+from the language of a parsed notice. Existing stage classification remains
+separate for open/closed announcements, convocation, results, cancellation,
+and unknown status. When a later procedural notice is observed, the existing
+competition JSON now retains notice history and explicit supersedes links;
+an older out-of-order notice is retained but cannot replace the newer state.
+These are persistence-path changes covered by isolated test-database
+fixtures; no production candidate or opportunity records were modified.
+
+**Next evaluation proposal (not run):** only after a separately authorized
+run and a fresh restore-only budget check, execute one `discovery_only`
+evaluation with the unchanged ceilings of **8 Tavily attempts** and **12
+search-plan combinations** (maximum budget request: 8 general reservations,
+never from the protected BTP reserve). The revised allocator will favor up
+to five distinct Morocco-specific scopes while retaining broad and ATS
+coverage. Emploi-Public remains bounded by its configured 2 listing pages
+and 12 detail pages, with robots checked first; each request remains
+robots-aware. Expected evidence is attributable listing/detail telemetry,
+official announcement stage, publication/deadline evidence, and submission
+route status—not a guaranteed result count or verified vacancy. Fresh
+preflight and successful durable reservation remain mandatory; this phase
+did not read or mutate the private vault and makes no claim about its current
+budget.
+
+Local validation for Phase 2.8h passed: **560 tests passed, 1 skipped**;
+Ruff, Python compilation, source/workflow YAML parsing, and `git diff --check`
+passed. No live provider request, vault checkout, budget reservation, or
+production write was performed during this implementation phase. CI is
+pending publication; its exact result will be recorded below.

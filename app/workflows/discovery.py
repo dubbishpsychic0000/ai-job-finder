@@ -520,17 +520,16 @@ def _allocate_source_queries(
         )
         available -= 1
 
-    # Give a small amount of the bounded allocation to distinct Morocco-only
-    # source scopes before repeating broad/ATS searches. These are separate
-    # provider requests and each still reserves against the same key ledgers
-    # and aggregate attempt cap.
+    # Diversify the remaining allocation across distinct market-specific
+    # scopes while reserving one slot for an unserved search combination.
+    # These requests still use the same durable key ledgers and run cap.
     market_sources = [
         index for index in budgeted_sources
         if source_group(connectors[index][0]) == "market_specific"
         and uncached_by_source[index]
         and not selected_indices[index]
     ]
-    extra_market_slots = min(2, max(0, available - 3))
+    extra_market_slots = min(4, max(0, available - 1))
     for _ in range(extra_market_slots):
         candidates = [
             index for index in market_sources
@@ -817,39 +816,90 @@ def _persist_public_competition_notice(
         "evidence_url": str(metadata.get("evidence_url") or opp.url),
         "reason_code": str(metadata.get("reason_code") or "official_procedural_notice"),
     }
+    notice["notice_id"] = (
+        f"{source_name}:{portal_id}:{stage}:{notice['observed_at']}"
+    )
     if existing is not None:
         updated = dict(existing.public_competition or {})
-        updated["latest_procedural_notice"] = notice
-        updated["stage"] = stage
-        updated["observed_at"] = notice["observed_at"]
-        updated["evidence_url"] = notice["evidence_url"]
-        if stage in {"CANCELLATION", "EXAM_CONVOCATION", "RESULTS_PUBLICATION"}:
-            updated["status"] = "CLOSED_ANNOUNCEMENT"
-            updated["verification_status"] = "closed"
-            existing.entity_type = "INDIVIDUAL_VACANCY"
-            existing.entity_state = "VACANCY_CLOSED"
-            existing.entity_reason_code = (
-                "official_cancellation_notice"
-                if stage == "CANCELLATION" else "official_application_stage_ended"
+        previous = updated.get("latest_procedural_notice")
+        previous = previous if isinstance(previous, dict) else None
+        history = updated.get("procedural_notice_history")
+        history = list(history) if isinstance(history, list) else []
+        if previous is not None and not any(
+            isinstance(item, dict)
+            and item.get("notice_id") == previous.get("notice_id")
+            for item in history
+        ):
+            legacy_previous = dict(previous)
+            legacy_previous.setdefault(
+                "notice_id",
+                f"{source_name}:{portal_id}:"
+                f"{legacy_previous.get('stage', '')}:"
+                f"{legacy_previous.get('observed_at', '')}",
             )
-            existing.verification_status = "closed"
-            existing.status = "closed"
-            existing.application_method = "UNKNOWN"
-            existing.application_url = ""
-        else:
-            updated["status"] = "UNKNOWN"
-            updated["verification_status"] = "unverified"
-            existing.entity_state = "VACANCY_STATUS_UNKNOWN"
-            existing.entity_reason_code = (
-                "official_procedural_notice_requires_reverification"
+            history.append(legacy_previous)
+
+        previous_id = (
+            str(previous.get("notice_id"))
+            if previous and previous.get("notice_id")
+            else (
+                f"{source_name}:{portal_id}:"
+                f"{previous.get('stage', '')}:"
+                f"{previous.get('observed_at', '')}"
+                if previous else ""
             )
-            existing.verification_status = "unverified"
-            existing.status = "verification_required"
-            existing.application_method = "UNKNOWN"
-            existing.application_url = ""
+        )
+        previous_observed = (
+            _competition_observed_at(previous)
+            if previous else None
+        )
+        is_latest = previous is None or (
+            observed_at is not None
+            and (previous_observed is None or observed_at >= previous_observed)
+        )
+        if previous_id and previous_id != notice["notice_id"]:
+            notice[
+                "supersedes_notice_id" if is_latest else "superseded_by_notice_id"
+            ] = previous_id
+        if not any(
+            isinstance(item, dict)
+            and item.get("notice_id") == notice["notice_id"]
+            for item in history
+        ):
+            history.append(notice)
+        updated["procedural_notice_history"] = history
+        if is_latest:
+            updated["latest_procedural_notice"] = notice
+            updated["stage"] = stage
+            updated["observed_at"] = notice["observed_at"]
+            updated["evidence_url"] = notice["evidence_url"]
+            if stage in {"CANCELLATION", "EXAM_CONVOCATION", "RESULTS_PUBLICATION"}:
+                updated["status"] = "CLOSED_ANNOUNCEMENT"
+                updated["verification_status"] = "closed"
+                existing.entity_type = "INDIVIDUAL_VACANCY"
+                existing.entity_state = "VACANCY_CLOSED"
+                existing.entity_reason_code = (
+                    "official_cancellation_notice"
+                    if stage == "CANCELLATION" else "official_application_stage_ended"
+                )
+                existing.verification_status = "closed"
+                existing.status = "closed"
+                existing.application_method = "UNKNOWN"
+                existing.application_url = ""
+            else:
+                updated["status"] = "UNKNOWN"
+                updated["verification_status"] = "unverified"
+                existing.entity_state = "VACANCY_STATUS_UNKNOWN"
+                existing.entity_reason_code = (
+                    "official_procedural_notice_requires_reverification"
+                )
+                existing.verification_status = "unverified"
+                existing.status = "verification_required"
+                existing.application_method = "UNKNOWN"
+                existing.application_url = ""
+            existing.last_verified_at = observed_at
+            existing.entity_evidence_url = notice["evidence_url"]
         existing.public_competition = updated
-        existing.last_verified_at = observed_at
-        existing.entity_evidence_url = notice["evidence_url"]
     mem.store.record_discovery(
         session,
         kind="PUBLIC_COMPETITION_NOTICE",
@@ -1125,6 +1175,7 @@ async def run_discovery(session: Session, config: AgentConfig, prefs: Preference
             "detail_verification_attempts": 0,
             "verification_reason_codes": {},
             "public_page_requests": 0,
+            "public_page_telemetry_by_request_language": {},
             "public_competition_status_counts": {},
             "public_competition_results_by_country": {},
             "public_competition_results_by_language": {},
@@ -1647,6 +1698,23 @@ async def run_discovery(session: Session, config: AgentConfig, prefs: Preference
             )
             country = str(combo.get("country") or combo.get("location") or "UNKNOWN")
             language = str(combo.get("lang") or "unknown")
+            portal_metrics = getattr(_connector, "last_request_metrics", None)
+            if isinstance(portal_metrics, dict):
+                by_language = source.setdefault(
+                    "public_page_telemetry_by_request_language", {},
+                )
+                language_metrics = by_language.setdefault(language, {})
+                for metric, count in portal_metrics.items():
+                    if (
+                        isinstance(metric, str)
+                        and metric.replace("_", "").isalnum()
+                        and isinstance(count, int)
+                        and not isinstance(count, bool)
+                        and count >= 0
+                    ):
+                        language_metrics[metric] = (
+                            language_metrics.get(metric, 0) + count
+                        )
             page_requests = int(getattr(_connector, "last_page_requests", 0))
             if page_requests:
                 requests_by_language = source.setdefault(

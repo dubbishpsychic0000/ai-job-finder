@@ -4,6 +4,7 @@ import asyncio
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from types import SimpleNamespace
+from typing import ClassVar
 
 from sqlalchemy import select
 
@@ -233,6 +234,17 @@ def test_adapter_is_bounded_and_never_requests_robots_disallowed_documents():
     assert all(not follow for _url, follow in calls)
     assert not any("/concours/download/" in url for url, _follow in calls)
     assert source.last_page_requests == 3
+    assert source.last_request_metrics == {
+        "robots_requests_attempted": 1,
+        "robots_responses_fetched": 1,
+        "listing_pages_attempted": 1,
+        "listing_pages_fetched": 1,
+        "listing_pages_parsed": 1,
+        "listing_cards_parsed": 1,
+        "detail_pages_attempted": 1,
+        "detail_pages_fetched": 1,
+        "detail_pages_parsed": 1,
+    }
     assert results[0].closing_at is not None
 
 
@@ -289,6 +301,17 @@ def test_robots_disallow_blocks_listing_before_page_fetch():
     assert results == []
     assert calls == ["https://www.emploi-public.ma/robots.txt"]
     assert source.last_page_requests == 1
+    assert source.last_request_metrics == {
+        "robots_requests_attempted": 1,
+        "robots_responses_fetched": 1,
+        "listing_pages_attempted": 0,
+        "listing_pages_fetched": 0,
+        "listing_pages_parsed": 0,
+        "listing_cards_parsed": 0,
+        "detail_pages_attempted": 0,
+        "detail_pages_fetched": 0,
+        "detail_pages_parsed": 0,
+    }
 
 
 def test_redirect_is_not_followed_and_unavailable_detail_remains_unknown():
@@ -341,7 +364,18 @@ def test_competition_evidence_persists_and_is_held_for_owner_review(
         name = "emploi_public_ma"
         kind = "html"
         source_type = "government"
-        last_page_requests = 2
+        last_page_requests = 3
+        last_request_metrics: ClassVar[dict[str, int]] = {
+            "robots_requests_attempted": 1,
+            "robots_responses_fetched": 1,
+            "listing_pages_attempted": 1,
+            "listing_pages_fetched": 1,
+            "listing_pages_parsed": 1,
+            "listing_cards_parsed": 1,
+            "detail_pages_attempted": 1,
+            "detail_pages_fetched": 1,
+            "detail_pages_parsed": 1,
+        }
 
         async def search(self, _query, _location):
             return [opportunity]
@@ -400,7 +434,7 @@ def test_competition_evidence_persists_and_is_held_for_owner_review(
     assert job.posted_at_source == "emploi_public:date_publication"
     assert job.closing_at is not None
     assert is_verified_individual_vacancy(job)
-    assert report.source_reports[0]["public_page_requests"] == 2
+    assert report.source_reports[0]["public_page_requests"] == 3
 
     summary = asyncio.run(analyze_job(
         db, job, None, None, None, None, profile, AgentConfig(), [],
@@ -412,6 +446,25 @@ def test_competition_evidence_persists_and_is_held_for_owner_review(
     )
     assert profile.student_status == "unknown"
     assert job.application_method == "UNKNOWN"
+    assert report.source_reports[0][
+        "public_page_telemetry_by_request_language"
+    ] == {
+        "fr": Connector.last_request_metrics,
+    }
+    from app.workflows.discovery_only import build_sanitized_report
+
+    sanitized = build_sanitized_report(
+        report,
+        [job],
+        AgentConfig(),
+        {},
+        sources_config={"connectors": []},
+    )
+    assert sanitized["sources"][0][
+        "public_page_telemetry_by_request_language"
+    ] == {
+        "fr": Connector.last_request_metrics,
+    }
     assert _safe_public_competition(job.public_competition)[
         "submission_owner_approval"
     ] == "REQUIRED_NOT_GRANTED"
@@ -472,10 +525,23 @@ def test_procedural_notice_updates_matching_competition_without_new_job(db):
     )
     db.add(job)
     db.flush()
+    first_notice = dict(metadata)
+    first_notice.update({
+        "stage": "EXAM_CONVOCATION",
+        "status": "EXAM_CONVOCATION",
+        "observed_at": NOW.isoformat(),
+        "verification_status": "unverified",
+        "reason_code": "official_procedural_notice",
+    })
+    assert discovery_workflow._persist_public_competition_notice(
+        db, _opportunity(first_notice), first_notice, "emploi_public_ma",
+    ) is True
+
     notice = dict(metadata)
     notice.update({
         "stage": "CANCELLATION",
         "status": "CANCELLATION",
+        "observed_at": (NOW + timedelta(days=1)).isoformat(),
         "verification_status": "unverified",
         "reason_code": "official_cancellation_notice",
     })
@@ -492,6 +558,33 @@ def test_procedural_notice_updates_matching_competition_without_new_job(db):
     assert job.public_competition["latest_procedural_notice"]["stage"] == (
         "CANCELLATION"
     )
+    history = job.public_competition["procedural_notice_history"]
+    assert [item["stage"] for item in history] == [
+        "EXAM_CONVOCATION", "CANCELLATION",
+    ]
+    assert history[1]["supersedes_notice_id"] == history[0]["notice_id"]
+
+    stale_notice = dict(metadata)
+    stale_notice.update({
+        "stage": "RESULTS_PUBLICATION",
+        "status": "RESULTS_PUBLICATION",
+        "observed_at": (NOW - timedelta(days=1)).isoformat(),
+        "verification_status": "unverified",
+        "reason_code": "official_procedural_notice",
+    })
+    assert discovery_workflow._persist_public_competition_notice(
+        db,
+        _opportunity(stale_notice),
+        stale_notice,
+        "emploi_public_ma",
+    ) is True
+    assert job.public_competition["latest_procedural_notice"]["stage"] == (
+        "CANCELLATION"
+    )
+    assert job.status == "closed"
+    assert job.public_competition["procedural_notice_history"][-1][
+        "superseded_by_notice_id"
+    ] == history[1]["notice_id"]
     assert db.execute(select(models.Job)).scalars().all() == [job]
 
 

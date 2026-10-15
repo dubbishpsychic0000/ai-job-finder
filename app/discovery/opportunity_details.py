@@ -58,9 +58,17 @@ _NON_VACANCY_PATTERNS = (
     (
         "OCCUPATIONAL_REFERENCE",
         r"\b(?:occupational outlook|career profile|occupation profile|"
-        r"what does .{1,60} do|career information)\b"
-        r"|/(?:marketreport|occupation|occupational-outlook|salary|research)/",
+        r"what does .{1,60} do|career information|job description)\b"
+        r"|/(?:marketreport|occupation|occupational-outlook|salary|research|"
+        r"career-options)/",
         "occupational_reference",
+    ),
+    (
+        "UNKNOWN",
+        r"\b(?:case look[- ]?up|civil cases?|civil law|"
+        r"title vii of the civil rights act|civil protection and humanitarian aid|"
+        r"civil infrastructure platform)\b",
+        "non_employment_information",
     ),
     (
         "FORUM_DISCUSSION",
@@ -98,6 +106,12 @@ _GENERIC_LISTING_TITLES = {
     "career", "careers", "job", "jobs", "job opening", "job opportunity",
     "open position", "open positions", "career opportunities",
     "current openings", "all jobs",
+}
+_NON_EMPLOYMENT_DOMAINS = {
+    "youtube.com",
+    "tiktok.com",
+    "x.com",
+    "twitter.com",
 }
 
 
@@ -152,10 +166,21 @@ def classify_entity(opportunity) -> tuple[str, str, str]:
     text = f"{title}\n{' '.join(path_parts)}".casefold()
 
     for entity_type, pattern, reason in _NON_VACANCY_PATTERNS:
+        if (
+            entity_type == "OCCUPATIONAL_REFERENCE"
+            and re.search(r"\bjob description\b", text, re.I)
+            and re.search(r"\b(?:vacancy|opening|hiring|apply now)\b", title, re.I)
+        ):
+            continue
         if re.search(pattern, text, re.I):
             return entity_type, "REJECTED_NON_VACANCY", reason
 
     host = (parsed_url.hostname or "").casefold()
+    if any(
+        host == domain or host.endswith(f".{domain}")
+        for domain in _NON_EMPLOYMENT_DOMAINS
+    ):
+        return "FORUM_DISCUSSION", "REJECTED_NON_VACANCY", "discussion_or_social_page"
     if any(name in host for name in ("reddit.", "quora.", "forum.")):
         return "FORUM_DISCUSSION", "REJECTED_NON_VACANCY", "forum_domain"
 
@@ -181,6 +206,9 @@ def classify_entity(opportunity) -> tuple[str, str, str]:
         ):
             return "JOB_BOARD_CATEGORY", "RESEARCH_REQUIRED", "job_category_page"
 
+    if re.search(r"\bfree job post\b|\bpost (?:a )?job\b", title, re.I):
+        return "JOB_BOARD_CATEGORY", "RESEARCH_REQUIRED", "job_board_landing_page"
+
     if re.search(r"/(?:q-[^/]+|jobs/search|job-search|search/jobs)(?:\.html)?$", url, re.I):
         return "JOB_BOARD_CATEGORY", "RESEARCH_REQUIRED", "job_search_results_page"
 
@@ -190,6 +218,13 @@ def classify_entity(opportunity) -> tuple[str, str, str]:
         }:
             return "EMPLOYER_CAREERS_PAGE", "RESEARCH_REQUIRED", "employer_careers_page"
         return "JOB_BOARD_CATEGORY", "RESEARCH_REQUIRED", "job_category_page"
+
+    if re.search(r"\bjob vacancy\s*:", title, re.I):
+        return (
+            "INDIVIDUAL_VACANCY",
+            "VACANCY_UNVERIFIED",
+            "specific_listing_url_unverified",
+        )
 
     direct_ats_url = _supported_ats_posting_url(url)
     if direct_ats_url and title.strip() and title.casefold().strip() not in _GENERIC_LISTING_TITLES:

@@ -130,6 +130,58 @@ def test_entity_classification_distinguishes_vacancies_from_research_pages():
     assert classify_entity(official_record)[1] == "VACANCY_UNVERIFIED"
 
 
+def test_classification_handles_run_38664200891_false_positive_shapes():
+    from urllib.parse import urlsplit
+
+    examples = [
+        (
+            "Free Job Post Civil and Environmental Engineering in Morocco",
+            "https://www.academicjobs.com/en-ma/free-job-post",
+            ("JOB_BOARD_CATEGORY", "RESEARCH_REQUIRED", "job_board_landing_page"),
+        ),
+        (
+            "Civil Engineering Technician Job Description",
+            "https://skillpointe.com/careers/construction/civil-engineering-technician",
+            ("OCCUPATIONAL_REFERENCE", "REJECTED_NON_VACANCY", "occupational_reference"),
+        ),
+        (
+            "Civil/Family Case Look-up",
+            "https://civilinquiry.jud.ct.gov/",
+            ("UNKNOWN", "REJECTED_NON_VACANCY", "non_employment_information"),
+        ),
+        (
+            "Real Civil Engineer",
+            "https://www.youtube.com/@RealCivilEngineerGaming",
+            ("FORUM_DISCUSSION", "REJECTED_NON_VACANCY", "discussion_or_social_page"),
+        ),
+        (
+            "Civil Infrastructure Platform - Industrial Grade Linux",
+            "https://cip-project.org/",
+            ("UNKNOWN", "REJECTED_NON_VACANCY", "non_employment_information"),
+        ),
+        (
+            "Job Vacancy: Apprentice Civil Engineering Technician",
+            "https://teacakeclub.org/2026/08/19/job-vacancy-apprentice-civil-engineering-technician",
+            ("INDIVIDUAL_VACANCY", "VACANCY_UNVERIFIED", "specific_listing_url_unverified"),
+        ),
+        (
+            "Civil Engineer Job Description - Apply Now",
+            "https://jobs.example.test/jobs/civil-engineer-123",
+            ("INDIVIDUAL_VACANCY", "VACANCY_UNVERIFIED", "specific_listing_url_unverified"),
+        ),
+    ]
+    for title, url, expected in examples:
+        opportunity = Opportunity(
+            source="tavily_web_search",
+            source_type="search_engine",
+            external_id=urlsplit(url).path or url,
+            title=title,
+            url=url,
+        )
+        assert classify_entity(opportunity) == expected
+        assert opportunity.posted_at is None
+
+
 def test_unverified_entities_are_excluded_from_pending_actions(db):
     unverified = Job(
         source="tavily",

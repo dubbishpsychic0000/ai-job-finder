@@ -584,6 +584,19 @@ def build_sanitized_report(
                     item.get("public_page_requests_by_language") or {}
                 ).items()
             },
+            "public_page_telemetry_by_request_language": {
+                _clean_text(language, 20): {
+                    _clean_text(metric, 40): int(count)
+                    for metric, count in metrics.items()
+                    if isinstance(count, int)
+                    and not isinstance(count, bool)
+                    and count >= 0
+                }
+                for language, metrics in (
+                    item.get("public_page_telemetry_by_request_language") or {}
+                ).items()
+                if isinstance(metrics, dict)
+            },
             "public_competition_status_counts": {
                 str(status): int(count)
                 for status, count in (
@@ -841,6 +854,9 @@ def build_sanitized_report(
             "queries_run_limit_deferred": 0,
             "stale_cache_entries": 0,
             "external_results": 0,
+            "public_page_requests": 0,
+            "public_page_requests_by_language": {},
+            "public_page_telemetry_by_request_language": {},
             "results_from_live_api": 0,
             "results_from_cache": 0,
             "provider_results_returned": 0,

@@ -516,7 +516,19 @@ class EmploiPublicSource:
         self._robots_checked = False
         self._robots_parser: RobotFileParser | None = None
         self._http_requests = 0
+        self._request_metrics = {
+            "robots_requests_attempted": 0,
+            "robots_responses_fetched": 0,
+            "listing_pages_attempted": 0,
+            "listing_pages_fetched": 0,
+            "listing_pages_parsed": 0,
+            "listing_cards_parsed": 0,
+            "detail_pages_attempted": 0,
+            "detail_pages_fetched": 0,
+            "detail_pages_parsed": 0,
+        }
         self.last_page_requests = 0
+        self.last_request_metrics = dict(self._request_metrics)
         self.last_status_counts: dict[str, int] = {}
         self.last_origin = ""
         self.last_status = ""
@@ -528,6 +540,7 @@ class EmploiPublicSource:
         self._robots_checked = True
         robots_url = "https://www.emploi-public.ma/robots.txt"
         self._http_requests += 1
+        self._request_metrics["robots_requests_attempted"] += 1
         try:
             response = self.get(
                 robots_url,
@@ -543,6 +556,7 @@ class EmploiPublicSource:
         content = getattr(response, "content", b"")
         if len(content) > 65536:
             return False
+        self._request_metrics["robots_responses_fetched"] += 1
         if isinstance(content, bytes):
             text = content.decode("utf-8", errors="replace")
         else:
@@ -552,7 +566,7 @@ class EmploiPublicSource:
         self._robots_parser = parser
         return True
 
-    def _fetch_html(self, url: str) -> str:
+    def _fetch_html(self, url: str, *, page_kind: str) -> str:
         if not _official_url(url):
             return ""
         path = urlsplit(url).path.casefold()
@@ -561,6 +575,8 @@ class EmploiPublicSource:
         if not self._load_robots() or not self._robots_parser.can_fetch(USER_AGENT, url):
             return ""
         self._http_requests += 1
+        metric = f"{page_kind}_pages"
+        self._request_metrics[f"{metric}_attempted"] += 1
         try:
             response = self.get(
                 url,
@@ -582,8 +598,11 @@ class EmploiPublicSource:
         if len(content) > 2_000_000:
             return ""
         if isinstance(content, bytes):
-            return content.decode("utf-8", errors="replace")
-        return str(getattr(response, "text", "") or "")
+            html = content.decode("utf-8", errors="replace")
+        else:
+            html = str(getattr(response, "text", "") or "")
+        self._request_metrics[f"{metric}_fetched"] += 1
+        return html
 
     def _load_listings(self, language: str) -> list[dict[str, str]]:
         if language in self._listing_cache:
@@ -595,10 +614,13 @@ class EmploiPublicSource:
         while page_index < min(len(pages), self.max_pages):
             page_url = pages[page_index]
             page_index += 1
-            html = self._fetch_html(page_url)
+            html = self._fetch_html(page_url, page_kind="listing")
             if not html:
                 continue
-            for card in _listing_cards(html, page_url):
+            parsed_cards = _listing_cards(html, page_url)
+            self._request_metrics["listing_pages_parsed"] += 1
+            self._request_metrics["listing_cards_parsed"] += len(parsed_cards)
+            for card in parsed_cards:
                 cards.setdefault(card["url"], card)
             soup = BeautifulSoup(html, "html.parser")
             for link in soup.select("nav .pagination a[href], .pagination a[href], a[rel='next']"):
@@ -637,12 +659,14 @@ class EmploiPublicSource:
                 }
             else:
                 self._fetched_detail_ids.add(cache_key)
-                html = self._fetch_html(url)
-                metadata = (
-                    parse_competition_detail(
+                html = self._fetch_html(url, page_kind="detail")
+                if html:
+                    metadata = parse_competition_detail(
                         html, url, language=language, observed_at=observed_at,
                     )
-                    if html else {
+                    self._request_metrics["detail_pages_parsed"] += 1
+                else:
+                    metadata = {
                         "source": self.name,
                         "portal_id": portal_id,
                         "status": "UNKNOWN",
@@ -657,16 +681,19 @@ class EmploiPublicSource:
                         "description_original": card.get("snippet", ""),
                         "notice_documents": [],
                     }
-                )
             self._detail_cache[cache_key] = metadata
         return self._detail_cache[cache_key]
 
     async def search(self, query: str, location: str = "") -> list[Opportunity]:
         before = self._http_requests
+        before_metrics = dict(self._request_metrics)
         self.last_status_counts = {}
         language = "ar" if re.search(r"[\u0600-\u06ff]", query or "") else "fr"
         if language in self._returned_languages:
             self.last_page_requests = 0
+            self.last_request_metrics = {
+                key: 0 for key in self._request_metrics
+            }
             self.last_origin = "cache"
             self.last_status = "cached"
             self.last_error_code = ""
@@ -738,6 +765,10 @@ class EmploiPublicSource:
                 raw={"public_competition": metadata},
             ))
         self.last_page_requests = self._http_requests - before
+        self.last_request_metrics = {
+            key: self._request_metrics[key] - before_metrics[key]
+            for key in self._request_metrics
+        }
         self.last_origin = "direct"
         self.last_status = "ok" if out else "empty"
         self.last_error_code = ""

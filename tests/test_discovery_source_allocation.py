@@ -379,6 +379,47 @@ def test_official_ats_filter_uses_host_not_untrusted_url_substrings(
     ) == ""
 
 
+def test_ats_filter_keeps_job_boards_and_employer_careers_out_of_ats_allowlist(
+    tmp_path,
+):
+    source = ResilientTavily(
+        keys=[TavilyKey(
+            "ats-host-test-key",
+            DailyBudget(tmp_path / "ats-host-budget.json", limit=17),
+            key_fingerprint("ats-host-test-key"),
+        )],
+        cache=TavilyCache(tmp_path / "ats-hosts-cache.json"),
+        official_only=True,
+        source_name="official-ats",
+    )
+    accepted = (
+        "https://jobs.lever.co/acme/123",
+        "https://boards.greenhouse.io/acme/jobs/123",
+        "https://jobs.smartrecruiters.com/Acme/123-role",
+        "https://jobs.ashbyhq.com/acme/123",
+    )
+    rejected = (
+        "https://people.bayt.com/profile",
+        "https://www.bayt.com/en/jobs/123",
+        "https://www.indeed.com/viewjob",
+        "https://www.stepstone.be/jobs/123",
+        "https://englishjobs.be/jobs/123",
+        "https://www.sweco.careers/be/job/123",
+        "https://joobaz.com/job/123",
+        "https://example.test/jobs.lever.co/acme/123",
+    )
+
+    assert all(not source._result_filter_reason(url, "Civil Engineer") for url in accepted)
+    assert all(
+        source._result_filter_reason(url, "Civil Engineer")
+        == "unrecognized_official_ats_host"
+        for url in rejected
+    )
+    assert source._result_filter_reason(
+        "https://be.linkedin.com/jobs/123", "Civil Engineer",
+    ) == "blocked_social_domain"
+
+
 def test_anapec_domain_scope_accepts_official_subdomains_and_rejects_others(
     tmp_path, monkeypatch,
 ):
@@ -518,9 +559,15 @@ def test_eight_attempt_allocator_uses_multiple_morocco_source_scopes(tmp_path):
         for index, combos in enumerate(scheduled[2:], start=2)
         for combo in combos
     ]
-    assert len(selected_market) == 3
+    assert len(selected_market) == 5
     assert {combo["country"] for _, combo in selected_market} == {"Morocco"}
-    assert {"anapec.org", "emploi-public.ma", "rekrute.com"} == {
+    assert {
+        "anapec.org",
+        "emploi-public.ma",
+        "rekrute.com",
+        "emploi.ma",
+        "amaljob.com",
+    } == {
         connectors[index][0]["domains"][0]
         for index, combos in enumerate(scheduled)
         if combos and connectors[index][0].get("domains")
