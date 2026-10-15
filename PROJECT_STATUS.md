@@ -1384,6 +1384,21 @@ workflow gating, and zero-dispatch behavior.
 
 Local validation passed: **558 passed, 1 skipped** in the full test suite;
 Ruff, Python compilation, workflow YAML parsing, and `git diff --check` passed.
-The changes are not yet published, and CI plus the single required
-restore-only post-fix preflight are pending. No discovery request or budget
-reservation was made in this phase; no current budget is claimed.
+The implementation was published in commit
+[`d63c34913d4eb5b518428e96923f0f394629f313`](https://github.com/dubbishpsychic0000/ai-job-finder/commit/d63c34913d4eb5b518428e96923f0f394629f313);
+CI passed in [run 38662645254](https://github.com/dubbishpsychic0000/ai-job-finder/actions/runs/38662645254).
+
+Exactly one post-fix `discovery_restore_preflight` was run:
+[run 38662771165](https://github.com/dubbishpsychic0000/ai-job-finder/actions/runs/38662771165).
+Its sanitized artifact confirms **4/4** required inputs and **7/7** budget
+ledgers restored, with vault origin, `main` branch, and reservation checkout
+path verified. The report's UTC day is **2026-10-15**. All seven ledgers were
+classified `prior_day_rollover_pending`; none was reset or rewritten. The
+three-request-per-key BTP reserve passed for all seven keys. The report shows
+0 current-day general capacity and **119 conditional general attempts**
+available after authorized durable rollover (17 per key). The discovery gate
+authorized a separate bounded run, but this preflight itself made **0** Tavily
+requests and **0** reservations and performed **0** application, outbound,
+BTP, or production-write actions. No discovery was chained. This is not a
+current-day ledger balance: the 119 attempts remain conditional on each
+durable reservation succeeding in the discovery run.
