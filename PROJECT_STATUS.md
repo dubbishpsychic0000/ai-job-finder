@@ -1610,3 +1610,73 @@ This is a readiness report only. No current budget was inferred from Phase
 2.8g. Phase 2.8i made no source/configuration or safety-gate changes, and no
 live evaluation was launched. The sanitized artifact is
 `discovery-restore-preflight-38689495219`.
+
+## Phase 2.8j one bounded discovery-only evaluation
+
+After the separately authorized Phase 2.8i preflight, exactly one
+`discovery_only` evaluation ran on `main` at
+[`ae4ba9b80a138ad4f9e4e27d7bc0225ecfc777ca`](https://github.com/dubbishpsychic0000/ai-job-finder/commit/ae4ba9b80a138ad4f9e4e27d7bc0225ecfc777ca):
+[run 38690026335](https://github.com/dubbishpsychic0000/ai-job-finder/actions/runs/38690026335).
+The configured restore step and bounded discovery step succeeded, and the
+sanitized artifact `discovery-only-38690026335` was uploaded and retrieved.
+The restore-only job was skipped because this was the discovery task. The
+general selected workflow, employer-history preflight, BTP workflow, general
+artifacts/logs, vault persistence, WhatsApp steps, and related application/
+outbound paths were skipped. The report records no Gmail access, applications,
+drafts, email, WhatsApp, or production database writes. Its eight private-vault
+writes were budget-ledger reservations only; runtime database writes were
+ephemeral.
+
+The report completed with **3/12 search-plan combinations** and **10 source
+requests** attempted. It records **8/8 Tavily API attempts successful**, with
+0 failures, retries, or rate-limit errors. Each of the eight attempts was
+durably reserved before dispatch, with eight durable ledger writes; the
+per-run attempt allowance was exhausted. The provider returned **71 results**,
+of which **41 were filtered** (35 outside configured domain scope and 6
+blocked social domains). Across the run, **33 results were normalized**,
+including three Emploi-Public records, and **20 were duplicates**. The
+remaining **11 new discovery records** are not verified vacancies: two were
+research leads, two were rejected non-vacancies, and seven were individual
+vacancy candidates whose current status remained unknown. All seven candidate
+records had `ats_record_missing_required_job_evidence`; their dates were
+classified `STALE_BY_POSTING_DATE`. Four other new records had
+`UNVERIFIABLE_DATE`. No new vacancy was verified, and eligibility remained
+`NOT_EVALUATED`.
+
+Live search coverage comprised Morocco and France: Morocco had 9 recorded
+search-country queries and France 1; recorded query-language totals were
+Arabic 5 and French 5. The eight Tavily attempts comprised broad web search
+(Morocco Arabic, France French), official-ATS search (Morocco French), and
+Morocco-specific Emploi.ma (Arabic), Amaljob (French), ANAPEC (Arabic),
+Emploi-Public indexing (French), and Indeed Morocco (Arabic). No Belgium
+search was attempted. Exact search strings are not present in the sanitized
+artifact, so source, country, and language scope—not verbatim query text—is
+the reportable coverage. Overall, 38 source requests were deferred by the
+run-attempt cap and 8 by daily-budget exhaustion; these deferrals are not
+provider failures. The artifact does not report separate per-result rejection
+or verification evidence beyond the stable reason codes and sanitized
+evidence references.
+
+The direct Emploi-Public adapter reported two requests (one direct and one
+cached) and three normalized records, including two unmatched procedural
+notices: one `EXAM_CONVOCATION` and one `RESULTS_PUBLICATION`. Neither is an
+open vacancy. The existing competition recheck remained closed with
+`application_deadline_elapsed`. Arabic telemetry recorded one robots request
+and response, two listing-page attempts/fetches/parses, 26 parsed cards, and
+three detail-page attempts/fetches/parses; French had zero direct portal page
+requests. No open competition was verified.
+
+After the run, all **7 budget ledgers** were reported restored, with
+per-key general remaining `[0, 1, 17, 17, 17, 17, 17]`, **86 aggregate
+general-purpose attempts remaining**, and zero run attempts remaining. The
+per-key general cap remained 17 and the protected 3-request BTP reserve
+remained intact. These are the report's post-run balances; further use still
+requires a successful durable reservation for each provider request.
+
+The run did not establish a currently open civil-engineering vacancy or
+competition. The ATS candidates still require current official-detail
+evidence, posting/deadline validation, and an unambiguous application route;
+the run provides no eligibility determination. The reported 33 normalized
+records are not 33 vacancies, and provider-result and normalization counts
+must not be interpreted as yield. Phase 2.8j is complete; no discovery retry
+or downstream action was authorized or launched.
