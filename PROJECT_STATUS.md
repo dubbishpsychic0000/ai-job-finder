@@ -1548,6 +1548,10 @@ budget.
 
 Local validation for Phase 2.8h passed: **560 tests passed, 1 skipped**;
 Ruff, Python compilation, source/workflow YAML parsing, and `git diff --check`
-passed. No live provider request, vault checkout, budget reservation, or
-production write was performed during this implementation phase. CI is
-pending publication; its exact result will be recorded below.
+passed. The implementation and reconciled Phase 2.8g results were published
+in commit
+[`e06d0ccea9b99e0bc36d94f400764a46bece80df`](https://github.com/dubbishpsychic0000/ai-job-finder/commit/e06d0ccea9b99e0bc36d94f400764a46bece80df);
+CI passed in [run 38687726344](https://github.com/dubbishpsychic0000/ai-job-finder/actions/runs/38687726344).
+No live provider request, vault checkout, budget reservation, or production
+write was performed during this implementation phase. No evaluation was
+dispatched.
