@@ -1555,3 +1555,58 @@ CI passed in [run 38687726344](https://github.com/dubbishpsychic0000/ai-job-find
 No live provider request, vault checkout, budget reservation, or production
 write was performed during this implementation phase. No evaluation was
 dispatched.
+
+## Phase 2.8i restore-only readiness preflight
+
+Exactly one fresh `discovery_restore_preflight` ran on `main` at the requested
+Phase 2.8h commit
+[`07f4f3eca3106f90b52b34b752be31a502ff26b5`](https://github.com/dubbishpsychic0000/ai-job-finder/commit/07f4f3eca3106f90b52b34b752be31a502ff26b5):
+[run 38689495219](https://github.com/dubbishpsychic0000/ai-job-finder/actions/runs/38689495219).
+Its sanitized artifact was retrieved. The vault origin, `main` ref, and
+reservation checkout path verified; **4/4 inputs** and **7/7 ledgers** were
+restored. The report UTC day is **2026-10-15**. Two ledgers are valid for the
+current UTC day and five are `prior_day_rollover_pending`.
+
+The report shows **9 current general-purpose attempts** available: one
+current-day key has 9/17 remaining; the other current-day key has exhausted
+its 17-request general allowance, with its 3-request BTP reserve intact.
+Another **85 attempts are conditional on durable rollover** across the five
+prior-day ledgers (17 per key after a successful reservation-driven rollover).
+These are not current-day balances and were not added to current capacity.
+The report records 6 eligible keys (1 current-day plus 5 rollover-pending)
+and 1 excluded general-discovery key. BTP reserve validation passed; the
+configured reserve remains **3 requests per key**. The aggregate fields for
+already current-day ledgers show 15 total requests remaining, split as 9
+general and 6 reserved for BTP.
+
+Restoration status was `COMPLETED`, reason `general_capacity_available`, and
+the discovery gate field was authorized by budget policy. This indicates the
+budget gate could admit a separate run subject to each durable reservation;
+it is **not authorization to run discovery**. The preflight made **0**
+provider requests and **0** reservations. The separate pipeline job was
+skipped. No discovery or other downstream action was chained.
+
+**Proposed plan for a separately authorized future evaluation (not run):**
+keep the existing maximum of **12 unique plan combinations** and **8 Tavily
+attempts**. Prioritize Morocco with six civil-engineering intents in French
+and Arabic (three intent pairs): public competition/technician génie civil;
+travaux publics, VRD, and chantier; and infrastructure, roads, and site
+engineering. Use the remaining six combinations for justified international
+coverage: France French (three corresponding intents), Belgium French (two),
+and Belgium English (one). Reserve no more than eight Tavily attempts:
+up to two broad Morocco French/Arabic searches; one official-ATS Morocco
+search; and up to five distinct Morocco-specific scopes, prioritizing
+ANAPEC, Emploi-Public indexing, Rekrute, Emploi.ma, and Amaljob. Actual
+request allocation remains subject to cache, source applicability, and the
+existing allocator; no cap is raised. The dedicated Emploi-Public adapter
+continues to make only robots-aware requests within its existing bounds
+(maximum two listing pages per language and 12 detail pages total); direct
+portal page requests do not use Tavily reservations. Evaluate only official
+detail evidence, current announcement status, explicit publication/deadline
+evidence, and an unambiguous verified submission route. Search results and
+snippets remain leads, not vacancy proof.
+
+This is a readiness report only. No current budget was inferred from Phase
+2.8g. Phase 2.8i made no source/configuration or safety-gate changes, and no
+live evaluation was launched. The sanitized artifact is
+`discovery-restore-preflight-38689495219`.
