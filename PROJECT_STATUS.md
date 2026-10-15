@@ -1318,7 +1318,72 @@ candidate writes were all **0**. Only the sanitized report artifact was
 uploaded.
 
 The first CI run for the status-record commit exposed a rollover test that
-hard-coded October 14/15, which became invalid after UTC midnight. The test now
-uses dates relative to the current UTC day; the focused Tavily budget-vault
-suite passed (**12 passed**), and Ruff, compilation, and `git diff --check`
-passed. A follow-up CI run is required for this test-only correction.
+hard-coded October 14/15, which became invalid after UTC midnight. The test was
+changed to use dates relative to the current UTC day; the focused
+Tavily budget-vault suite passed (**12 passed**), and Ruff, compilation, and
+`git diff --check` passed. The correction was published in commit
+[`9ab297f417a6b5e92da032ab31262d05b00d8a21`](https://github.com/dubbishpsychic0000/ai-job-finder/commit/9ab297f417a6b5e92da032ab31262d05b00d8a21);
+follow-up CI passed in [run 38658112630](https://github.com/dubbishpsychic0000/ai-job-finder/actions/runs/38658112630).
+
+## Phase 2.8e bounded discovery-only evaluation (blocked before discovery)
+
+Exactly one `discovery_only` workflow was dispatched on `main` after fresh
+private-vault restoration was attempted:
+[run 38658506355](https://github.com/dubbishpsychic0000/ai-job-finder/actions/runs/38658506355).
+The sanitized `discovery-only-38658506355` artifact was retrieved. Its status
+is `BLOCKED`, reason `provider_budget_ledger_missing_or_invalid`, phase
+`input_restore`.
+
+The report records **0** external results, normalized results, duplicates,
+new records, research leads, rejected non-vacancies, individual vacancy
+candidates, and verified vacancies. Provider API attempts, successes,
+failures, retries, durable reservations, and deferred queries are all **0**.
+No source or country/language coverage was reached; Emploi-Public listings and
+details attempted, parsed, and verified were therefore all **0**. Eligibility
+was `NOT_EVALUATED`. The run limits remained 12 combinations and 8 Tavily
+attempts.
+
+The workflow log confirms the private-vault restore step exited successfully
+at the Actions step level, but the sanitized discovery report failed closed
+before discovery. The report does not identify which ledger failed, nor
+include the per-key dates/counts or the restore manifest, so the exact
+ledger-level cause and current per-key balance cannot be established from
+available sanitized evidence. The restore step suppresses restoration command
+output and handles its failure by exiting successfully; thus the green step
+does not independently prove restoration readiness. This is a reporting
+limitation, not evidence that any ledger should be reset or bypassed.
+
+This evaluation made **0** provider requests and **0** reservations, so it
+created no budget changes. The report does not provide an exact post-run
+per-key budget snapshot; no remaining budget is claimed. No follow-up
+evaluation was dispatched. The normal/general pipeline, eligibility
+assessment, Gmail, applications, drafts, email, WhatsApp, BTP workflows,
+production candidate/application writes, and MEGEC retry were not run.
+Only the sanitized report artifact was uploaded.
+
+## Phase 2.8f fail-closed restore diagnostics
+
+The Phase 2.8e failure mechanism is confirmed: the discovery restore shell step
+used `set +e`, suppressed restore errors, and exited successfully on clone,
+sparse-checkout, and checkout failures. The discovery CLI then blocked on the
+missing/invalid input manifest, but neither that green step nor its sanitized
+report identified the failing ledger. No current budget can be inferred from
+that run.
+
+The workflow now runs restoration with strict error handling, writes a
+sanitized blocked report before attempting restoration, records stable
+failure categories, and explicitly exposes and checks a `ready` output before
+discovery can run. Restore-only and discovery-only reports upload even after
+failure; cleanup removes private vault material and internal diagnostics.
+Restoration reports now include each configured key's short fingerprint and
+an allowlisted ledger outcome, without key values, ledger paths, or ledger
+contents. Manifest validation checks restored-versus-expected input and ledger
+counts. Offline tests cover restoration failures, invalid ledgers, count
+mismatches, diagnostic sanitization, the successful no-write restore path,
+workflow gating, and zero-dispatch behavior.
+
+Local validation passed: **558 passed, 1 skipped** in the full test suite;
+Ruff, Python compilation, workflow YAML parsing, and `git diff --check` passed.
+The changes are not yet published, and CI plus the single required
+restore-only post-fix preflight are pending. No discovery request or budget
+reservation was made in this phase; no current budget is claimed.

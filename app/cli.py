@@ -173,6 +173,51 @@ def cmd_discovery_only(args) -> None:
                 input_restore_error,
                 phase=phase,
             )
+            try:
+                restore_status = json.loads(
+                    status_path.read_text(encoding="utf-8"),
+                )
+            except (OSError, ValueError):
+                restore_status = {}
+            allowed_outcomes = {
+                "valid_current_day",
+                "prior_day_rollover_pending",
+                "ledger_missing",
+                "ledger_json_invalid",
+                "ledger_schema_invalid",
+                "ledger_date_invalid",
+                "ledger_future_dated",
+                "ledger_count_out_of_range",
+                "ledger_exhausted",
+            }
+            key_parse_reason = restore_status.get("key_parse_reason")
+            report["provider"]["restore_diagnostic_reason"] = (
+                key_parse_reason
+                if key_parse_reason in {
+                    "vault_provider_keys_missing",
+                    "provider_key_file_invalid",
+                    "provider_budget_ledger_collision",
+                }
+                else ""
+            ) if isinstance(key_parse_reason, str) else ""
+            for field in (
+                "expected_budget_ledger_count",
+                "restored_budget_ledger_count",
+            ):
+                value = restore_status.get(field)
+                if isinstance(value, int) and not isinstance(value, bool) and value >= 0:
+                    report["provider"][field] = value
+            report["provider"]["ledger_diagnostics"] = [
+                {
+                    "fingerprint": item["fingerprint"],
+                    "outcome": item["outcome"],
+                }
+                for item in restore_status.get("ledger_diagnostics", [])
+                if isinstance(item, dict)
+                and isinstance(item.get("fingerprint"), str)
+                and re.fullmatch(r"[a-f0-9]{8}", item["fingerprint"])
+                and item.get("outcome") in allowed_outcomes
+            ] if isinstance(restore_status.get("ledger_diagnostics"), list) else []
         else:
             status = json.loads(status_path.read_text(encoding="utf-8"))
             profile_path = root / "candidate" / "profile.yaml"

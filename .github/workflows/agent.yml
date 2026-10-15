@@ -66,28 +66,58 @@ jobs:
         run: pip install -r requirements.txt
 
       - name: Restore and validate private-vault budget (read-only)
+        id: restore_only_preflight
         env:
           VAULT_TOKEN: ${{ secrets.VAULT_TOKEN }}
           VAULT_URL: https://github.com/dubbishpsychic0000/ai-job-finder-vault.git
         run: |
-          set +e
-          mkdir -p /tmp/wca-discovery-vault
+          set -euo pipefail
           report=/tmp/discovery_restore_preflight_report.json
+          internal=/tmp/restore_preflight_internal.log
+          vault=/tmp/wca-discovery-vault
+          mkdir -p data candidate secrets
+          : > "$internal"
+          printf '{"schema_version":1,"mode":"restore_only","status":"BLOCKED","reason_code":"restore_not_completed","side_effects":{"discovery_dispatched":false,"tavily_requests":0,"budget_reservations":0,"application_actions":0,"drafts_created":0,"emails_sent":0,"whatsapp_messages_sent":0,"btp_actions":0,"production_candidate_writes":0}}\n' > "$report"
           trap 'rm -f secrets/tavily_keys.txt /tmp/restore_preflight_internal.log; rm -rf /tmp/wca-discovery-vault' EXIT
           rm -rf /tmp/wca-discovery-vault
-          if [ -n "$VAULT_TOKEN" ] && [ -n "$VAULT_URL" ]; then
-            git clone --depth 1 --filter=blob:none --sparse --branch main --single-branch \
-              "https://x-access-token:${VAULT_TOKEN}@${VAULT_URL#https://}" \
-              /tmp/wca-discovery-vault >/dev/null 2>&1
-            if [ "$?" -eq 0 ]; then
-              git -C /tmp/wca-discovery-vault sparse-checkout set --no-cone \
-                state/agent.db state/tavily_cache.json \
-                candidate/profile.yaml candidate/preferences.yaml \
-                secrets/tavily_keys.txt >/dev/null 2>&1
-              git -C /tmp/wca-discovery-vault checkout >/dev/null 2>&1
+          fail_preflight() {
+            local reason="$1"
+            mkdir -p "$vault"
+            python -m app.workflows.discovery_only_restore \
+              --vault "$vault" \
+              --workspace "$GITHUB_WORKSPACE" \
+              --origin "${VAULT_URL:-}" \
+              --branch main \
+              --reservation-path "$vault" \
+              --restore-failure-reason "$reason" \
+              --report "$report" \
+              >/dev/null 2>"$internal" || true
+            if [ ! -s "$report" ]; then
+              printf '{"schema_version":1,"mode":"restore_only","status":"BLOCKED","reason_code":"restore_report_unavailable","side_effects":{"discovery_dispatched":false,"tavily_requests":0,"budget_reservations":0,"application_actions":0,"drafts_created":0,"emails_sent":0,"whatsapp_messages_sent":0,"btp_actions":0,"production_candidate_writes":0}}\n' > "$report"
             fi
-            if [ -s /tmp/wca-discovery-vault/secrets/tavily_keys.txt ]; then
-              mapfile -t budget_paths < <(python - <<'PY'
+            exit 1
+          }
+          if [ -z "${VAULT_TOKEN:-}" ] || [ -z "${VAULT_URL:-}" ]; then
+            fail_preflight vault_credentials_missing
+          fi
+          if ! git clone --depth 1 --filter=blob:none --sparse --branch main --single-branch \
+            "https://x-access-token:${VAULT_TOKEN}@${VAULT_URL#https://}" \
+            "$vault" >/dev/null 2>"$internal"; then
+            fail_preflight vault_clone_failed
+          fi
+          if ! git -C "$vault" sparse-checkout set --no-cone \
+            state/agent.db state/tavily_cache.json \
+            candidate/profile.yaml candidate/preferences.yaml \
+            secrets/tavily_keys.txt >/dev/null 2>"$internal"; then
+            fail_preflight vault_sparse_checkout_failed
+          fi
+          if ! git -C "$vault" checkout >/dev/null 2>"$internal"; then
+            fail_preflight vault_checkout_failed
+          fi
+          if [ ! -s "$vault/secrets/tavily_keys.txt" ]; then
+            fail_preflight vault_provider_keys_missing
+          fi
+          if ! budget_list="$(python - <<'PY'
           import hashlib
           from pathlib import Path
           values = Path("/tmp/wca-discovery-vault/secrets/tavily_keys.txt").read_text(encoding="utf-8").replace("\r", "").replace("\n", ",").split(",")
@@ -100,27 +130,46 @@ jobs:
                       print(name)
                       seen.add(name)
           PY
-              )
-              git -C /tmp/wca-discovery-vault sparse-checkout set --no-cone \
-                state/agent.db state/tavily_cache.json \
-                candidate/profile.yaml candidate/preferences.yaml \
-                secrets/tavily_keys.txt "${budget_paths[@]}" >/dev/null 2>&1
-              git -C /tmp/wca-discovery-vault checkout >/dev/null 2>&1
-            fi
+          )"; then
+            fail_preflight provider_key_file_invalid
           fi
-          python -m app.workflows.discovery_only_restore \
-            --vault /tmp/wca-discovery-vault \
+          mapfile -t budget_paths <<< "$budget_list"
+          if [ "${#budget_paths[@]}" -eq 0 ]; then
+            fail_preflight vault_provider_keys_missing
+          fi
+          if ! git -C "$vault" sparse-checkout set --no-cone \
+            state/agent.db state/tavily_cache.json \
+            candidate/profile.yaml candidate/preferences.yaml \
+            secrets/tavily_keys.txt "${budget_paths[@]}" \
+            >/dev/null 2>"$internal"; then
+            fail_preflight vault_sparse_checkout_failed
+          fi
+          if ! git -C "$vault" checkout >/dev/null 2>"$internal"; then
+            fail_preflight vault_checkout_failed
+          fi
+          if ! python -m app.workflows.discovery_only_restore \
+            --vault "$vault" \
             --workspace "$GITHUB_WORKSPACE" \
             --origin "$VAULT_URL" \
             --branch main \
-            --reservation-path /tmp/wca-discovery-vault \
-            --report "$report" >/dev/null 2>/tmp/restore_preflight_internal.log
-          status=$?
-          if [ ! -s "$report" ]; then
-            printf '{"schema_version":1,"mode":"restore_only","status":"BLOCKED","reason_code":"restore_report_unavailable","side_effects":{"discovery_dispatched":false,"tavily_requests":0,"budget_reservations":0,"application_actions":0,"drafts_created":0,"emails_sent":0,"whatsapp_messages_sent":0,"btp_actions":0,"production_candidate_writes":0}}\n' > "$report"
-            status=1
+            --reservation-path "$vault" \
+            --report "$report" \
+            >/dev/null 2>"$internal"; then
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+            exit 1
           fi
-          exit "$status"
+          if ! python - "$report" <<'PY'
+          import json
+          import sys
+          from pathlib import Path
+          payload = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+          if payload.get("status") != "COMPLETED" or payload.get("discovery_gate", {}).get("authorized") is not True:
+              raise SystemExit("restore preflight did not authorize discovery")
+          PY
+          then
+            fail_preflight restore_readiness_manifest_invalid
+          fi
+          echo "ready=true" >> "$GITHUB_OUTPUT"
 
       - name: Upload sanitized restore-only report
         if: ${{ always() }}
@@ -129,6 +178,12 @@ jobs:
           name: discovery-restore-preflight-${{ github.run_id }}
           path: /tmp/discovery_restore_preflight_report.json
           if-no-files-found: error
+
+      - name: Remove private restore material
+        if: ${{ always() }}
+        run: |
+          rm -f secrets/tavily_keys.txt /tmp/restore_preflight_internal.log
+          rm -rf /tmp/wca-discovery-vault
 
   pipeline:
     if: ${{ !(github.event_name == 'workflow_dispatch' && inputs.task == 'discovery_restore_preflight') }}
@@ -178,38 +233,85 @@ jobs:
           rm -rf /tmp/wca-history-vault
 
       - name: Restore bounded discovery inputs only
+        id: discovery_restore
         if: ${{ github.event_name == 'workflow_dispatch' && inputs.task == 'discovery_only' }}
         env:
           VAULT_TOKEN: ${{ secrets.VAULT_TOKEN }}
           VAULT_URL: https://github.com/dubbishpsychic0000/ai-job-finder-vault.git
         run: |
-          set +e
+          set -euo pipefail
           mkdir -p data candidate secrets
+          report=/tmp/discovery_restore_preflight_report.json
+          discovery_report=/tmp/discovery_only_report.json
+          internal=/tmp/discovery_restore_internal.log
+          vault=/tmp/wca-discovery-vault
+          : > "$internal"
+          printf '{"schema_version":1,"mode":"discovery_only","status":"BLOCKED","phase":"input_restore","reason_code":"restore_not_completed","provider":{"api_attempts":0},"results":{"external":0,"normalized":0,"duplicates":0,"new_records":0,"research_leads":0,"rejected_non_vacancies":0,"vacancy_candidates":0,"verified_vacancies":0}}\n' > "$discovery_report"
+          python - "$discovery_report" <<'PY'
+          import json
+          import sys
+          from pathlib import Path
+          from app.workflows.discovery_only import blocked_report
+          Path(sys.argv[1]).write_text(
+              json.dumps(blocked_report("restore_not_completed", phase="input_restore"), indent=2) + "\n",
+              encoding="utf-8",
+          )
+          PY
+          printf '{"schema_version":1,"mode":"restore_only","status":"BLOCKED","reason_code":"restore_not_completed","side_effects":{"discovery_dispatched":false,"tavily_requests":0,"budget_reservations":0,"application_actions":0,"drafts_created":0,"emails_sent":0,"whatsapp_messages_sent":0,"btp_actions":0,"production_candidate_writes":0}}\n' > "$report"
+          fail_restore() {
+            local reason="$1"
+            mkdir -p "$vault"
+            python -m app.workflows.discovery_only_restore \
+              --vault "$vault" \
+              --workspace "$GITHUB_WORKSPACE" \
+              --origin "${VAULT_URL:-}" \
+              --branch main \
+              --reservation-path "$vault" \
+              --restore-failure-reason "$reason" \
+              --report "$report" \
+              --discovery-report "$discovery_report" \
+              >/dev/null 2>"$internal" || true
+            if [ ! -s "$discovery_report" ]; then
+              python - "$discovery_report" "$reason" <<'PY'
+          import json
+          import sys
+          from pathlib import Path
+          from app.workflows.discovery_only import blocked_report
+          Path(sys.argv[1]).write_text(
+              json.dumps(blocked_report(sys.argv[2], phase="input_restore"), indent=2) + "\n",
+              encoding="utf-8",
+          )
+          PY
+            fi
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+            exit 1
+          }
           printf '{"ready":false,"reason_code":"vault_restore_failed"}\n' > data/discovery_only_inputs_status.json
-          if [ -z "$VAULT_TOKEN" ] || [ -z "$VAULT_URL" ]; then exit 0; fi
+          if [ -z "${VAULT_TOKEN:-}" ] || [ -z "${VAULT_URL:-}" ]; then
+            fail_restore vault_credentials_missing
+          fi
           rm -rf /tmp/wca-discovery-vault
-          git clone --depth 1 --filter=blob:none --sparse --branch main --single-branch \
+          if ! git clone --depth 1 --filter=blob:none --sparse --branch main --single-branch \
             "https://x-access-token:${VAULT_TOKEN}@${VAULT_URL#https://}" \
-            /tmp/wca-discovery-vault >/dev/null 2>&1
-          if [ "$?" -ne 0 ]; then exit 0; fi
-          git -C /tmp/wca-discovery-vault sparse-checkout set --no-cone \
+            "$vault" >/dev/null 2>"$internal"; then
+            fail_restore vault_clone_failed
+          fi
+          if ! git -C "$vault" sparse-checkout set --no-cone \
             state/agent.db state/tavily_cache.json \
             candidate/profile.yaml candidate/preferences.yaml \
-            secrets/tavily_keys.txt >/dev/null 2>&1
-          if [ "$?" -ne 0 ]; then rm -rf /tmp/wca-discovery-vault; exit 0; fi
-          git -C /tmp/wca-discovery-vault checkout >/dev/null 2>&1
-          if [ "$?" -ne 0 ]; then rm -rf /tmp/wca-discovery-vault; exit 0; fi
-          if [ ! -s /tmp/wca-discovery-vault/state/agent.db ] || \
-             [ ! -s /tmp/wca-discovery-vault/candidate/profile.yaml ] || \
-             [ ! -s /tmp/wca-discovery-vault/candidate/preferences.yaml ]; then
-            rm -rf /tmp/wca-discovery-vault
-            exit 0
+            secrets/tavily_keys.txt >/dev/null 2>"$internal"; then
+            fail_restore vault_sparse_checkout_failed
           fi
-          if [ -f /tmp/wca-discovery-vault/secrets/tavily_keys.txt ]; then
-            mapfile -t budget_paths < <(python - <<'PY'
+          if ! git -C "$vault" checkout >/dev/null 2>"$internal"; then
+            fail_restore vault_checkout_failed
+          fi
+          if [ ! -s "$vault/secrets/tavily_keys.txt" ]; then
+            fail_restore vault_provider_keys_missing
+          fi
+          if ! budget_list="$(python - <<'PY'
           import hashlib
           from pathlib import Path
-          values = Path("secrets/tavily_keys.txt").read_text(encoding="utf-8").replace("\r", "").replace("\n", ",").split(",")
+          values = Path("/tmp/wca-discovery-vault/secrets/tavily_keys.txt").read_text(encoding="utf-8").replace("\r", "").replace("\n", ",").split(",")
           seen = set()
           for value in values:
               key = value.strip()
@@ -219,22 +321,60 @@ jobs:
                       print(name)
                       seen.add(name)
           PY
-            )
-          else
-            budget_paths=()
+          )"; then
+            fail_restore provider_key_file_invalid
           fi
-          git -C /tmp/wca-discovery-vault sparse-checkout set --no-cone \
+          mapfile -t budget_paths <<< "$budget_list"
+          if [ "${#budget_paths[@]}" -eq 0 ]; then
+            fail_restore vault_provider_keys_missing
+          fi
+          if ! git -C "$vault" sparse-checkout set --no-cone \
             state/agent.db state/tavily_cache.json \
             candidate/profile.yaml candidate/preferences.yaml \
-            secrets/tavily_keys.txt "${budget_paths[@]}" >/dev/null 2>&1
-          git -C /tmp/wca-discovery-vault checkout >/dev/null 2>&1
-          if [ "$?" -ne 0 ]; then rm -rf /tmp/wca-discovery-vault; exit 0; fi
-          python -m app.workflows.discovery_only_restore \
-            --vault /tmp/wca-discovery-vault \
+            secrets/tavily_keys.txt "${budget_paths[@]}" \
+            >/dev/null 2>"$internal"; then
+            fail_restore vault_sparse_checkout_failed
+          fi
+          if ! git -C "$vault" checkout >/dev/null 2>"$internal"; then
+            fail_restore vault_checkout_failed
+          fi
+          if ! python -m app.workflows.discovery_only_restore \
+            --vault "$vault" \
             --workspace "$GITHUB_WORKSPACE" \
             --origin "$VAULT_URL" \
-            --branch main >/dev/null 2>&1
-          if [ "$?" -ne 0 ]; then rm -rf /tmp/wca-discovery-vault; exit 0; fi
+            --branch main \
+            --reservation-path "$vault" \
+            --report "$report" \
+            --discovery-report "$discovery_report" \
+            >/dev/null 2>"$internal"; then
+            if [ ! -s "$discovery_report" ]; then
+              python - "$discovery_report" <<'PY'
+          import json
+          import sys
+          from pathlib import Path
+          from app.workflows.discovery_only import blocked_report
+          Path(sys.argv[1]).write_text(
+              json.dumps(blocked_report("restore_validation_failed", phase="input_restore"), indent=2) + "\n",
+              encoding="utf-8",
+          )
+          PY
+            fi
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+            exit 1
+          fi
+          if ! python - "$report" "$GITHUB_OUTPUT" <<'PY'
+          import json
+          import sys
+          from pathlib import Path
+          report = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+          if report.get("status") != "COMPLETED" or report.get("discovery_gate", {}).get("authorized") is not True:
+              raise SystemExit("restore preflight did not authorize discovery")
+          with Path(sys.argv[2]).open("a", encoding="utf-8") as output:
+              output.write("ready=true\n")
+          PY
+          then
+            fail_restore restore_readiness_manifest_invalid
+          fi
 
       - name: Restore targeted BTP preflight inputs only
         if: ${{ github.event_name == 'workflow_dispatch' && inputs.task == 'btp_outreach' && inputs.email_mode == 'dry_run' && inputs.target_employer != 'none' }}
@@ -341,7 +481,7 @@ jobs:
           exit $(cat /tmp/pipeline_exit_code)
 
       - name: Run bounded discovery-only evaluation
-        if: ${{ github.event_name == 'workflow_dispatch' && inputs.task == 'discovery_only' }}
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.task == 'discovery_only' && steps.discovery_restore.outcome == 'success' && steps.discovery_restore.outputs.ready == 'true' }}
         env:
           DATABASE_URL: sqlite:///${{ github.workspace }}/data/agent.db
           TAVILY_BUDGET_VAULT_REPO: /tmp/wca-discovery-vault
@@ -356,7 +496,7 @@ jobs:
           PYTHON_DOTENV_DISABLED: "true"
         run: |
           set +e
-          trap 'rm -f secrets/tavily_keys.txt /tmp/discovery_only_internal.log; rm -rf /tmp/wca-discovery-vault' EXIT
+          trap 'rm -f secrets/tavily_keys.txt /tmp/discovery_only_internal.log /tmp/discovery_restore_internal.log; rm -rf /tmp/wca-discovery-vault' EXIT
           keys=""
           if [ -f secrets/tavily_keys.txt ]; then
             keys="$(python -c 'from pathlib import Path; print(",".join(k.strip() for k in Path("secrets/tavily_keys.txt").read_text(encoding="utf-8").replace("\r", "").replace("\n", ",").split(",") if k.strip()))')"
@@ -442,7 +582,13 @@ jobs:
         with:
           name: discovery-only-${{ github.run_id }}
           path: /tmp/discovery_only_report.json
-          if-no-files-found: warn
+          if-no-files-found: error
+
+      - name: Remove private discovery restore material
+        if: ${{ always() && github.event_name == 'workflow_dispatch' && inputs.task == 'discovery_only' }}
+        run: |
+          rm -f secrets/tavily_keys.txt /tmp/discovery_only_internal.log /tmp/discovery_restore_internal.log
+          rm -rf /tmp/wca-discovery-vault
 
       - name: Send WhatsApp run status
         if: ${{ always() && inputs.task != 'history_preflight' && inputs.task != 'discovery_only' && !(inputs.task == 'btp_outreach' && inputs.email_mode == 'dry_run' && inputs.target_employer != 'none') }}

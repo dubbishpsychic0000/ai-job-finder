@@ -5,6 +5,7 @@ import argparse
 import hashlib
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -78,25 +79,47 @@ def _validate_checkout(
     return head
 
 
-def _valid_budget_ledger(path: Path, *, today: date) -> bool:
+def _budget_ledger_diagnostic(path: Path, *, today: date) -> tuple[str, dict | None]:
+    """Return a safe outcome code and a parsed ledger only when structurally valid."""
+    if not path.is_file():
+        return "ledger_missing", None
     try:
         payload = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        return False
+    except (OSError, UnicodeError, ValueError):
+        return "ledger_json_invalid", None
+    if not isinstance(payload, dict):
+        return "ledger_schema_invalid", None
     if (
-        not isinstance(payload, dict)
-        or not isinstance(payload.get("date"), str)
+        not isinstance(payload.get("date"), str)
         or not isinstance(payload.get("count"), int)
         or isinstance(payload.get("count"), bool)
-        or not 0 <= payload["count"] <= TAVILY_DAILY_REQUEST_LIMIT
         or not isinstance(payload.get("exhausted"), bool)
     ):
-        return False
+        return "ledger_schema_invalid", None
+    if not 0 <= payload["count"] <= TAVILY_DAILY_REQUEST_LIMIT:
+        return "ledger_count_out_of_range", None
     try:
         ledger_date = date.fromisoformat(payload["date"])
     except ValueError:
-        return False
-    return ledger_date.isoformat() == payload["date"] and ledger_date <= today
+        return "ledger_date_invalid", None
+    if ledger_date.isoformat() != payload["date"]:
+        return "ledger_date_invalid", None
+    if ledger_date > today:
+        return "ledger_future_dated", None
+    if ledger_date < today:
+        return "prior_day_rollover_pending", payload
+    if payload["exhausted"]:
+        return "ledger_exhausted", payload
+    return "valid_current_day", payload
+
+
+def _valid_budget_ledger(path: Path, *, today: date) -> bool:
+    outcome, _payload = _budget_ledger_diagnostic(path, today=today)
+    return outcome in {
+        "valid_current_day",
+        "prior_day_rollover_pending",
+        "ledger_exhausted",
+    }
 
 
 def _write_status(path: Path, status: dict) -> None:
@@ -124,6 +147,8 @@ def restore_discovery_inputs(
     expected_key_count: int | None = None
     restored_input_count = 0
     restored_ledger_count = 0
+    ledger_diagnostics: list[dict[str, str]] = []
+    key_parse_reason = ""
     try:
         commit = _validate_checkout(
             repository,
@@ -139,7 +164,11 @@ def restore_discovery_inputs(
         if any(not path.is_file() or path.stat().st_size == 0 for path in required_files.values()):
             raise DiscoveryRestoreError("vault_required_input_missing")
 
-        key_text = required_files["keys"].read_text(encoding="utf-8")
+        try:
+            key_text = required_files["keys"].read_text(encoding="utf-8")
+        except (OSError, UnicodeError) as exc:
+            key_parse_reason = "provider_key_file_invalid"
+            raise DiscoveryRestoreError(key_parse_reason) from exc
         keys = [
             key.strip()
             for key in key_text.replace("\r", "").replace("\n", ",").split(",")
@@ -153,12 +182,28 @@ def restore_discovery_inputs(
         for key in keys:
             fingerprint = hashlib.sha256(key.encode("utf-8")).hexdigest()[:8]
             if fingerprint in fingerprints and fingerprints[fingerprint] != key:
+                key_parse_reason = "provider_budget_ledger_collision"
                 raise DiscoveryRestoreError("provider_budget_ledger_collision")
             fingerprints[fingerprint] = key
             ledger = repository / "state" / f"tavily_budget_{fingerprint}.json"
-            if not _valid_budget_ledger(ledger, today=now_date):
-                raise DiscoveryRestoreError("provider_budget_ledger_missing_or_invalid")
+            outcome, _payload = _budget_ledger_diagnostic(ledger, today=now_date)
+            ledger_diagnostics.append({
+                "fingerprint": fingerprint,
+                "outcome": outcome,
+            })
             ledgers.append(ledger)
+        expected_key_count = len(fingerprints)
+        if any(
+            item["outcome"] not in {
+                "valid_current_day",
+                "prior_day_rollover_pending",
+                "ledger_exhausted",
+            }
+            for item in ledger_diagnostics
+        ):
+            raise DiscoveryRestoreError(
+                "provider_budget_ledger_missing_or_invalid",
+            )
 
         copies = [
             (required_files["database"], data_dir / "agent.db"),
@@ -199,6 +244,7 @@ def restore_discovery_inputs(
             "restored_input_count": restored_input_count,
             "expected_budget_ledger_count": len(fingerprints),
             "restored_budget_ledger_count": restored_ledger_count,
+            "ledger_diagnostics": ledger_diagnostics,
             "provider_cache_restored": cache.is_file(),
         }
         _write_status(status_path, status)
@@ -221,6 +267,8 @@ def restore_discovery_inputs(
             "restored_input_count": restored_input_count,
             "expected_budget_ledger_count": expected_key_count,
             "restored_budget_ledger_count": restored_ledger_count,
+            "ledger_diagnostics": ledger_diagnostics,
+            "key_parse_reason": key_parse_reason,
             "provider_cache_restored": False,
         })
         raise
@@ -277,6 +325,7 @@ def build_restore_preflight_report(
             "btp_reserve_intact": False,
             "eligible_for_general_discovery": False,
             "general_capacity_after_rollover": 0,
+            "outcome": "ledger_missing",
             "reason_code": "",
         }
         source_ledger_path = repository / "state" / ledger_path.name
@@ -291,31 +340,19 @@ def build_restore_preflight_report(
             reasons.append(item["reason_code"])
             per_key.append(item)
             continue
-        try:
-            payload = json.loads(observed_ledger_path.read_text(encoding="utf-8"))
-        except (OSError, ValueError):
-            payload = None
-        if (
-            not isinstance(payload, dict)
-            or not isinstance(payload.get("date"), str)
-            or not isinstance(payload.get("count"), int)
-            or isinstance(payload.get("count"), bool)
-            or not 0 <= payload["count"] <= TAVILY_DAILY_REQUEST_LIMIT
-            or not isinstance(payload.get("exhausted"), bool)
-        ):
-            item["reason_code"] = "provider_budget_ledger_missing_or_invalid"
+        outcome, payload = _budget_ledger_diagnostic(
+            observed_ledger_path, today=now_date,
+        )
+        item["outcome"] = outcome
+        if payload is None:
+            item["reason_code"] = {
+                "ledger_missing": "provider_budget_ledger_missing",
+                "ledger_future_dated": "provider_budget_ledger_from_future",
+            }.get(outcome, "provider_budget_ledger_missing_or_invalid")
             reasons.append(item["reason_code"])
             per_key.append(item)
             continue
-        try:
-            ledger_date = date.fromisoformat(payload["date"])
-        except ValueError:
-            ledger_date = None
-        if ledger_date is None or ledger_date.isoformat() != payload["date"]:
-            item["reason_code"] = "provider_budget_ledger_missing_or_invalid"
-            reasons.append(item["reason_code"])
-            per_key.append(item)
-            continue
+        ledger_date = date.fromisoformat(payload["date"])
 
         item["ledger_valid"] = True
         item["ledger_utc_day_matches"] = ledger_date == now_date
@@ -324,11 +361,11 @@ def build_restore_preflight_report(
         )
         item["count"] = payload["count"]
         item["exhausted"] = payload["exhausted"]
-        if ledger_date > now_date:
+        if outcome == "ledger_future_dated":
             item["ledger_date_relation"] = "future_utc_day"
             item["reason_code"] = "provider_budget_ledger_from_future"
             reasons.append(item["reason_code"])
-        elif ledger_date < now_date:
+        elif outcome == "prior_day_rollover_pending":
             item["eligible_for_general_discovery"] = True
             item["general_capacity_after_rollover"] = GENERAL_TAVILY_DAILY_LIMIT
             item["btp_reserve_intact"] = True
@@ -350,12 +387,13 @@ def build_restore_preflight_report(
                 and item["btp_reserve_remaining"] >= BTP_TAVILY_DAILY_RESERVE
             )
             item["eligible_for_general_discovery"] = (
-                not payload["exhausted"]
+                outcome == "valid_current_day"
+                and not payload["exhausted"]
                 and payload["count"] < GENERAL_TAVILY_DAILY_LIMIT
             )
             if item["eligible_for_general_discovery"]:
                 item["reason_code"] = ""
-            elif payload["exhausted"]:
+            elif outcome == "ledger_exhausted" or payload["exhausted"]:
                 item["reason_code"] = "provider_key_exhausted"
             else:
                 item["reason_code"] = "general_budget_exhausted"
@@ -365,12 +403,25 @@ def build_restore_preflight_report(
     input_restored = restoration.get("restored_input_count", 0)
     ledger_expected = restoration.get("expected_budget_ledger_count")
     ledger_restored = restoration.get("restored_budget_ledger_count", 0)
-    if restoration.get("ready") is True and (
-        input_expected != input_restored
-        or ledger_expected != ledger_restored
-        or ledger_expected != len(fingerprints)
+    if (
+        isinstance(input_expected, int)
+        and not isinstance(input_expected, bool)
+        and isinstance(input_restored, int)
+        and not isinstance(input_restored, bool)
+        and input_expected != input_restored
     ):
         reasons.append("restored_input_count_mismatch")
+    if (
+        isinstance(ledger_expected, int)
+        and not isinstance(ledger_expected, bool)
+        and isinstance(ledger_restored, int)
+        and not isinstance(ledger_restored, bool)
+        and (
+            ledger_expected != ledger_restored
+            or ledger_expected != len(fingerprints)
+        )
+    ):
+        reasons.append("restored_budget_ledger_count_mismatch")
     for flag in (
         "vault_repository_validated",
         "vault_ref_validated",
@@ -443,6 +494,47 @@ def build_restore_preflight_report(
             "vault_branch_verified": restoration.get("vault_ref_validated") is True,
             "vault_path_verified": checkout_path_verified,
             "vault_branch": "main" if restoration.get("vault_ref_validated") else "",
+            "internal_failure_category": (
+                restoration.get("internal_failure_category")
+                if isinstance(
+                    restoration.get("internal_failure_category"), str,
+                ) and re.fullmatch(
+                    r"[A-Za-z][A-Za-z0-9]{0,63}",
+                    restoration["internal_failure_category"],
+                )
+                else ""
+            ),
+            "key_parse_reason": (
+                restoration.get("key_parse_reason")
+                if isinstance(restoration.get("key_parse_reason"), str)
+                and restoration.get("key_parse_reason") in {
+                    "vault_provider_keys_missing",
+                    "provider_key_file_invalid",
+                    "provider_budget_ledger_collision",
+                }
+                else ""
+            ),
+            "ledger_diagnostics": [
+                {
+                    "fingerprint": item["fingerprint"],
+                    "outcome": item["outcome"],
+                }
+                for item in restoration.get("ledger_diagnostics", [])
+                if isinstance(item, dict)
+                and isinstance(item.get("fingerprint"), str)
+                and re.fullmatch(r"[a-f0-9]{8}", item["fingerprint"])
+                and item.get("outcome") in {
+                    "valid_current_day",
+                    "prior_day_rollover_pending",
+                    "ledger_missing",
+                    "ledger_json_invalid",
+                    "ledger_schema_invalid",
+                    "ledger_date_invalid",
+                    "ledger_future_dated",
+                    "ledger_count_out_of_range",
+                    "ledger_exhausted",
+                }
+            ],
         },
         "provider_budget": {
             "requests_dispatched": 0,
@@ -499,6 +591,64 @@ def _write_report(path: Path, report: dict) -> None:
     )
 
 
+def _write_blocked_discovery_report(
+    path: Path | None,
+    *,
+    restoration: dict,
+    fallback_reason: str,
+) -> None:
+    if path is None:
+        return
+    from app.workflows.discovery_only import blocked_report
+
+    reason = restoration.get("reason_code")
+    if not isinstance(reason, str) or not re.fullmatch(r"[a-z][a-z0-9_]{0,79}", reason):
+        reason = fallback_reason
+    report = blocked_report(reason, phase="input_restore")
+    key_parse_reason = restoration.get("key_parse_reason")
+    report["provider"]["restore_diagnostic_reason"] = (
+        key_parse_reason
+        if isinstance(key_parse_reason, str) and key_parse_reason in {
+            "vault_provider_keys_missing",
+            "provider_key_file_invalid",
+            "provider_budget_ledger_collision",
+        }
+        else ""
+    )
+    for field in (
+        "expected_budget_ledger_count",
+        "restored_budget_ledger_count",
+    ):
+        value = restoration.get(field)
+        if isinstance(value, int) and not isinstance(value, bool) and value >= 0:
+            report["provider"][field] = value
+    allowed_outcomes = {
+        "valid_current_day",
+        "prior_day_rollover_pending",
+        "ledger_missing",
+        "ledger_json_invalid",
+        "ledger_schema_invalid",
+        "ledger_date_invalid",
+        "ledger_future_dated",
+        "ledger_count_out_of_range",
+        "ledger_exhausted",
+    }
+    ledger_diagnostics = restoration.get("ledger_diagnostics")
+    if isinstance(ledger_diagnostics, list):
+        report["provider"]["ledger_diagnostics"] = [
+            {
+                "fingerprint": item["fingerprint"],
+                "outcome": item["outcome"],
+            }
+            for item in ledger_diagnostics
+            if isinstance(item, dict)
+            and isinstance(item.get("fingerprint"), str)
+            and re.fullmatch(r"[a-f0-9]{8}", item["fingerprint"])
+            and item.get("outcome") in allowed_outcomes
+        ]
+    _write_report(path, report)
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--vault", required=True, type=Path)
@@ -507,8 +657,47 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--branch", default="main")
     parser.add_argument("--reservation-path", type=Path)
     parser.add_argument("--report", type=Path)
+    parser.add_argument("--discovery-report", type=Path)
+    parser.add_argument(
+        "--restore-failure-reason",
+        choices=(
+            "vault_credentials_missing",
+            "vault_clone_failed",
+            "vault_sparse_checkout_failed",
+            "vault_checkout_failed",
+            "vault_required_input_missing",
+            "vault_provider_keys_missing",
+            "provider_key_file_invalid",
+            "provider_budget_ledger_collision",
+            "restore_readiness_manifest_invalid",
+        ),
+    )
     args = parser.parse_args(argv)
     status_path = args.workspace / "data" / "discovery_only_inputs_status.json"
+    if args.restore_failure_reason:
+        try:
+            restoration = json.loads(status_path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            restoration = {}
+        restoration.update({
+            "ready": False,
+            "reason_code": args.restore_failure_reason,
+        })
+        _write_status(status_path, restoration)
+        report = build_restore_preflight_report(
+            args.vault,
+            args.workspace,
+            restoration=restoration,
+            reservation_path=args.reservation_path,
+        )
+        _write_blocked_discovery_report(
+            args.discovery_report,
+            restoration=restoration,
+            fallback_reason=args.restore_failure_reason,
+        )
+        if args.report:
+            _write_report(args.report, report)
+        return 1
     try:
         restoration = restore_discovery_inputs(
             args.vault,
@@ -527,9 +716,43 @@ def main(argv: list[str] | None = None) -> int:
             restoration=restoration,
             reservation_path=args.reservation_path,
         )
+        _write_blocked_discovery_report(
+            args.discovery_report,
+            restoration=restoration,
+            fallback_reason=exc.reason_code,
+        )
         if args.report:
             _write_report(args.report, report)
         print(exc.reason_code, file=sys.stderr)
+        return 1
+    except Exception as exc:
+        try:
+            restoration = json.loads(status_path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            restoration = {}
+        exception_class = type(exc).__name__
+        if not re.fullmatch(r"[A-Za-z][A-Za-z0-9]{0,63}", exception_class):
+            exception_class = "Exception"
+        restoration.update({
+            "ready": False,
+            "reason_code": "vault_restore_failed",
+            "internal_failure_category": exception_class,
+        })
+        _write_status(status_path, restoration)
+        report = build_restore_preflight_report(
+            args.vault,
+            args.workspace,
+            restoration=restoration,
+            reservation_path=args.reservation_path,
+        )
+        _write_blocked_discovery_report(
+            args.discovery_report,
+            restoration=restoration,
+            fallback_reason="vault_restore_failed",
+        )
+        if args.report:
+            _write_report(args.report, report)
+        print("vault_restore_failed", file=sys.stderr)
         return 1
     report = build_restore_preflight_report(
         args.vault,
@@ -544,6 +767,11 @@ def main(argv: list[str] | None = None) -> int:
             "reason_code": report["reason_code"],
         })
         _write_status(status_path, failed_status)
+        _write_blocked_discovery_report(
+            args.discovery_report,
+            restoration=failed_status,
+            fallback_reason=report["reason_code"],
+        )
     if args.report:
         _write_report(args.report, report)
     return 0 if report["status"] == "COMPLETED" else 1

@@ -11,6 +11,7 @@ import pytest
 from app.workflows.discovery_only_restore import (
     DiscoveryRestoreError,
     build_restore_preflight_report,
+    main,
     restore_discovery_inputs,
 )
 
@@ -115,16 +116,18 @@ def test_wrong_or_missing_vault_configuration_blocks_restore(
 
 
 @pytest.mark.parametrize(
-    "ledger",
+    ("ledger", "expected_outcome"),
     [
-        None,
-        '{"date":"2026-10-14","count":"six","exhausted":false}',
-        '{"date":"2026-10-15","count":6,"exhausted":false}',
-        '{"date":"2026-10-14","count":21,"exhausted":false}',
+        (None, "ledger_missing"),
+        ("{invalid json", "ledger_json_invalid"),
+        ('{"date":"2026-10-14","count":"six","exhausted":false}', "ledger_schema_invalid"),
+        ('{"date":"not-a-date","count":6,"exhausted":false}', "ledger_date_invalid"),
+        ('{"date":"2026-10-15","count":6,"exhausted":false}', "ledger_future_dated"),
+        ('{"date":"2026-10-14","count":21,"exhausted":false}', "ledger_count_out_of_range"),
     ],
 )
 def test_missing_or_corrupt_durable_budget_ledger_blocks_restore(
-    tmp_path, ledger,
+    tmp_path, ledger, expected_outcome,
 ):
     repository = _vault(tmp_path, ledger=ledger)
     workspace = tmp_path / "workspace"
@@ -145,6 +148,10 @@ def test_missing_or_corrupt_durable_budget_ledger_blocks_restore(
     )
     assert status["ready"] is False
     assert status["reason_code"] == "provider_budget_ledger_missing_or_invalid"
+    assert status["ledger_diagnostics"] == [{
+        "fingerprint": FINGERPRINT,
+        "outcome": expected_outcome,
+    }]
     assert not (workspace / "data" / f"tavily_budget_{FINGERPRINT}.json").exists()
 
 
@@ -200,6 +207,7 @@ def test_valid_private_vault_fixture_restores_without_changing_ledger_balance(
         "btp_reserve_intact": True,
         "eligible_for_general_discovery": True,
         "general_capacity_after_rollover": 0,
+        "outcome": "valid_current_day",
         "reason_code": "",
         "source_ledger_present": True,
         "restored_ledger_present": True,
@@ -376,6 +384,54 @@ def test_restore_preflight_reports_missing_expected_ledger_by_fingerprint(tmp_pa
     assert report["provider_budget"]["per_key"][0]["reason_code"] == (
         "provider_budget_ledger_missing"
     )
+    assert report["provider_budget"]["per_key"][0]["outcome"] == "ledger_missing"
+    assert report["restoration"]["ledger_diagnostics"] == [{
+        "fingerprint": FINGERPRINT,
+        "outcome": "ledger_missing",
+    }]
+
+
+@pytest.mark.parametrize(
+    "reason",
+    [
+        "vault_credentials_missing",
+        "vault_clone_failed",
+        "vault_sparse_checkout_failed",
+        "vault_checkout_failed",
+    ],
+)
+def test_restore_operation_failures_write_blocked_reports(tmp_path, reason):
+    workspace = tmp_path / "workspace"
+    repository = tmp_path / "unavailable-vault"
+    repository.mkdir()
+    restore_report = workspace / "restore-report.json"
+    discovery_report = workspace / "discovery-report.json"
+
+    status = main([
+        "--vault", str(repository),
+        "--workspace", str(workspace),
+        "--origin", ORIGIN,
+        "--branch", "main",
+        "--reservation-path", str(repository),
+        "--report", str(restore_report),
+        "--discovery-report", str(discovery_report),
+        "--restore-failure-reason", reason,
+    ])
+
+    restore_payload = json.loads(restore_report.read_text(encoding="utf-8"))
+    discovery_payload = json.loads(discovery_report.read_text(encoding="utf-8"))
+    manifest = json.loads(
+        (workspace / "data" / "discovery_only_inputs_status.json")
+        .read_text(encoding="utf-8"),
+    )
+    assert status == 1
+    assert restore_payload["status"] == "BLOCKED"
+    assert restore_payload["reason_code"] == reason
+    assert discovery_payload["status"] == "BLOCKED"
+    assert discovery_payload["phase"] == "input_restore"
+    assert discovery_payload["reason_code"] == reason
+    assert discovery_payload["provider"]["api_attempts"] == 0
+    assert manifest["ready"] is False
 
 
 def test_restore_preflight_rejects_mismatched_reservation_checkout(tmp_path):
@@ -399,3 +455,33 @@ def test_restore_preflight_rejects_mismatched_reservation_checkout(tmp_path):
     assert report["status"] == "BLOCKED"
     assert "vault_repository_path_mismatch" in report["reason_codes"]
     assert report["restoration"]["vault_path_verified"] is False
+
+
+def test_exhausted_ledger_is_diagnosed_without_rewriting_it(tmp_path):
+    exhausted = '{"date":"2026-10-14","count":20,"exhausted":true}'
+    repository = _vault(tmp_path, ledger=exhausted)
+    workspace = tmp_path / "workspace"
+    source = repository / "state" / f"tavily_budget_{FINGERPRINT}.json"
+    before = source.read_bytes()
+
+    status = restore_discovery_inputs(
+        repository,
+        workspace,
+        expected_origin=ORIGIN,
+        today=date(2026, 10, 14),
+    )
+    report = build_restore_preflight_report(
+        repository,
+        workspace,
+        restoration=status,
+        reservation_path=repository,
+        today=date(2026, 10, 14),
+    )
+
+    assert status["ledger_diagnostics"] == [{
+        "fingerprint": FINGERPRINT,
+        "outcome": "ledger_exhausted",
+    }]
+    assert report["status"] == "BLOCKED"
+    assert report["provider_budget"]["per_key"][0]["outcome"] == "ledger_exhausted"
+    assert source.read_bytes() == before

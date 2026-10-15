@@ -74,9 +74,36 @@ def validate_discovery_input_status(status_path) -> str:
         or key_count < 1
         or not isinstance(ledger_count, int)
         or isinstance(ledger_count, bool)
-        or ledger_count != key_count
     ):
         return "discovery_input_status_invalid"
+    if ledger_count != key_count:
+        return "restored_budget_ledger_count_mismatch"
+    expected_ledgers = status.get("expected_budget_ledger_count")
+    restored_ledgers = status.get("restored_budget_ledger_count")
+    if any(
+        not isinstance(value, int) or isinstance(value, bool) or value < 0
+        for value in (expected_ledgers, restored_ledgers)
+    ):
+        return "discovery_input_status_invalid"
+    if (
+        expected_ledgers is not None
+        and restored_ledgers is not None
+        and expected_ledgers != restored_ledgers
+    ):
+        return "restored_budget_ledger_count_mismatch"
+    expected_inputs = status.get("expected_input_count")
+    restored_inputs = status.get("restored_input_count")
+    if any(
+        not isinstance(value, int) or isinstance(value, bool) or value < 0
+        for value in (expected_inputs, restored_inputs)
+    ):
+        return "discovery_input_status_invalid"
+    if (
+        expected_inputs is not None
+        and restored_inputs is not None
+        and expected_inputs != restored_inputs
+    ):
+        return "restored_input_count_mismatch"
     commit = status.get("vault_commit")
     checkout = status.get("vault_checkout_path")
     if (
@@ -282,6 +309,10 @@ def blocked_report(
             "rate_limit_errors": 0,
             "budget_deferred_queries": 0,
             "daily_budget": None,
+            "restore_diagnostic_reason": "",
+            "ledger_diagnostics": [],
+            "expected_budget_ledger_count": None,
+            "restored_budget_ledger_count": None,
         },
         "eligibility": "NOT_EVALUATED",
         "side_effects": _no_outbound_side_effects(),

@@ -133,6 +133,10 @@ def _prepare_cli_inputs(root: Path, database_path: Path) -> None:
             "provider_budget_ledgers_restored": True,
             "provider_key_count": 1,
             "provider_budget_ledger_count": 1,
+            "expected_input_count": 4,
+            "restored_input_count": 4,
+            "expected_budget_ledger_count": 1,
+            "restored_budget_ledger_count": 1,
             "provider_cache_restored": False,
         }),
         encoding="utf-8",
@@ -300,6 +304,42 @@ def test_absent_or_invalid_input_manifest_blocks_before_discovery(
 
 
 @pytest.mark.parametrize(
+    ("field", "value", "expected_reason"),
+    [
+        ("restored_input_count", 3, "restored_input_count_mismatch"),
+        (
+            "restored_budget_ledger_count",
+            0,
+            "restored_budget_ledger_count_mismatch",
+        ),
+    ],
+)
+def test_incomplete_restore_counts_block_before_discovery(
+    tmp_path, monkeypatch, field, value, expected_reason,
+):
+    root = tmp_path / "repo"
+    database_path = root / "data" / "agent.db"
+    _prepare_cli_inputs(root, database_path)
+    status_path = root / "data" / "discovery_only_inputs_status.json"
+    status = json.loads(status_path.read_text(encoding="utf-8"))
+    status[field] = value
+    status_path.write_text(json.dumps(status), encoding="utf-8")
+    dispatched = []
+
+    async def forbidden_discovery(*_args, **_kwargs):
+        dispatched.append(True)
+        return DiscoveryReport()
+
+    report = _run_discovery_cli(
+        monkeypatch, root, database_path, run_discovery=forbidden_discovery,
+    )
+
+    assert report["status"] == "BLOCKED"
+    assert report["reason_code"] == expected_reason
+    assert dispatched == []
+
+
+@pytest.mark.parametrize(
     "reason",
     [
         "vault_repository_configuration_missing",
@@ -337,6 +377,48 @@ def test_restore_failure_manifest_blocks_before_discovery(
 
     assert report["status"] == "BLOCKED"
     assert report["reason_code"] == reason
+    assert dispatched == []
+
+
+def test_blocked_restore_report_exposes_only_safe_ledger_diagnostics(
+    tmp_path, monkeypatch,
+):
+    from app.connectors.tavily_resilience import key_fingerprint
+
+    root = tmp_path / "repo"
+    database_path = root / "data" / "agent.db"
+    _prepare_cli_inputs(root, database_path)
+    key = "fixture-provider-secret"
+    fingerprint = key_fingerprint(key)
+    status_path = root / "data" / "discovery_only_inputs_status.json"
+    status = json.loads(status_path.read_text(encoding="utf-8"))
+    status.update({
+        "ready": False,
+        "reason_code": "provider_budget_ledger_missing_or_invalid",
+        "ledger_diagnostics": [{
+            "fingerprint": fingerprint,
+            "outcome": "ledger_json_invalid",
+        }],
+    })
+    status_path.write_text(json.dumps(status), encoding="utf-8")
+    dispatched = []
+
+    async def forbidden_discovery(*_args, **_kwargs):
+        dispatched.append(True)
+        return DiscoveryReport()
+
+    report = _run_discovery_cli(
+        monkeypatch, root, database_path, run_discovery=forbidden_discovery,
+    )
+
+    assert report["status"] == "BLOCKED"
+    assert report["phase"] == "input_restore"
+    assert report["provider"]["ledger_diagnostics"] == [{
+        "fingerprint": fingerprint,
+        "outcome": "ledger_json_invalid",
+    }]
+    assert key not in json.dumps(report)
+    assert str(root) not in json.dumps(report)
     assert dispatched == []
 
 
@@ -848,6 +930,22 @@ def test_workflow_discovery_task_skips_outbound_vault_and_full_pipeline_steps():
     ]
 
     restore = steps["Restore bounded discovery inputs only"]
+    assert restore["id"] == "discovery_restore"
+    assert "set -euo pipefail" in restore["run"]
+    assert "set +e" not in restore["run"]
+    assert "exit 0" not in restore["run"]
+    for reason in (
+        "vault_credentials_missing",
+        "vault_clone_failed",
+        "vault_sparse_checkout_failed",
+        "vault_checkout_failed",
+        "provider_key_file_invalid",
+        "vault_provider_keys_missing",
+    ):
+        assert reason in restore["run"]
+    assert 'echo "ready=false" >> "$GITHUB_OUTPUT"' in restore["run"]
+    assert "steps.discovery_restore.outcome == 'success'" in run_step["if"]
+    assert "steps.discovery_restore.outputs.ready == 'true'" in run_step["if"]
     assert "state/agent.db" in restore["run"]
     assert "candidate/profile.yaml" in restore["run"]
     assert "candidate/preferences.yaml" in restore["run"]
@@ -858,6 +956,14 @@ def test_workflow_discovery_task_skips_outbound_vault_and_full_pipeline_steps():
     assert "secrets/." not in restore["run"]
     assert "candidate/cv" not in restore["run"]
     assert "wca-history-vault" not in restore["run"]
+    assert steps["Upload sanitized discovery-only report"]["if"].startswith(
+        "${{ always()"
+    )
+    assert steps["Upload sanitized discovery-only report"]["with"][
+        "if-no-files-found"
+    ] == "error"
+    assert "Remove private discovery restore material" in steps
+    assert "always()" in steps["Remove private discovery restore material"]["if"]
 
     persist_condition = steps["Persist state back to vault"]["if"]
     assert "inputs.task != 'discovery_only'" in persist_condition
@@ -879,6 +985,19 @@ def test_restore_only_workflow_job_cannot_dispatch_discovery_or_outbound_actions
     restore_steps = {step.get("name"): step for step in restore["steps"]}
     assert "inputs.task == 'discovery_restore_preflight'" in restore["if"]
     assert "TAVILY_BUDGET_VAULT_REPO" not in json.dumps(restore)
+    restore_step = restore_steps[
+        "Restore and validate private-vault budget (read-only)"
+    ]
+    assert restore_step["id"] == "restore_only_preflight"
+    assert "set -euo pipefail" in restore_step["run"]
+    assert "exit 0" not in restore_step["run"]
+    assert "vault_clone_failed" in restore_step["run"]
+    assert "vault_sparse_checkout_failed" in restore_step["run"]
+    assert "vault_checkout_failed" in restore_step["run"]
+    assert restore_steps["Upload sanitized restore-only report"]["if"].startswith(
+        "${{ always()"
+    )
+    assert "Remove private restore material" in restore_steps
     assert "VAULT_TOKEN" in restore_steps[
         "Restore and validate private-vault budget (read-only)"
     ]["env"]
