@@ -1291,3 +1291,28 @@ Publication and post-publication check:
   outbound actions, BTP actions, production candidate writes, and the normal
   pipeline were all **0**. The preflight did not authorize discovery, and no
   live discovery was dispatched.
+
+## Phase 2.8d post-rollover restore-only validation
+
+After UTC rollover, exactly one restore-only preflight ran on `main`:
+[run 38657433652](https://github.com/dubbishpsychic0000/ai-job-finder/actions/runs/38657433652).
+The workflow and report upload completed successfully; the normal pipeline
+job was skipped. The sanitized report records UTC day `2026-10-15`, verifies
+the configured vault origin, `main` branch, and exact reservation checkout
+path, and validates **4/4 inputs** and **7/7 durable ledgers**.
+
+All seven ledgers are correctly classified as `prior_utc_day` and
+`utc_day_rollover_pending_durable_reservation`; none was manually reset,
+rewritten, or reconstructed. Their historical counts were 20, 20, 20, 18, 17,
+17, and 17. The report therefore shows **0** already-current-day capacity and
+**119** general attempts of conditional capacity after durable rollover (**17
+per key**). The BTP reserve validation passed, preserving three requests per
+key. The restore-only gate returned `COMPLETED` / `general_capacity_available`,
+so it authorizes consideration of a separate bounded discovery run only; each
+provider request still requires a successful durable reservation under the
+general cap. No discovery was automatically chained.
+
+The preflight dispatched **0** Tavily requests and created **0** reservations.
+Applications, drafts, emails, WhatsApp messages, BTP actions, and production
+candidate writes were all **0**. Only the sanitized report artifact was
+uploaded.
