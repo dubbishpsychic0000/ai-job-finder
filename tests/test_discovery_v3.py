@@ -162,7 +162,7 @@ def test_classification_handles_run_38664200891_false_positive_shapes():
         (
             "Job Vacancy: Apprentice Civil Engineering Technician",
             "https://teacakeclub.org/2026/08/19/job-vacancy-apprentice-civil-engineering-technician",
-            ("INDIVIDUAL_VACANCY", "VACANCY_UNVERIFIED", "specific_listing_url_unverified"),
+            ("UNKNOWN", "RESEARCH_REQUIRED", "unsupported_vacancy_source"),
         ),
         (
             "Civil Engineer Job Description - Apply Now",

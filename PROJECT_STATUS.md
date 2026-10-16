@@ -2006,3 +2006,101 @@ and all downstream application paths. It made **8 authorized private-vault
 budget-ledger writes** for reservations; production candidate/opportunity
 records were not changed. Discovery-result persistence was limited to the
 ephemeral run database. No retry or second evaluation was launched.
+
+## Phase 2.8n offline allocation and source-evidence audit
+
+This phase is offline implementation, regression testing, and documentation
+only. It does not include a new restore, reservation, provider/portal request,
+live discovery evaluation, application action, or production candidate or
+opportunity write. The audited reference remains Phase 2.8m run
+[38910729695](https://github.com/actions/runs/38910729695).
+
+### Allocation root cause and correction
+
+The 2.8m run's shared Tavily run cap was enforced globally, while query
+combinations were scheduled per source and source connectors ran in order.
+Country intent was therefore not protected at reservation time: earlier
+Morocco requests used seven of eight attempts, France used one, and Belgium
+used none. The 12 plan combinations, source/query requests, cached responses,
+Emploi-Public page requests, and Tavily HTTP attempts are separate units and
+must not be conflated.
+
+The bounded discovery workflow now gives the shared attempt budget explicit
+country limits of **6 Morocco, 1 France, and 1 Belgium**, in addition to the
+existing **8 total Tavily-attempt** and **12 plan-combination** limits.
+Country capacity is charged only after the per-request durable general-budget
+reservation succeeds, immediately before provider dispatch. A Morocco request
+cannot consume France's or Belgium's allocation. Cache hits and per-key
+budget skips do not consume country or run attempt capacity; provider retries
+are separately counted as actual attempts. Reservation failures continue to
+block dispatch. Morocco-only source scopes remain Morocco-only, while broad
+web and official-ATS scopes can serve the international plan combinations.
+If a country has no eligible uncached source request or its reservation fails,
+the slot stays unused and the report gives the reason; country allocation
+does not override daily budgets or use the protected BTP reserve.
+
+Sanitized reports now show Tavily planned, eligible, attempted, cached,
+deferred, failed, and unavailable source/query counts by country and source,
+plus country targets, actual reserved attempts, remaining slots, target
+achievement, and unfilled-slot reasons. Actual provider-attempt counts—not
+the target—determine whether the country allocation was achieved. The
+robots-aware Emploi-Public adapter is kept out of Tavily attempt totals and
+retains its separate portal telemetry. Query traces continue to include safe
+normalized query text, stable intent/combination IDs, country, language,
+source, outcome, and reason; sensitive profile terms and credentials remain
+redacted. An `eligible` trace row means the source/country applied, the source
+was configured, the query was uncached, and general plus country capacity was
+available when the report was initialized; runtime deferrals still record the
+later reservation or cap outcome. These report additions use schema version 6.
+
+### Unsupported candidate disposition
+
+The 2.8m record `record_5c2f94d85b303720` is a search result with a
+vacancy-shaped title at `teacakeclub.org`, not a supported official employer
+or ATS record. The artifact does not establish a named employer, actual
+location, posting-specific identity, current status, publication date,
+deadline, or application route. Its `unsupported_detail_verification_source`
+reason reflects that the detail-verification adapter could not verify this
+host; it does not prove that all seven candidates in the earlier 2.8j
+evidence-gap audit came from supported ATS sources. No page was fetched and
+the URL's date-shaped path is not treated as date evidence.
+
+The classification rule now keeps a generic `Job Vacancy:` search result
+from an unsupported host with no identifiable employer as
+`UNKNOWN` / `RESEARCH_REQUIRED` (`unsupported_vacancy_source`), rather than
+counting it as an individual-vacancy candidate. It remains a research lead,
+not an explicitly closed, withdrawn, expired, or open vacancy. Trusted
+official sources could corroborate or refute its claims only in a later,
+separately authorized discovery evaluation; no source trust or verification
+gate was broadened.
+
+### Next-evaluation plan and limits
+
+For a separately authorized future evaluation, retain at most 12 search-plan
+combinations and 8 Tavily provider attempts, with country attempt allocations
+of 6 Morocco, 1 France, and 1 Belgium. Favor Moroccan French/Arabic
+civil-engineering vacancies and official public competitions, using broad
+and official-ATS coverage where relevant and Morocco-only sources only for
+Morocco. Keep the France and Belgium slots explicit, using applicable
+internationally eligible sources and appropriate French/Dutch/English plan
+queries. Cached combinations should be recorded but followed by another
+eligible uncached query in that country's remaining allocation when
+available. Do not silently shift an inapplicable, unavailable, cached-only,
+budget-skipped, or failed country's slot to another country. Each live
+provider attempt still requires its own successful durable general-budget
+reservation. Emploi-Public portal requests remain separately counted under
+its current robots-aware limits.
+
+No live run is authorized by this audit or by an allocation-ready result.
+Any later evaluation requires fresh readiness verification and separate
+explicit authorization.
+
+### Validation
+
+- Focused allocation, classification, sanitized-report, and durable-reservation
+  regression tests: **69 passed**.
+- Additional actual Tavily-dispatch cap and bounded-workflow allocation-wiring
+  tests: **passed**.
+- Full test suite: **570 passed, 1 skipped**.
+- Ruff on all changed Python files, Python compilation, parsing of all
+  **8 workflow/config YAML files**, and `git diff --check`: **passed**.

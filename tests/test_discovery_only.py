@@ -53,6 +53,11 @@ def test_bounded_discovery_invokes_discovery_only_with_fixed_caps(monkeypatch):
     assert seen["max_queries_override"] == 12
     assert seen["max_api_attempts_override"] == 8
     assert seen["max_search_combinations"] == 12
+    assert seen["country_attempt_limits"] == {
+        "Morocco": 6,
+        "France": 1,
+        "Belgium": 1,
+    }
     assert all(not seen["config"].discovery[name] for name in (
         "website_research", "company_universe_discovery",
         "social_signal_discovery", "vocab_llm",
@@ -623,7 +628,7 @@ def test_discovery_report_is_sanitized_and_distinguishes_cached_new_listing():
     serialized = json.dumps(output, ensure_ascii=False)
     opportunity = output["opportunities"][0]
 
-    assert output["schema_version"] == 5
+    assert output["schema_version"] == 6
     assert output["counts"]["unique_new_opportunities"] == 0
     assert output["counts"]["unique_new_candidate_vacancies"] == 1
     assert output["counts"]["unique_new_discovery_records"] == 1
@@ -817,6 +822,140 @@ def test_query_trace_is_reproducible_without_exposing_profile_or_credentials():
         "employer": True,
         "description_sufficient": False,
     }
+
+
+def test_sanitized_report_summarizes_country_allocations_and_failures():
+    report = DiscoveryReport(
+        plan_combinations=[{
+            "plan_index": 0,
+            "query": "civil engineer",
+            "intent": "role",
+            "country": "France",
+            "language": "fr",
+        }, {
+            "plan_index": 1,
+            "query": "civil engineer Belgium",
+            "intent": "role",
+            "country": "Belgium",
+            "language": "fr",
+        }, {
+            "plan_index": 2,
+            "query": "technicien génie civil",
+            "intent": "role",
+            "country": "Morocco",
+            "language": "fr",
+        }],
+        source_reports=[
+            {
+                "name": "tavily_web_search",
+                "kind": "tavily",
+                "health": "partial",
+                "query_trace": [{
+                    "plan_index": 0,
+                    "query": "civil engineer",
+                    "intent": "role",
+                    "country": "France",
+                    "language": "fr",
+                    "request_status": "failed",
+                    "reason_code": "provider_request_failed",
+                    "result_state": "degraded",
+                    "provider_attempts": 1,
+                    "allocation_eligible": True,
+                    "source_available": True,
+                    "cache_available": False,
+                }],
+            },
+            {
+                "name": "morocco-board",
+                "kind": "tavily",
+                "health": "unconfigured",
+                "query_trace": [],
+                "inapplicable_country_queries": {
+                    "France": 1,
+                    "Belgium": 1,
+                },
+            },
+            {
+                "name": "tavily_unavailable",
+                "kind": "tavily",
+                "health": "unconfigured",
+                "query_trace": [{
+                    "plan_index": 2,
+                    "query": "technicien génie civil",
+                    "intent": "role",
+                    "country": "Morocco",
+                    "language": "fr",
+                    "request_status": "failed",
+                    "reason_code": "provider_keys_unavailable",
+                    "result_state": "unconfigured",
+                    "provider_attempts": 0,
+                    "allocation_eligible": False,
+                    "source_available": False,
+                    "cache_available": False,
+                }],
+            },
+        ],
+        api_request_budget={
+            "limit": 8,
+            "attempts": 1,
+            "successes": 0,
+            "failed_attempts": 1,
+            "retry_attempts": 0,
+            "remaining": 7,
+            "country_attempt_allocation": {
+                "morocco": {"limit": 6, "attempts": 0, "remaining": 6},
+                "france": {"limit": 1, "attempts": 1, "remaining": 0},
+                "belgium": {"limit": 1, "attempts": 0, "remaining": 1},
+            },
+        },
+    )
+
+    output = discovery_only.build_sanitized_report(
+        report,
+        [],
+        AgentConfig(),
+        {"limit_per_key": 17, "remaining_by_key": [16]},
+    )
+
+    allocation = output["allocation"]
+    assert allocation["total_provider_attempts_within_limit"] is True
+    assert allocation["international_reservations_respected"] is True
+    assert allocation["country_attempts"]["France"] == {
+        "target": 1,
+        "provider_attempts": 1,
+        "remaining": 0,
+        "target_achieved": True,
+        "reservation_respected": True,
+        "unfilled_reason": "",
+    }
+    assert allocation["country_attempts"]["Belgium"]["unfilled_reason"] == (
+        "no_applicable_source_for_country"
+    )
+    assert allocation["country_attempts"]["Morocco"]["unfilled_reason"] == (
+        "provider_keys_unavailable"
+    )
+    assert allocation["planned_eligible_attempts_by_country_and_source"][
+        "France"
+    ]["tavily_web_search"] == {
+        "planned": 1,
+        "eligible": 1,
+        "source_unavailable": 0,
+        "attempted": 1,
+        "provider_attempts": 1,
+        "cached": 0,
+        "deferred": 0,
+        "failed": 1,
+        "pending": 0,
+        "reason_counts": {"provider_request_failed": 1},
+    }
+    assert output["sources"][1]["status"] == "unconfigured"
+    assert output["sources"][1]["inapplicable_country_queries"] == {
+        "France": 1,
+        "Belgium": 1,
+    }
+    assert allocation["planned_eligible_attempts_by_country_and_source"][
+        "Morocco"
+    ]["tavily_unavailable"]["source_unavailable"] == 1
 
 
 def test_sanitized_report_can_serialize_new_jobs_after_session_closes(db):

@@ -406,6 +406,7 @@ def _allocate_source_queries(
     rotation_offset: int | None = None,
     max_api_attempts: int | None = None,
     deferral_reasons: list[dict[str, int]] | None = None,
+    country_attempt_limits: dict[str, int] | None = None,
 ) -> tuple[list[list[dict]], list[int], list[int]]:
     """Allocate applicable source requests against the shared Tavily budget.
 
@@ -453,6 +454,42 @@ def _allocate_source_queries(
                 ):
                     stale_by_source[source_index] += 1
         uncached_by_source[source_index] = uncached_indices
+
+    if country_attempt_limits is not None:
+        allowed_countries = {
+            str(country).casefold() for country in country_attempt_limits
+        }
+        for source_index, (source_cfg, _connector) in enumerate(connectors):
+            combos = plan[:max_requests_per_source] if max_requests_per_source else plan
+            target_combos = [
+                combo for combo in combos
+                if _source_applies_to_country(source_cfg, combo)
+                and str(
+                    combo.get("country") or combo.get("location") or "",
+                ).casefold() in allowed_countries
+            ]
+            if source_index in uncached_by_source:
+                cached_indices = {
+                    index for index, combo in enumerate(combos)
+                    if _source_applies_to_country(source_cfg, combo)
+                    and str(
+                        combo.get("country") or combo.get("location") or "",
+                    ).casefold() in allowed_countries
+                    and index not in uncached_by_source[source_index]
+                }
+                uncached_indices = set(uncached_by_source[source_index])
+                scheduled[source_index] = [
+                    combo for index, combo in enumerate(combos)
+                    if index in cached_indices or (
+                        index in uncached_indices
+                        and str(
+                            combo.get("country") or combo.get("location") or "",
+                        ).casefold() in allowed_countries
+                    )
+                ]
+            else:
+                scheduled[source_index] = target_combos
+        return scheduled, deferred_by_source, stale_by_source
 
     if not budgeted_sources:
         return scheduled, deferred_by_source, stale_by_source
@@ -647,7 +684,7 @@ def _allocate_source_queries(
     return scheduled, deferred_by_source, stale_by_source
 
 
-def _remaining_tavily_requests(connector) -> int:
+def _remaining_tavily_requests(connector, country: str | None = None) -> int:
     budgets = {}
     for key in getattr(connector, "keys", []):
         budget = getattr(key, "budget", None)
@@ -656,7 +693,7 @@ def _remaining_tavily_requests(connector) -> int:
     remaining = sum(budget.remaining() for budget in budgets.values())
     attempt_budget = getattr(connector, "attempt_budget", None)
     if attempt_budget is not None:
-        remaining = min(remaining, attempt_budget.remaining())
+        remaining = min(remaining, attempt_budget.remaining(country))
     return remaining
 
 
@@ -965,6 +1002,8 @@ def _source_query_trace(
     *,
     max_requests_per_source: int,
     allocation_reason: str,
+    country_attempt_limits: dict[str, int] | None = None,
+    connector=None,
 ) -> list[dict]:
     """Describe each applicable source/plan request and its allocation state."""
     plan_limit = max_requests_per_source or len(plan)
@@ -979,7 +1018,19 @@ def _source_query_trace(
         plan_index = int(combo["_plan_index"])
         if not _source_applies_to_country(source_cfg, combo):
             continue
-        if plan_index in scheduled_indices:
+        country = str(
+            combo.get("country") or combo.get("location") or "",
+        )
+        country_in_allocation = (
+            country_attempt_limits is None
+            or country.casefold() in {
+                str(value).casefold() for value in country_attempt_limits
+            }
+        )
+        if not country_in_allocation:
+            request_status = "deferred"
+            reason_code = "country_not_in_allocation"
+        elif plan_index in scheduled_indices:
             request_status = "pending"
             reason_code = ""
         elif plan_index in allocated_indices:
@@ -988,16 +1039,39 @@ def _source_query_trace(
         else:
             request_status = "deferred"
             reason_code = allocation_reason or "allocation_deferred"
+        cache_check = getattr(connector, "has_cached_result", None)
+        cache_available = bool(
+            callable(cache_check)
+            and cache_check(combo["query"], combo["location"])
+        )
+        source_available = (
+            bool(getattr(connector, "keys", []))
+            if source_cfg.get("kind") == "tavily"
+            else connector is not None
+        )
         trace.append({
             "plan_index": plan_index,
             "query": str(combo.get("query") or ""),
             "intent": str(combo.get("intent") or "unknown"),
-            "country": str(combo.get("country") or combo.get("location") or ""),
+            "country": country,
             "language": str(combo.get("lang") or ""),
             "request_status": request_status,
             "reason_code": reason_code,
             "result_state": "",
             "provider_attempts": 0,
+            "allocation_eligible": (
+                country_in_allocation
+                and source_available
+                and not cache_available
+                and (
+                    source_cfg.get("kind") != "tavily"
+                    or _remaining_tavily_requests(
+                        connector, country,
+                    ) > 0
+                )
+            ),
+            "source_available": source_available,
+            "cache_available": cache_available,
         })
     for combo in plan[plan_limit:]:
         if _source_applies_to_country(source_cfg, combo):
@@ -1011,6 +1085,13 @@ def _source_query_trace(
                 "reason_code": "source_request_cap",
                 "result_state": "",
                 "provider_attempts": 0,
+                "allocation_eligible": False,
+                "source_available": bool(
+                    getattr(connector, "keys", [])
+                    if source_cfg.get("kind") == "tavily"
+                    else connector is not None
+                ),
+                "cache_available": False,
             })
     return trace
 
@@ -1031,7 +1112,15 @@ def _query_outcome_state(
             return "failed", error_code
         return "attempted", ""
     reason = error_code or deferred_reason
-    if "budget" in reason or "ledger" in reason:
+    if any(
+        token in reason
+        for token in (
+            "budget",
+            "ledger",
+            "country_allocation_cap_exhausted",
+            "country_not_in_attempt_allocation",
+        )
+    ):
         return "deferred", reason
     if status in {"degraded", "unconfigured", "blocked"} or error_code:
         return "failed", error_code
@@ -1054,6 +1143,7 @@ async def run_discovery(session: Session, config: AgentConfig, prefs: Preference
                         max_queries_override: int | None = None,
                         max_api_attempts_override: int | None = None,
                         max_search_combinations: int | None = None,
+                        country_attempt_limits: dict[str, int] | None = None,
                         budget_reserver=None,
                         budget_exhauster=None) -> DiscoveryReport:
     report = DiscoveryReport()
@@ -1063,7 +1153,10 @@ async def run_discovery(session: Session, config: AgentConfig, prefs: Preference
     )
     if max_api_attempts_override is not None:
         max_api_attempts = min(max_api_attempts, max(0, int(max_api_attempts_override)))
-    api_attempt_budget = ApiAttemptBudget(max_api_attempts)
+    api_attempt_budget = ApiAttemptBudget(
+        max_api_attempts,
+        country_limits=country_attempt_limits,
+    )
     max_per_country = int(discovery_cfg.get(
         "max_per_country", config.search_plan.get("max_combinations_per_country", 3)))
     max_queries = int(discovery_cfg.get("max_queries_per_run", 40))
@@ -1179,6 +1272,7 @@ async def run_discovery(session: Session, config: AgentConfig, prefs: Preference
         max_requests,
         max_api_attempts=max_api_attempts,
         deferral_reasons=allocation_deferred_reasons,
+        country_attempt_limits=country_attempt_limits,
     )
     run_budget_deferred = [0] * len(allocated_queries)
     scheduled_queries = allocated_queries
@@ -1339,6 +1433,8 @@ async def run_discovery(session: Session, config: AgentConfig, prefs: Preference
                 scheduled_queries[source_index],
                 max_requests_per_source=max_requests,
                 allocation_reason=allocation_reason,
+                country_attempt_limits=country_attempt_limits,
+                connector=connector,
             ),
             "verification_evidence": [],
             "api_attempts": 0,
@@ -1803,7 +1899,18 @@ async def run_discovery(session: Session, config: AgentConfig, prefs: Preference
                                    relevant_jobs=combo_new)
             return len(processed)
 
-        async def search(combo, _connector=connector):
+        async def search(combo, _connector=connector, _source_cfg=source_cfg):
+            if (
+                country_attempt_limits is not None
+                and _source_cfg.get("kind") == "tavily"
+            ):
+                return await _connector.search(
+                    combo["query"],
+                    combo["location"],
+                    country=str(
+                        combo.get("country") or combo.get("location") or "",
+                    ),
+                )
             return await _connector.search(combo["query"], combo["location"])
 
         def record_query_coverage(combo, _source_report=source_report) -> None:
@@ -1985,7 +2092,9 @@ async def run_discovery(session: Session, config: AgentConfig, prefs: Preference
                 trace_reason if trace_status == "deferred" else ""
             )
             if runtime_defer_reason and (
-                "budget" in runtime_defer_reason or "ledger" in runtime_defer_reason
+                "budget" in runtime_defer_reason
+                or "ledger" in runtime_defer_reason
+                or "allocation" in runtime_defer_reason
             ):
                 deferred_reasons = source["queries_deferred_by_reason"]
                 deferred_reasons[runtime_defer_reason] = (
@@ -2007,10 +2116,7 @@ async def run_discovery(session: Session, config: AgentConfig, prefs: Preference
                 if origin == "cache":
                     source["cached_empty_results"] += 1
             if status in {"degraded", "unconfigured", "blocked"}:
-                if error_code in {
-                    "daily_request_budget_exhausted",
-                    "run_api_attempt_budget_exhausted",
-                } and not getattr(_connector, "last_call_attempts", 0):
+                if trace_status == "deferred" and provider_attempts == 0:
                     source["queries_budget_deferred"] += 1
                 else:
                     source["queries_failed"] += 1
@@ -2050,7 +2156,10 @@ async def run_discovery(session: Session, config: AgentConfig, prefs: Preference
                         and not connector.has_cached_result(
                             combo["query"], combo["location"],
                         )
-                        and _remaining_tavily_requests(connector) <= 0
+                        and _remaining_tavily_requests(
+                            connector,
+                            str(combo.get("country") or combo.get("location") or ""),
+                        ) <= 0
                     ):
                         ledger_unavailable = any(
                             getattr(getattr(key, "budget", None), "_ledger_error", False)
@@ -2066,12 +2175,23 @@ async def run_discovery(session: Session, config: AgentConfig, prefs: Preference
                         else:
                             source_report["queries_budget_deferred"] += 1
                             source_report["rate_status"] = "limited"
-                            reason = (
-                                "run_attempt_cap"
-                                if getattr(connector, "attempt_budget", None)
-                                and connector.attempt_budget.remaining() <= 0
-                                else "daily_budget_exhausted"
+                            attempt_budget = getattr(
+                                connector, "attempt_budget", None,
                             )
+                            country = str(
+                                combo.get("country") or combo.get("location") or "",
+                            )
+                            if (
+                                country_attempt_limits is not None
+                                and attempt_budget is not None
+                                and attempt_budget.remaining(country) <= 0
+                                and attempt_budget.remaining() > 0
+                            ):
+                                reason = "country_allocation_cap_exhausted"
+                            elif attempt_budget is not None and attempt_budget.remaining() <= 0:
+                                reason = "run_attempt_cap"
+                            else:
+                                reason = "daily_budget_exhausted"
                             deferred_reasons = source_report[
                                 "queries_deferred_by_reason"
                             ]

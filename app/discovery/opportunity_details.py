@@ -220,6 +220,30 @@ def classify_entity(opportunity) -> tuple[str, str, str]:
         return "JOB_BOARD_CATEGORY", "RESEARCH_REQUIRED", "job_category_page"
 
     if re.search(r"\bjob vacancy\s*:", title, re.I):
+        company = str(getattr(opportunity, "company", "") or "").strip()
+        has_employer = company.casefold() not in {
+            "",
+            "unknown",
+            "not specified",
+            "n/a",
+        }
+        recognized_listing_host = any(
+            host == domain or host.endswith(f".{domain}")
+            for domain in (
+                *(domain for values in _DIRECT_ATS_DOMAINS.values() for domain in values),
+            )
+        )
+        if (
+            getattr(opportunity, "effective_source_type", lambda: "")()
+            in {"search_engine", "aggregator"}
+            and not recognized_listing_host
+            and not has_employer
+        ):
+            return (
+                "UNKNOWN",
+                "RESEARCH_REQUIRED",
+                "unsupported_vacancy_source",
+            )
         return (
             "INDIVIDUAL_VACANCY",
             "VACANCY_UNVERIFIED",

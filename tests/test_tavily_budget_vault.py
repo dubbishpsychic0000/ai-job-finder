@@ -144,7 +144,10 @@ def test_failed_durable_reservation_sends_no_provider_request(tmp_path, monkeypa
         TavilyKey,
     )
 
-    run_budget = ApiAttemptBudget(8)
+    run_budget = ApiAttemptBudget(
+        8,
+        country_limits={"Morocco": 6, "France": 1, "Belgium": 1},
+    )
     source = ResilientTavily(
         keys=[TavilyKey("key", budget, key_fingerprint("key"))],
         cache=TavilyCache(tmp_path / "cache.json"),
@@ -153,10 +156,16 @@ def test_failed_durable_reservation_sends_no_provider_request(tmp_path, monkeypa
 
     import asyncio
 
-    assert asyncio.run(source.search("civil", "Morocco")) == []
+    assert asyncio.run(source.search(
+        "civil", "Morocco", country="Morocco",
+    )) == []
     assert requests == []
     assert source.last_error_code == "provider_budget_persistence_unavailable"
     assert run_budget.as_dict()["attempts"] == 0
+    assert (
+        run_budget.as_dict()["country_attempt_allocation"]["morocco"]["attempts"]
+        == 0
+    )
 
 
 def test_malformed_durable_reservation_response_fails_closed(tmp_path, monkeypatch):

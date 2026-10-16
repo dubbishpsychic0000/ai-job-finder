@@ -442,29 +442,70 @@ class DailyBudget:
 class ApiAttemptBudget:
     """Thread-safe aggregate cap shared by all Tavily connectors in one run."""
 
-    def __init__(self, limit: int):
+    def __init__(
+        self,
+        limit: int,
+        *,
+        country_limits: dict[str, int] | None = None,
+    ):
         self.limit = max(0, int(limit))
+        self.country_limits = (
+            {
+                str(country).casefold(): max(0, int(country_limit))
+                for country, country_limit in country_limits.items()
+            }
+            if country_limits is not None else None
+        )
         self._lock = threading.Lock()
         self._attempts = 0
+        self._attempts_by_country: dict[str, int] = {}
         self._successes = 0
         self._failures = 0
         self._retries = 0
 
-    def remaining(self) -> int:
+    def remaining(self, country: str | None = None) -> int:
         with self._lock:
-            return max(0, self.limit - self._attempts)
+            remaining = max(0, self.limit - self._attempts)
+            if self.country_limits is None or country is None:
+                return remaining
+            country_key = str(country).casefold()
+            country_remaining = max(
+                0,
+                self.country_limits.get(country_key, 0)
+                - self._attempts_by_country.get(country_key, 0),
+            )
+            return min(remaining, country_remaining)
 
-    def reserve(self, daily_budget: DailyBudget, *, retry: bool = False) -> str:
+    def reserve(
+        self,
+        daily_budget: DailyBudget,
+        *,
+        retry: bool = False,
+        country: str | None = None,
+    ) -> str:
         """Reserve both caps immediately before a provider request is dispatched."""
         with self._lock:
             if self._attempts >= self.limit:
                 return "run_api_attempt_budget_exhausted"
+            country_key = str(country or "").casefold()
+            if self.country_limits is not None:
+                if country_key not in self.country_limits:
+                    return "country_not_in_attempt_allocation"
+                if (
+                    self._attempts_by_country.get(country_key, 0)
+                    >= self.country_limits[country_key]
+                ):
+                    return "country_allocation_cap_exhausted"
             if not daily_budget.reserve():
                 return (
                     daily_budget.last_reservation_error
                     or "daily_request_budget_exhausted"
                 )
             self._attempts += 1
+            if self.country_limits is not None:
+                self._attempts_by_country[country_key] = (
+                    self._attempts_by_country.get(country_key, 0) + 1
+                )
             if retry:
                 self._retries += 1
             return ""
@@ -477,9 +518,9 @@ class ApiAttemptBudget:
         with self._lock:
             self._failures += 1
 
-    def as_dict(self) -> dict[str, int]:
+    def as_dict(self) -> dict[str, object]:
         with self._lock:
-            return {
+            result = {
                 "limit": self.limit,
                 "attempts": self._attempts,
                 "successes": self._successes,
@@ -487,6 +528,19 @@ class ApiAttemptBudget:
                 "retry_attempts": self._retries,
                 "remaining": max(0, self.limit - self._attempts),
             }
+            if self.country_limits is not None:
+                result["country_attempt_allocation"] = {
+                    country: {
+                        "limit": country_limit,
+                        "attempts": self._attempts_by_country.get(country, 0),
+                        "remaining": max(
+                            0,
+                            country_limit - self._attempts_by_country.get(country, 0),
+                        ),
+                    }
+                    for country, country_limit in self.country_limits.items()
+                }
+            return result
 
 
 @dataclass
@@ -666,7 +720,13 @@ class ResilientTavily:
         host = parsed.netloc.lower().split(":")[0]
         return host.split(".")[0].replace("-", " ").title()
 
-    async def search(self, query: str, location: str = "") -> list[Opportunity]:
+    async def search(
+        self,
+        query: str,
+        location: str = "",
+        *,
+        country: str | None = None,
+    ) -> list[Opportunity]:
         self.last_origin = "none"
         self.last_error_code = ""
         self.last_deferred_reason = ""
@@ -711,10 +771,16 @@ class ResilientTavily:
             return [Opportunity(**d) for d in cached]
 
         keys = self.keys
+        if not keys:
+            self.last_error_code = "provider_keys_unavailable"
+            self.last_status = "unconfigured"
+            return []
         saw_quota_error = False
         saw_request_error = False
         saw_daily_budget = False
         saw_run_budget = False
+        saw_country_allocation = False
+        saw_unallocated_country = False
         saw_ledger_error = False
         saw_persistence_error = False
         attempts_this_query = 0
@@ -738,7 +804,9 @@ class ResilientTavily:
                 continue
 
             reservation_error = self.attempt_budget.reserve(
-                key.budget, retry=attempts_this_query > 0,
+                key.budget,
+                retry=attempts_this_query > 0,
+                country=country,
             )
             self.last_key_budget_events.append({
                 "fingerprint": key.fp,
@@ -746,6 +814,14 @@ class ResilientTavily:
             })
             if reservation_error == "run_api_attempt_budget_exhausted":
                 saw_run_budget = True
+                self.last_deferred_reason = reservation_error
+                break
+            if reservation_error == "country_allocation_cap_exhausted":
+                saw_country_allocation = True
+                self.last_deferred_reason = reservation_error
+                break
+            if reservation_error == "country_not_in_attempt_allocation":
+                saw_unallocated_country = True
                 self.last_deferred_reason = reservation_error
                 break
             if reservation_error == "daily_request_budget_exhausted":
@@ -913,6 +989,10 @@ class ResilientTavily:
             self.last_error_code = "provider_quota_exhausted"
         elif saw_run_budget:
             self.last_error_code = "run_api_attempt_budget_exhausted"
+        elif saw_country_allocation:
+            self.last_error_code = "country_allocation_cap_exhausted"
+        elif saw_unallocated_country:
+            self.last_error_code = "country_not_in_attempt_allocation"
         elif saw_daily_budget:
             self.last_error_code = "daily_request_budget_exhausted"
         elif saw_ledger_error:

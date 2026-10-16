@@ -5,6 +5,7 @@ import asyncio
 from app.config import AgentConfig, Preferences
 from app.connectors.ats_detect import detect_ats
 from app.connectors.tavily_resilience import (
+    ApiAttemptBudget,
     DailyBudget,
     ResilientTavily,
     TavilyCache,
@@ -620,6 +621,272 @@ def test_query_trace_distinguishes_allocation_and_combination_deferrals():
     ]
 
 
+def test_country_attempt_budget_protects_france_and_belgium_slots(tmp_path):
+    daily_budget = DailyBudget(tmp_path / "country-budget.json", limit=12)
+    attempts = ApiAttemptBudget(
+        8,
+        country_limits={"Morocco": 6, "France": 1, "Belgium": 1},
+    )
+
+    for _ in range(6):
+        assert attempts.reserve(daily_budget, country="Morocco") == ""
+    assert attempts.reserve(
+        daily_budget, country="Morocco",
+    ) == "country_allocation_cap_exhausted"
+    assert attempts.remaining() == 2
+    assert attempts.remaining("Morocco") == 0
+
+    assert attempts.reserve(daily_budget, country="France") == ""
+    assert attempts.reserve(daily_budget, country="Belgium") == ""
+    assert attempts.reserve(
+        daily_budget, country="France",
+    ) == "run_api_attempt_budget_exhausted"
+    assert daily_budget.remaining() == 4
+    assert attempts.as_dict()["country_attempt_allocation"] == {
+        "morocco": {"limit": 6, "attempts": 6, "remaining": 0},
+        "france": {"limit": 1, "attempts": 1, "remaining": 0},
+        "belgium": {"limit": 1, "attempts": 1, "remaining": 0},
+    }
+
+
+def test_live_tavily_dispatch_never_exceeds_eight_country_allocated_attempts(
+    tmp_path, monkeypatch,
+):
+    class Response:
+        status_code = 200
+
+        def raise_for_status(self):
+            return None
+
+        @staticmethod
+        def json():
+            return {"results": []}
+
+    calls = []
+
+    def provider_request(*_args, **_kwargs):
+        calls.append(True)
+        return Response()
+
+    monkeypatch.setattr(
+        "app.connectors.tavily_resilience.requests.post", provider_request,
+    )
+    attempts = ApiAttemptBudget(
+        8,
+        country_limits={"Morocco": 6, "France": 1, "Belgium": 1},
+    )
+    source = ResilientTavily(
+        keys=[TavilyKey(
+            "country-attempt-key",
+            DailyBudget(tmp_path / "country-attempt-budget.json", limit=20),
+            key_fingerprint("country-attempt-key"),
+        )],
+        cache=TavilyCache(tmp_path / "country-attempt-cache.json"),
+        attempt_budget=attempts,
+    )
+
+    for index in range(6):
+        asyncio.run(source.search(
+            f"Morocco civil role {index}", "Morocco", country="Morocco",
+        ))
+    asyncio.run(source.search(
+        "France civil role", "France", country="France",
+    ))
+    asyncio.run(source.search(
+        "Belgium civil role", "Belgium", country="Belgium",
+    ))
+    asyncio.run(source.search(
+        "extra Morocco role", "Morocco", country="Morocco",
+    ))
+
+    assert len(calls) == 8
+    assert attempts.as_dict()["attempts"] == 8
+    assert attempts.as_dict()["country_attempt_allocation"]["morocco"]["attempts"] == 6
+    assert attempts.as_dict()["country_attempt_allocation"]["france"]["attempts"] == 1
+    assert attempts.as_dict()["country_attempt_allocation"]["belgium"]["attempts"] == 1
+    assert source.last_error_code == "run_api_attempt_budget_exhausted"
+
+
+def test_country_allocator_keeps_international_queries_and_morocco_scope(tmp_path):
+    class Source:
+        def __init__(self, *, available=True):
+            self.keys = [object()] if available else []
+
+        @staticmethod
+        def has_cached_result(query, _location):
+            return query == "Morocco cached"
+
+        @staticmethod
+        def has_stale_cached_result(_query, _location):
+            return False
+
+    connectors = [
+        (
+            {"name": "broad", "applies_to_countries": ["*"]},
+            Source(),
+        ),
+        (
+            {
+                "name": "morocco-only",
+                "applies_to_countries": ["Morocco"],
+                "domains": ["emploi.ma"],
+            },
+            Source(),
+        ),
+        (
+            {"name": "unavailable-broad", "applies_to_countries": ["*"]},
+            Source(available=False),
+        ),
+    ]
+    plan = [
+        {
+            "query": f"{country} {index}",
+            "location": country,
+            "country": country,
+            "lang": language,
+        }
+        for index, (country, language) in enumerate((
+            ("Morocco", "fr"),
+            ("Morocco", "ar"),
+            ("France", "fr"),
+            ("Belgium", "fr"),
+            ("Canada", "en"),
+        ))
+    ]
+    plan[0]["query"] = "Morocco cached"
+
+    scheduled, deferred, _stale = _allocate_source_queries(
+        connectors,
+        plan,
+        max_requests_per_source=0,
+        max_api_attempts=8,
+        country_attempt_limits={"Morocco": 6, "France": 1, "Belgium": 1},
+    )
+
+    broad_countries = {item["country"] for item in scheduled[0]}
+    morocco_countries = {item["country"] for item in scheduled[1]}
+    unavailable_countries = {item["country"] for item in scheduled[2]}
+    assert broad_countries == {"Morocco", "France", "Belgium"}
+    assert morocco_countries == {"Morocco"}
+    assert unavailable_countries == broad_countries
+    assert scheduled[0][0]["query"] == "Morocco cached"
+    assert deferred == [0, 0, 0]
+
+
+def test_query_trace_marks_unavailable_sources_ineligible():
+    class UnavailableSource:
+        def __init__(self):
+            self.keys = []
+
+        @staticmethod
+        def has_cached_result(_query, _location):
+            return False
+
+    combo = {
+        "query": "civil engineer Morocco",
+        "location": "Morocco",
+        "country": "Morocco",
+        "lang": "fr",
+        "_plan_index": 0,
+    }
+    trace = _source_query_trace(
+        {"name": "web", "kind": "tavily", "applies_to_countries": ["*"]},
+        [combo],
+        [combo],
+        [combo],
+        max_requests_per_source=1,
+        allocation_reason="",
+        country_attempt_limits={"Morocco": 6, "France": 1, "Belgium": 1},
+        connector=UnavailableSource(),
+    )
+
+    assert trace[0]["source_available"] is False
+    assert trace[0]["allocation_eligible"] is False
+    assert trace[0]["request_status"] == "pending"
+
+
+def test_country_quota_is_not_consumed_by_cache_or_per_key_budget_skip(
+    tmp_path, monkeypatch,
+):
+    from app.connectors.tavily_resilience import ApiAttemptBudget
+
+    attempts = ApiAttemptBudget(
+        8,
+        country_limits={"Morocco": 6, "France": 1, "Belgium": 1},
+    )
+    cache = TavilyCache(tmp_path / "country-cache.json")
+    cached_source = ResilientTavily(
+        keys=[TavilyKey(
+            "cached-key",
+            DailyBudget(tmp_path / "cached-budget.json", limit=8),
+            key_fingerprint("cached-key"),
+        )],
+        cache=cache,
+        attempt_budget=attempts,
+    )
+    cache.put(_cache_entry_key(cached_source, "cached query", "Morocco"), [])
+
+    assert asyncio.run(cached_source.search(
+        "cached query", "Morocco", country="Morocco",
+    )) == []
+    assert cached_source.last_origin == "cache"
+    assert attempts.as_dict()["attempts"] == 0
+
+    spent_budget = DailyBudget(tmp_path / "spent-budget.json", limit=8)
+    spent_budget.exhaust()
+    skipped_source = ResilientTavily(
+        keys=[TavilyKey(
+            "spent-key",
+            spent_budget,
+            key_fingerprint("spent-key"),
+        )],
+        cache=TavilyCache(tmp_path / "skipped-cache.json"),
+        attempt_budget=attempts,
+    )
+    assert asyncio.run(skipped_source.search(
+        "uncached query", "Morocco", country="Morocco",
+    )) == []
+    assert skipped_source.last_error_code == "daily_request_budget_exhausted"
+    assert attempts.as_dict()["country_attempt_allocation"]["morocco"]["attempts"] == 0
+
+    class Response:
+        status_code = 200
+
+        def raise_for_status(self):
+            return None
+
+        @staticmethod
+        def json():
+            return {"results": []}
+
+    calls = []
+
+    def provider_request(*_args, **_kwargs):
+        calls.append(True)
+        return Response()
+
+    monkeypatch.setattr(
+        "app.connectors.tavily_resilience.requests.post", provider_request,
+    )
+    france_source = ResilientTavily(
+        keys=[TavilyKey(
+            "france-key",
+            DailyBudget(tmp_path / "france-budget.json", limit=8),
+            key_fingerprint("france-key"),
+        )],
+        cache=TavilyCache(tmp_path / "france-cache.json"),
+        attempt_budget=attempts,
+    )
+    asyncio.run(france_source.search(
+        "civil engineer", "France", country="France",
+    ))
+
+    assert calls == [True]
+    country_counts = attempts.as_dict()["country_attempt_allocation"]
+    assert country_counts["morocco"]["attempts"] == 0
+    assert country_counts["france"]["attempts"] == 1
+
+
 def test_successful_provider_fallback_is_not_counted_as_query_deferral():
     assert _query_outcome_state(
         origin="api",
@@ -635,6 +902,13 @@ def test_successful_provider_fallback_is_not_counted_as_query_deferral():
         deferred_reason="run_api_attempt_budget_exhausted",
         provider_attempts=0,
     ) == ("deferred", "run_api_attempt_budget_exhausted")
+    assert _query_outcome_state(
+        origin="none",
+        status="degraded",
+        error_code="country_allocation_cap_exhausted",
+        deferred_reason="country_allocation_cap_exhausted",
+        provider_attempts=0,
+    ) == ("deferred", "country_allocation_cap_exhausted")
     assert _query_outcome_state(
         origin="api",
         status="degraded",

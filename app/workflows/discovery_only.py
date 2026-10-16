@@ -12,9 +12,14 @@ from app.discovery.opportunity_details import is_verified_individual_vacancy
 from app.discovery.vacancy_verification import MAX_DETAIL_VERIFICATIONS_PER_RUN
 from app.workflows.discovery import DEFAULT_SOURCES_PATH, DiscoveryReport, run_discovery
 
-REPORT_SCHEMA_VERSION = 5
+REPORT_SCHEMA_VERSION = 6
 MAX_SEARCH_COMBINATIONS = 12
 MAX_TAVILY_ATTEMPTS = 8
+COUNTRY_ATTEMPT_ALLOCATION = {
+    "Morocco": 6,
+    "France": 1,
+    "Belgium": 1,
+}
 
 _QUALIFICATION_PATTERNS = (
     r".{0,45}\b(?:minimum|min\.?|at least|required|must have|exigé|exigée|requis|requise)\b.{0,90}",
@@ -169,6 +174,7 @@ async def run_bounded_discovery(
         max_queries_override=MAX_SEARCH_COMBINATIONS,
         max_api_attempts_override=MAX_TAVILY_ATTEMPTS,
         max_search_combinations=MAX_SEARCH_COMBINATIONS,
+        country_attempt_limits=COUNTRY_ATTEMPT_ALLOCATION,
         budget_reserver=(
             budget_store.reserve_general if budget_store is not None else None
         ),
@@ -273,6 +279,7 @@ def blocked_report(
         "limits": {
             "search_combinations": MAX_SEARCH_COMBINATIONS,
             "tavily_api_attempts": MAX_TAVILY_ATTEMPTS,
+            "country_attempt_allocation": COUNTRY_ATTEMPT_ALLOCATION,
             "vacancy_detail_verifications": MAX_DETAIL_VERIFICATIONS_PER_RUN,
         },
         "counts": {
@@ -657,6 +664,13 @@ def build_sanitized_report(
                 "provider_attempts": max(
                     0, int(trace.get("provider_attempts", 0)),
                 ),
+                "allocation_eligible": bool(
+                    trace.get("allocation_eligible", False),
+                ),
+                "source_available": bool(
+                    trace.get("source_available", False),
+                ),
+                "cache_available": bool(trace.get("cache_available", False)),
             })
         verification_evidence = []
         for evidence in item.get("verification_evidence") or []:
@@ -1231,6 +1245,112 @@ def build_sanitized_report(
         )
         for outcome in ("reverified", "verified", "closed", "unknown")
     }
+    source_allocation_by_country: dict[str, dict[str, dict]] = {}
+    allocation_reason_counts: Counter[str] = Counter()
+    for source in source_reports:
+        if source["kind"] != "tavily":
+            continue
+        for trace in source["query_trace"]:
+            country = trace["country"]
+            source_name = source["name"]
+            summary = source_allocation_by_country.setdefault(
+                country, {},
+            ).setdefault(source_name, {
+                "planned": 0,
+                "eligible": 0,
+                "source_unavailable": 0,
+                "attempted": 0,
+                "provider_attempts": 0,
+                "cached": 0,
+                "deferred": 0,
+                "failed": 0,
+                "pending": 0,
+                "reason_counts": {},
+            })
+            summary["planned"] += 1
+            summary["eligible"] += int(trace["allocation_eligible"])
+            summary["source_unavailable"] += int(
+                not trace["source_available"] and not trace["cache_available"]
+            )
+            status = trace["request_status"]
+            provider_attempts = trace["provider_attempts"]
+            summary["attempted"] += provider_attempts
+            summary["provider_attempts"] += provider_attempts
+            if status == "cached":
+                summary["cached"] += 1
+            elif status == "deferred":
+                summary["deferred"] += 1
+            elif status == "failed":
+                summary["failed"] += 1
+            elif status == "pending":
+                summary["pending"] += 1
+            reason = trace["reason_code"]
+            if reason:
+                reasons = summary["reason_counts"]
+                reasons[reason] = reasons.get(reason, 0) + 1
+                if status in {"deferred", "failed"}:
+                    allocation_reason_counts[reason] += 1
+    country_attempts = budget.get("country_attempt_allocation") or {}
+    country_allocation_report = {}
+    for country, target in COUNTRY_ATTEMPT_ALLOCATION.items():
+        budget_entry = country_attempts.get(country.casefold(), {})
+        attempts = int(budget_entry.get("attempts", 0))
+        country_rows = [
+            trace
+            for source in source_reports
+            if source["kind"] == "tavily"
+            for trace in source["query_trace"]
+            if trace["country"].casefold() == country.casefold()
+        ]
+        if attempts >= target:
+            unfilled_reason = ""
+        elif not any(
+            item["country"].casefold() == country.casefold()
+            for item in safe_plan
+        ):
+            unfilled_reason = "no_plan_combination_for_country"
+        elif not country_rows and any(
+            source["kind"] == "tavily"
+            and int(
+                source["inapplicable_country_queries"].get(country, 0),
+            ) > 0
+            for source in source_reports
+        ):
+            unfilled_reason = "no_applicable_source_for_country"
+        else:
+            blocking_reason = next(
+                (
+                    item["reason_code"]
+                    for item in country_rows
+                    if item["reason_code"]
+                    and item["request_status"] in {"deferred", "failed"}
+                ),
+                "",
+            )
+            if blocking_reason:
+                unfilled_reason = blocking_reason
+            elif not any(
+                item["allocation_eligible"] and not item["cache_available"]
+                for item in country_rows
+            ):
+                unfilled_reason = "no_eligible_uncached_query"
+            elif any(
+                item["allocation_eligible"]
+                and not item["cache_available"]
+                and item["request_status"] == "pending"
+                for item in country_rows
+            ):
+                unfilled_reason = "eligible_queries_not_attempted"
+            else:
+                unfilled_reason = "insufficient_eligible_queries_for_target"
+        country_allocation_report[country] = {
+            "target": target,
+            "provider_attempts": attempts,
+            "remaining": max(0, target - attempts),
+            "target_achieved": attempts >= target,
+            "reservation_respected": attempts <= target,
+            "unfilled_reason": unfilled_reason,
+        }
     if external_results:
         result_state = "provider_results_received"
     elif provider_results_returned:
@@ -1323,6 +1443,23 @@ def build_sanitized_report(
             "normalization_rejection_reasons": dict(normalization_reasons),
             "deferred_requests_by_reason": dict(deferred_by_reason),
         },
+        "allocation": {
+            "country_attempt_targets": COUNTRY_ATTEMPT_ALLOCATION,
+            "country_attempts": country_allocation_report,
+            "international_reservations_respected": all(
+                country_allocation_report[country]["reservation_respected"]
+                for country in ("France", "Belgium")
+            ),
+            "total_provider_attempts_within_limit": int(
+                budget.get("attempts", 0),
+            ) <= MAX_TAVILY_ATTEMPTS,
+            "planned_eligible_attempts_by_country_and_source": (
+                source_allocation_by_country
+            ),
+            "deferred_or_failed_reason_counts": dict(
+                allocation_reason_counts,
+            ),
+        },
         "coverage": {
             "new_by_country": dict(country_counts),
             "new_by_search_language": dict(language_counts),
@@ -1342,6 +1479,7 @@ def build_sanitized_report(
             "failed_attempts": int(budget.get("failed_attempts", 0)),
             "retry_attempts": int(budget.get("retry_attempts", 0)),
             "remaining_run_attempts": int(budget.get("remaining", MAX_TAVILY_ATTEMPTS)),
+            "country_attempt_allocation": country_attempts,
             "rate_limit_errors": sum(
                 count for code, count in query_errors.items()
                 if "quota" in code or "rate" in code or code in {"429", "432"}
