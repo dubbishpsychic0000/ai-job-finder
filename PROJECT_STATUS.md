@@ -1651,11 +1651,16 @@ Morocco-specific Emploi.ma (Arabic), Amaljob (French), ANAPEC (Arabic),
 Emploi-Public indexing (French), and Indeed Morocco (Arabic). No Belgium
 search was attempted. Exact search strings are not present in the sanitized
 artifact, so source, country, and language scope—not verbatim query text—is
-the reportable coverage. Overall, 38 source requests were deferred by the
-run-attempt cap and 8 by daily-budget exhaustion; these deferrals are not
-provider failures. The artifact does not report separate per-result rejection
-or verification evidence beyond the stable reason codes and sanitized
-evidence references.
+the reportable coverage. The report lists 38 source requests deferred by the
+run-attempt cap. It also lists 8 `daily_request_budget_exhausted` events, but
+per-key telemetry shows one such key skip and one successful reservation for
+each of the 8 successful Tavily queries. These are not 8 additional
+whole-query deferrals: the resilient connector skipped an exhausted key,
+then served the request using another key, while the reporting layer
+incorrectly counted the per-key skip as a query deferral. The report's 8
+successes and 8 durable reservations remain the provider-request totals. The
+artifact does not report the full adaptive plan or per-query
+verification-field evidence.
 
 The direct Emploi-Public adapter reported two requests (one direct and one
 cached) and three normalized records, including two unmatched procedural
@@ -1680,3 +1685,162 @@ the run provides no eligibility determination. The reported 33 normalized
 records are not 33 vacancies, and provider-result and normalization counts
 must not be interpreted as yield. Phase 2.8j is complete; no discovery retry
 or downstream action was authorized or launched.
+
+## Phase 2.8k offline evidence-gap audit and query traceability
+
+This audit used the complete retrieved sanitized report
+`discovery-only-38690026335` and the verification/allocation/reporting code
+published at `ae4ba9b`. No provider query, vault restore, reservation, or
+production write was made.
+
+### Seven ATS-hosted candidates
+
+The artifact identifies all seven as SmartRecruiters-hosted listing URLs.
+SmartRecruiters is the ATS host, not the employer-owned web domain. The
+artifact includes posting titles, employer labels, locations, public detail
+URL references, source-reported `releasedDate` values, `VACANCY_STATUS_UNKNOWN`
+state, and the common reason
+`ats_record_missing_required_job_evidence`. It does not preserve the ATS
+payload, per-field verifier checks, source status value, deadline value, or
+route-validation result. The `country`/`search_country` label is Morocco,
+but `country_basis` explicitly says it was not independently verified; the
+displayed work locations are outside Morocco.
+
+| Stable record ID | Listing and reported location | Evidence and gaps from the artifact | Rule and next evidence |
+|---|---|---|---|
+| `record_668cda122a72a886` | Egis Group — “Technicien travaux OA H/F”; Caen, France; `releasedDate` 2026-06-17 | SmartRecruiters detail URL and posting ID are present; the ID passed the verifier's ID-match guard. Role/employer/location labels are present in the sanitized record, but their ATS-payload provenance is not recorded. Publication date is source-reported but stale (>45 days at the run); deadline and current status are not retained; no route is verified. | `VacancyDetailVerifier._smartrecruiters` → `_assess`; the required-evidence predicate returned `ats_record_missing_required_job_evidence`. Obtain per-field evidence flags and the official record's current status, substantive description, deadline/valid-through evidence, and posting-specific route. |
+| `record_f2c74ebb2d2b71ed` | Artelia — “Technicienne / Technicien Etudes & Travaux en Infrastructures urbaines et VRD”; Cayenne, French Guiana; `releasedDate` 2026-08-26 | Same ATS-hosted detail/ID evidence and provenance gaps. Publication date is source-reported but stale (>45 days); no explicit deadline, closure, or verified route is in the artifact. Morocco is only the search-country label. | Same rule/reason. Retrieve verifier field checks plus an authoritative current status, current posting/deadline evidence, and posting-specific route; confirm geography before considering it relevant. |
+| `record_08e56dd03f7633b8` | Ingérop — “TECHNICIEN ETUDES ET TRAVAUX F/H”; Abidjan, Côte d’Ivoire; `releasedDate` 2025-04-30 | Same ATS-hosted detail/ID evidence and provenance gaps. Publication date is source-reported and stale; deadline/current status/route evidence is absent from the artifact. | Same rule/reason. Retrieve the missing verifier checks and authoritative status/deadline/route; establish whether this old, non-Morocco posting still exists before any further research. |
+| `record_a8a5e151d395cc89` | Spie batignolles — “Technicien Mécanicien TP - CSNE TOARC Secteur 1 - H/F”; Compiègne, France; `releasedDate` 2026-04-22 | Same ATS-hosted detail/ID evidence and provenance gaps. Source-reported publication date is stale; no deadline, explicit closure, current status, or verified route is retained. | Same rule/reason. Obtain verifier checks and authoritative current status, deadline/valid-through evidence, and application route. |
+| `record_e71fa82ad86300fc` | SOCOTEC — “Technicien Ouvrage d’Art H/F”; Guyancourt, France; `releasedDate` 2026-07-28 | Same ATS-hosted detail/ID evidence and provenance gaps. Source-reported publication date is stale; no deadline/current status/verified route evidence is retained. | Same rule/reason. Obtain verifier checks, authoritative status and date evidence, plus a route tied to this posting ID. |
+| `record_a64ff9d903a3392f` | Spie batignolles — “Technicien méthodes TP CSNE TOARC SECTEUR 1 - H/F”; Compiègne, France; `releasedDate` 2026-04-30 | Same ATS-hosted detail/ID evidence and provenance gaps. Source-reported publication date is stale; no deadline/current status/verified route evidence is retained. | Same rule/reason. Obtain verifier checks, authoritative current status/deadline evidence, and posting-specific route. |
+| `record_d34727f047e3c151` | Veolia Environnement SA — “Technicien métreur / chiffreur travaux neufs eau et assainissement H/F”; Avon, France; `releasedDate` 2026-05-18 | Same ATS-hosted detail/ID evidence and provenance gaps. Source-reported publication date is stale; no deadline/current status/verified route evidence is retained. | Same rule/reason. Obtain verifier checks, authoritative status/deadline evidence, and posting-specific route; confirm geography. |
+
+The reason code is emitted after SmartRecruiters JSON retrieval and an exact
+posting-ID match; it is not evidence that all seven returned usable job
+records. In `_assess`, the code returns this reason when the role/title is
+missing or generic, the employer is missing or generic, the location is
+missing, or the description is shorter than 80 characters or 10 words. The
+artifact does not say which predicate failed for any individual candidate.
+Because that check precedes route validation, the generic reason also does not
+tell us whether a route was present or valid. The exact per-candidate missing
+field therefore cannot be reconstructed from this historical artifact;
+claiming that description alone caused all seven would be an inference.
+
+All seven are **old by their source-reported publication dates** and have
+**unknown current status**. None is classified as explicitly closed or
+withdrawn, and the artifact contains no explicit expired deadline for these
+seven. `STALE_BY_POSTING_DATE` is a freshness label only; it is not closure
+evidence. The separately rechecked existing public competition was closed
+with `application_deadline_elapsed`; it is not one of the seven new ATS
+candidates.
+
+The four `UNVERIFIABLE_DATE` records are separate and do not overlap the
+seven individual vacancies: two job-board category pages, one salary/
+occupational-information page, and one forum discussion. None has a
+source-backed posting date. The two category pages are research leads; the
+salary page and forum page were rejected as non-vacancies. The artifact does
+not report their collection times as publication dates.
+
+Their stable record IDs are `record_c795ea7bc123d9fa` (Sabbar category),
+`record_a03e75e55967f3c1` (Naukri category),
+`record_5289a80ebc82bb7a` (Go Construct salary/reference), and
+`record_47b0e54b80ec7824` (Reddit discussion). They are not included in the
+seven-candidate evidence-gap table or in the seven stale-posting count.
+
+### Allocation and coverage reconciliation
+
+The three reported search-plan combinations are distinct
+`(query, country, language)` combinations that actually reached a connector;
+12 was the upper bound, not a requirement to run 12. The 10 source requests
+were not 10 Tavily API attempts: they comprise 8 live Tavily searches plus
+the dedicated Emploi-Public adapter's 2 source queries (one direct, one
+cached). The portal's six HTTP page requests (one robots check, two listing
+requests, three detail requests) are page telemetry under those portal
+queries—not additional search-plan combinations or Tavily attempts.
+
+The source allocator fans requests across source scopes under the shared
+eight-attempt budget. Its market-specific diversification can spend several
+slots on Morocco-only sources, while broad and official-ATS sources are
+country-universal. In this run, provider queries covered Morocco and France;
+the artifact has no Belgium query. It has neither the ordered adaptive plan
+nor the exact query-to-source allocation, so it cannot establish whether
+Belgium was absent from restored preferences/the adaptive plan or lost to
+allocation priority. It was not excluded by country applicability for the
+broad or official-ATS sources, and Tavily cache hits do not explain its
+absence.
+
+The artifact's 8 `daily_request_budget_exhausted` “deferrals” are a separate
+accounting defect: every one of the eight successful Tavily queries records
+both an exhausted-key skip and a durable reservation. `ResilientTavily`
+continues across keys after a per-key skip; `record_query_outcome` previously
+treated `last_deferred_reason` as whole-query deferral even when a later key
+successfully dispatched the query. Phase 2.8k only classifies a request as
+deferred when no provider attempt occurred; skipped-key events remain
+available in per-key budget telemetry. The 38 `run_attempt_cap` deferrals
+are source/plan allocation requests not dispatched, not failed provider
+calls. The old artifact's query deferral total therefore overstated whole
+requests not attempted by eight.
+
+### Traceability and evidence diagnostics added
+
+The sanitized report schema is now version 5. It records the redacted
+adaptive plan and a per-source row for each applicable source/plan request:
+stable query-intent and plan-combination IDs, safe query text, intent,
+country, language, source, `attempted`/`cached`/`deferred`/`failed` state,
+reason code, result state, and actual provider-attempt count. Known profile
+strings, emails, phone numbers, credential assignments, and URLs are removed
+or replaced; public evidence URLs continue to lose query strings and
+fragments. The report also gives every opportunity a stable ID derived from
+its sanitized public URL.
+
+ATS verification evidence now records booleans for employer, role, location,
+description sufficiency, original detail-page reference and fetch, matched
+posting ID, recognized current status, publication date, deadline, and
+verified route.
+These safe checks are paired with the sanitized public evidence URL, ATS
+vendor category, outcome, and stable record ID; no job description or raw ATS
+payload is included. Future sanitized reports can therefore identify the
+specific failed evidence predicate instead of collapsing all candidates
+under one reason. The freshness summary now separately counts stale
+publication dates and explicitly elapsed deadlines. Existing stale records
+remain unverified; no gate was relaxed.
+
+### Validation and next-evaluation proposal
+
+Regression tests cover query/profile/credential sanitization, stable query
+IDs, source/plan deferral states, successful fallback after an exhausted key,
+ATS evidence-field reporting, and stale-vs-expired dates. Validation completed
+with these results:
+
+- Focused regression tests: **9 passed**.
+- Full test suite: **564 passed, 1 skipped**.
+- Ruff on all changed Python files: **passed**. Repository-wide Ruff still
+  reports 25 findings in untouched files; those unrelated baseline issues were
+  not changed as part of this phase.
+- Python compilation, parsing of the 5 relevant workflow/config YAML files,
+  and `git diff --check`: **passed**.
+- Implementation commit `073d725681fc1297419efc693d2b1c15f253b3c3` was
+  published to `main`; its CI run
+  [38881147937](https://github.com/dubbishpsychic0000/ai-job-finder/actions/runs/38881147937)
+  passed (test job completed successfully).
+
+For a later separately authorized evaluation, keep the existing limits of
+12 search-plan combinations and 8 Tavily attempts, with a proposed explicit
+allocation of **6 Morocco attempts and 2 international attempts**. Use the
+Morocco slots for two broad civil-engineering queries (French and Arabic),
+one Morocco official-ATS query, and three distinct high-priority local scopes
+(ANAPEC, Emploi.ma, and Rekrute or Amaljob according to current source
+priority). Use the two international slots explicitly for one France and one
+Belgium query, choosing the appropriate language and broad/official-ATS
+source. Keep the dedicated Emploi-Public adapter separate from Tavily's
+attempt cap and within its robots-aware page limits. Record its query and
+page telemetry independently. The 8 provider attempts remain the maximum;
+each still needs a successful durable general-purpose reservation that
+preserves the protected BTP reserve. Do not infer coverage from the plan:
+the next report must show planned versus attempted, cached, deferred, and
+failed source/plan rows, plus evidence checks for every verified candidate.
+
+This is an offline audit and implementation only. No new live discovery,
+provider request, vault restore/write, budget reservation, application,
+message, BTP action, or production candidate/opportunity mutation was made.
