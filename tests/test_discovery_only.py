@@ -623,7 +623,7 @@ def test_discovery_report_is_sanitized_and_distinguishes_cached_new_listing():
     serialized = json.dumps(output, ensure_ascii=False)
     opportunity = output["opportunities"][0]
 
-    assert output["schema_version"] == 4
+    assert output["schema_version"] == 5
     assert output["counts"]["unique_new_opportunities"] == 0
     assert output["counts"]["unique_new_candidate_vacancies"] == 1
     assert output["counts"]["unique_new_discovery_records"] == 1
@@ -640,6 +640,7 @@ def test_discovery_report_is_sanitized_and_distinguishes_cached_new_listing():
     assert opportunity["entity_evidence_url"] == "https://jobs.example.org/listing/42"
     assert opportunity["eligibility"] == "NOT_EVALUATED"
     assert opportunity["listing_url"] == "https://jobs.example.org/listing/42"
+    assert opportunity["record_id"].startswith("record_")
     assert "AutoCAD" not in serialized
     assert "+212 600 000 000" not in serialized
     assert "hr@employer.example" not in serialized
@@ -665,8 +666,157 @@ def test_discovery_freshness_requires_source_date_evidence():
     job.posted_at_evidence_url = "https://employer.example/jobs/123"
     assert discovery_only._freshness(job, 45, now) == "DATED_WITHIN_WINDOW"
 
+    job.posted_at = datetime(2026, 8, 1, tzinfo=timezone.utc)
+    assert discovery_only._freshness(job, 45, now) == "STALE_BY_POSTING_DATE"
+    assert job.closing_at is None
+
     job.closing_at = datetime(2026, 10, 12, tzinfo=timezone.utc)
     assert discovery_only._freshness(job, 45, now) == "EXPIRED_BY_CLOSING_DATE"
+
+
+def test_sanitized_date_counts_keep_old_postings_distinct_from_expired_deadlines(db):
+    from app.models import Job
+
+    now = datetime(2026, 10, 15, tzinfo=timezone.utc)
+    stale = Job(
+        source="fixture",
+        external_id="stale-posting",
+        dedup_key="stale-posting",
+        title="Older civil technician vacancy",
+        url="https://example.test/jobs/stale",
+        posted_at=datetime(2026, 8, 1, tzinfo=timezone.utc),
+        posted_at_source="test:datePosted",
+        posted_at_evidence_url="https://example.test/jobs/stale",
+        entity_type="INDIVIDUAL_VACANCY",
+        entity_state="VACANCY_STATUS_UNKNOWN",
+        entity_reason_code="ats_detail_unavailable",
+        entity_evidence_url="https://example.test/jobs/stale",
+    )
+    expired = Job(
+        source="fixture",
+        external_id="expired-deadline",
+        dedup_key="expired-deadline",
+        title="Vacancy with elapsed deadline",
+        url="https://example.test/jobs/expired",
+        posted_at=datetime(2026, 10, 10, tzinfo=timezone.utc),
+        posted_at_source="test:datePosted",
+        posted_at_evidence_url="https://example.test/jobs/expired",
+        closing_at=datetime(2026, 10, 14, tzinfo=timezone.utc),
+        entity_type="INDIVIDUAL_VACANCY",
+        entity_state="VACANCY_STATUS_UNKNOWN",
+        entity_reason_code="ats_detail_unavailable",
+        entity_evidence_url="https://example.test/jobs/expired",
+    )
+    db.add_all([stale, expired])
+    db.flush()
+
+    output = discovery_only.build_sanitized_report(
+        DiscoveryReport(
+            new_opportunity_origins={stale.id: "api", expired.id: "api"},
+        ),
+        [stale, expired],
+        AgentConfig(rules={"max_days_since_posted": 45}),
+        {"limit_per_key": 17, "remaining_by_key": [17]},
+        now=now,
+    )
+
+    assert output["counts"]["stale_by_posting_date_new"] == 1
+    assert output["counts"]["expired_by_closing_date_new"] == 1
+    assert output["counts"]["stale_or_expired_new"] == 2
+    assert {
+        item["date_status"] for item in output["opportunities"]
+    } == {"STALE_BY_POSTING_DATE", "EXPIRED_BY_CLOSING_DATE"}
+    assert {
+        item["entity_state"] for item in output["opportunities"]
+    } == {"VACANCY_STATUS_UNKNOWN"}
+
+
+def test_query_trace_is_reproducible_without_exposing_profile_or_credentials():
+    from app.config import CandidateProfile
+
+    profile = CandidateProfile(
+        name="Jane Candidate",
+        phone="+212 600 000 000",
+        skills=["AutoCAD"],
+    )
+    report = DiscoveryReport(
+        plan_combinations=[{
+            "plan_index": 0,
+            "query": (
+                "AutoCAD civil jobs jane@example.com api_key=private-value "
+                "https://example.test/?access_token=secret"
+            ),
+            "intent": "role",
+            "country": "Morocco",
+            "language": "fr",
+        }],
+        source_reports=[{
+            "name": "tavily_web_search",
+            "kind": "tavily",
+            "query_trace": [{
+                "plan_index": 0,
+                "query": (
+                    "AutoCAD civil jobs jane@example.com api_key=private-value "
+                    "https://example.test/?access_token=secret"
+                ),
+                "intent": "role",
+                "country": "Morocco",
+                "language": "fr",
+                "request_status": "deferred",
+                "reason_code": "run_attempt_cap",
+                "result_state": "",
+                "provider_attempts": 0,
+            }],
+            "verification_evidence": [{
+                "url": (
+                    "https://jobs.smartrecruiters.com/Acme/12345"
+                    "?token=secret&source=tracking"
+                ),
+                "ats_vendor": "smartrecruiters",
+                "outcome": "UNKNOWN",
+                "reason_code": "ats_record_missing_required_job_evidence",
+                "observed_at": "2026-10-15T06:00:00Z",
+                "evidence_checks": {
+                    "employer": True,
+                    "description_sufficient": False,
+                    "ignored": "unsafe",
+                },
+            }],
+        }],
+    )
+
+    output = discovery_only.build_sanitized_report(
+        report,
+        [],
+        AgentConfig(),
+        {"limit_per_key": 17, "remaining_by_key": [17]},
+        profile=profile,
+    )
+    serialized = json.dumps(output, ensure_ascii=False)
+    trace = output["sources"][0]["query_trace"][0]
+    plan = output["search_plan"]["combinations"][0]
+    evidence = output["sources"][0]["verification_evidence"][0]
+
+    assert trace["request_status"] == "deferred"
+    assert trace["reason_code"] == "run_attempt_cap"
+    assert trace["plan_combination_id"] == plan["plan_combination_id"]
+    assert "[profile_term]" in trace["query"]
+    assert "[email]" in trace["query"]
+    assert "[credential]" in trace["query"]
+    assert "[url]" in trace["query"]
+    assert "AutoCAD" not in serialized
+    assert "Jane Candidate" not in serialized
+    assert "private-value" not in serialized
+    assert "access_token=secret" not in serialized
+    assert "token=secret" not in serialized
+    assert evidence["evidence_url"] == (
+        "https://jobs.smartrecruiters.com/Acme/12345"
+    )
+    assert evidence["record_id"].startswith("record_")
+    assert evidence["evidence_checks"] == {
+        "employer": True,
+        "description_sufficient": False,
+    }
 
 
 def test_sanitized_report_can_serialize_new_jobs_after_session_closes(db):

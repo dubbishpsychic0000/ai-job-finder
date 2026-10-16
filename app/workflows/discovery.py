@@ -289,6 +289,7 @@ class DiscoveryReport:
     # One entry per configured connector.  This makes a zero-result run
     # explainable without treating it as an error.
     source_reports: list[dict] = field(default_factory=list)
+    plan_combinations: list[dict] = field(default_factory=list)
     alerts: list[str] = field(default_factory=list)
     api_request_budget: dict = field(default_factory=dict)
     new_opportunity_origins: dict[int, str] = field(default_factory=dict)
@@ -956,6 +957,87 @@ def _cap_scheduled_queries(
     return selected, deferred
 
 
+def _source_query_trace(
+    source_cfg: dict,
+    plan: list[dict],
+    allocated: list[dict],
+    scheduled: list[dict],
+    *,
+    max_requests_per_source: int,
+    allocation_reason: str,
+) -> list[dict]:
+    """Describe each applicable source/plan request and its allocation state."""
+    plan_limit = max_requests_per_source or len(plan)
+    allocated_indices = {
+        int(combo["_plan_index"]) for combo in allocated
+    }
+    scheduled_indices = {
+        int(combo["_plan_index"]) for combo in scheduled
+    }
+    trace = []
+    for combo in plan[:plan_limit]:
+        plan_index = int(combo["_plan_index"])
+        if not _source_applies_to_country(source_cfg, combo):
+            continue
+        if plan_index in scheduled_indices:
+            request_status = "pending"
+            reason_code = ""
+        elif plan_index in allocated_indices:
+            request_status = "deferred"
+            reason_code = "search_combination_cap"
+        else:
+            request_status = "deferred"
+            reason_code = allocation_reason or "allocation_deferred"
+        trace.append({
+            "plan_index": plan_index,
+            "query": str(combo.get("query") or ""),
+            "intent": str(combo.get("intent") or "unknown"),
+            "country": str(combo.get("country") or combo.get("location") or ""),
+            "language": str(combo.get("lang") or ""),
+            "request_status": request_status,
+            "reason_code": reason_code,
+            "result_state": "",
+            "provider_attempts": 0,
+        })
+    for combo in plan[plan_limit:]:
+        if _source_applies_to_country(source_cfg, combo):
+            trace.append({
+                "plan_index": int(combo["_plan_index"]),
+                "query": str(combo.get("query") or ""),
+                "intent": str(combo.get("intent") or "unknown"),
+                "country": str(combo.get("country") or combo.get("location") or ""),
+                "language": str(combo.get("lang") or ""),
+                "request_status": "deferred",
+                "reason_code": "source_request_cap",
+                "result_state": "",
+                "provider_attempts": 0,
+            })
+    return trace
+
+
+def _query_outcome_state(
+    *,
+    origin: str,
+    status: str,
+    error_code: str,
+    deferred_reason: str,
+    provider_attempts: int,
+) -> tuple[str, str]:
+    """Classify a source request without confusing skipped keys with skipped queries."""
+    if origin == "cache":
+        return "cached", ""
+    if provider_attempts > 0 or origin in {"api", "direct"}:
+        if status in {"degraded", "unconfigured", "blocked"} or error_code:
+            return "failed", error_code
+        return "attempted", ""
+    reason = error_code or deferred_reason
+    if "budget" in reason or "ledger" in reason:
+        return "deferred", reason
+    if status in {"degraded", "unconfigured", "blocked"} or error_code:
+        return "failed", error_code
+    return "failed", error_code or "request_outcome_unavailable"
+
+
 def _resolve_paths(cfg: dict) -> dict:
     opts = dict(cfg)
     p = opts.get("path")
@@ -1018,11 +1100,32 @@ async def run_discovery(session: Session, config: AgentConfig, prefs: Preference
             session=session,
             refresh_after_days=int(discovery_cfg.get("website_research_refresh_days", 7)),
         )
-    plan = build_adaptive_plan(session, prefs, config, vocab=vocab, profile=profile,
-                               max_per_country=max_per_country,
-                               max_queries_per_run=max_queries,
-                               learning_sources={c.get("name", connector.name)
-                                                 for c, connector in connectors})
+    plan = [
+        {**combo, "_plan_index": index}
+        for index, combo in enumerate(build_adaptive_plan(
+            session,
+            prefs,
+            config,
+            vocab=vocab,
+            profile=profile,
+            max_per_country=max_per_country,
+            max_queries_per_run=max_queries,
+            learning_sources={
+                c.get("name", connector.name)
+                for c, connector in connectors
+            },
+        ))
+    ]
+    report.plan_combinations = [
+        {
+            "plan_index": int(combo["_plan_index"]),
+            "query": str(combo.get("query") or ""),
+            "intent": str(combo.get("intent") or "unknown"),
+            "country": str(combo.get("country") or combo.get("location") or ""),
+            "language": str(combo.get("lang") or ""),
+        }
+        for combo in plan
+    ]
 
     # Employer + agency universe (§7, §9) — opt-in so the job pipeline stays hermetic.
     if discovery_cfg.get("employer_discovery", False):
@@ -1070,14 +1173,15 @@ async def run_discovery(session: Session, config: AgentConfig, prefs: Preference
 
     max_requests = int(discovery_cfg.get("max_requests_per_source", 0))
     allocation_deferred_reasons = [{} for _ in connectors]
-    scheduled_queries, deferred_queries, stale_queries = _allocate_source_queries(
+    allocated_queries, deferred_queries, stale_queries = _allocate_source_queries(
         connectors,
         plan,
         max_requests,
         max_api_attempts=max_api_attempts,
         deferral_reasons=allocation_deferred_reasons,
     )
-    run_budget_deferred = [0] * len(scheduled_queries)
+    run_budget_deferred = [0] * len(allocated_queries)
+    scheduled_queries = allocated_queries
     if max_search_combinations is not None:
         scheduled_queries, run_budget_deferred = _cap_scheduled_queries(
             scheduled_queries, max_search_combinations, plan,
@@ -1103,6 +1207,15 @@ async def run_discovery(session: Session, config: AgentConfig, prefs: Preference
         source_report["detail_verification_attempts"] += 1
         evidence = detail_verifier.verify(url)
         detail_evidence_cache[url] = evidence
+        coordinates = supported_ats_detail(url)
+        source_report.setdefault("verification_evidence", []).append({
+            "url": url,
+            "ats_vendor": coordinates[0] if coordinates else "unsupported",
+            "outcome": evidence.outcome,
+            "reason_code": evidence.reason_code,
+            "observed_at": evidence.observed_at.isoformat(),
+            "evidence_checks": dict(evidence.evidence_checks),
+        })
         return evidence
 
     def record_verification(source_report: dict, evidence, *, existing=False) -> None:
@@ -1137,6 +1250,17 @@ async def run_discovery(session: Session, config: AgentConfig, prefs: Preference
                 inapplicable_countries[country] = (
                     inapplicable_countries.get(country, 0) + 1
                 )
+        allocation_reason = ""
+        if allocation_deferred_reasons[source_index]:
+            reason = max(
+                allocation_deferred_reasons[source_index],
+                key=allocation_deferred_reasons[source_index].get,
+            )
+            allocation_reason = (
+                "daily_budget_exhausted"
+                if reason == "aggregate_daily_budget"
+                else reason
+            )
         source_report = {
             "name": source_name,
             "kind": source_cfg.get("kind", getattr(connector, "kind", "?")),
@@ -1208,6 +1332,15 @@ async def run_discovery(session: Session, config: AgentConfig, prefs: Preference
             "queries_deferred_by_reason": allocation_deferred_reasons[source_index],
             "queries_run_budget_deferred": run_budget_deferred[source_index],
             "queries_stale_cache": stale_queries[source_index],
+            "query_trace": _source_query_trace(
+                source_cfg,
+                plan,
+                allocated_queries[source_index],
+                scheduled_queries[source_index],
+                max_requests_per_source=max_requests,
+                allocation_reason=allocation_reason,
+            ),
+            "verification_evidence": [],
             "api_attempts": 0,
             "api_successes": 0,
             "api_failed_attempts": 0,
@@ -1686,6 +1819,24 @@ async def run_discovery(session: Session, config: AgentConfig, prefs: Preference
             language = str(combo.get("lang", "unknown"))
             language_counts[language] = language_counts.get(language, 0) + 1
 
+        def update_query_trace(
+            combo,
+            *,
+            request_status: str,
+            reason_code: str = "",
+            result_state: str = "",
+            provider_attempts: int = 0,
+            _source_report=source_report,
+        ) -> None:
+            plan_index = int(combo.get("_plan_index", -1))
+            for trace in _source_report["query_trace"]:
+                if trace["plan_index"] == plan_index:
+                    trace["request_status"] = request_status
+                    trace["reason_code"] = reason_code
+                    trace["result_state"] = result_state
+                    trace["provider_attempts"] = max(0, int(provider_attempts))
+                    return
+
         def record_query_outcome(
             results, combo, _connector=connector, source=source_report,
         ):
@@ -1820,8 +1971,18 @@ async def run_discovery(session: Session, config: AgentConfig, prefs: Preference
                 events = source["key_budget_events"]
                 key_counts = events.setdefault(fingerprint, {})
                 key_counts[reason] = key_counts.get(reason, 0) + 1
+            provider_attempts = int(
+                getattr(_connector, "last_call_attempts", 0),
+            )
+            trace_status, trace_reason = _query_outcome_state(
+                origin=origin,
+                status=status,
+                error_code=error_code,
+                deferred_reason=deferred_reason,
+                provider_attempts=provider_attempts,
+            )
             runtime_defer_reason = (
-                deferred_reason or error_code
+                trace_reason if trace_status == "deferred" else ""
             )
             if runtime_defer_reason and (
                 "budget" in runtime_defer_reason or "ledger" in runtime_defer_reason
@@ -1834,7 +1995,6 @@ async def run_discovery(session: Session, config: AgentConfig, prefs: Preference
                     source["live_empty_responses"] += 1
                 if status == "filtered":
                     source["queries_filtered"] += 1
-            provider_attempts = int(getattr(_connector, "last_call_attempts", 0))
             if provider_attempts:
                 for value, key in (
                     (country, "provider_attempts_by_country"),
@@ -1862,6 +2022,15 @@ async def run_discovery(session: Session, config: AgentConfig, prefs: Preference
             if error_code:
                 codes = source["query_error_codes"]
                 codes[error_code] = codes.get(error_code, 0) + 1
+            update_query_trace(
+                combo,
+                request_status=trace_status,
+                reason_code=trace_reason,
+                result_state=status or "unknown",
+                provider_attempts=int(
+                    getattr(_connector, "last_call_attempts", 0),
+                ),
+            )
 
         failure = ""
         try:
@@ -1897,6 +2066,23 @@ async def run_discovery(session: Session, config: AgentConfig, prefs: Preference
                         else:
                             source_report["queries_budget_deferred"] += 1
                             source_report["rate_status"] = "limited"
+                            reason = (
+                                "run_attempt_cap"
+                                if getattr(connector, "attempt_budget", None)
+                                and connector.attempt_budget.remaining() <= 0
+                                else "daily_budget_exhausted"
+                            )
+                            deferred_reasons = source_report[
+                                "queries_deferred_by_reason"
+                            ]
+                            deferred_reasons[reason] = (
+                                deferred_reasons.get(reason, 0) + 1
+                            )
+                            update_query_trace(
+                                combo,
+                                request_status="deferred",
+                                reason_code=reason,
+                            )
                         continue
                     source_report["queries"] += 1
                     record_query_coverage(combo)
@@ -1904,6 +2090,10 @@ async def run_discovery(session: Session, config: AgentConfig, prefs: Preference
                     record_query_outcome(results, combo)
                     items_found += process(combo, results, source_name, source_report)
         except Exception as exc:  # connector-level isolation
+            for trace in source_report["query_trace"]:
+                if trace["request_status"] == "pending":
+                    trace["request_status"] = "failed"
+                    trace["reason_code"] = "connector_exception"
             if not source_report["error"]:
                 source_report["queries_failed"] += 1
             logger.exception("Discovery connector %s failed", source_name)

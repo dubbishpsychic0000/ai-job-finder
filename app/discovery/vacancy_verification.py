@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import json
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from urllib.parse import urlsplit
 
@@ -47,6 +47,7 @@ class VacancyEvidence:
     posted_at_source: str = ""
     closing_at: datetime | None = None
     application_url: str = ""
+    evidence_checks: dict[str, bool] = field(default_factory=dict)
 
 
 def supported_ats_detail(url: str) -> tuple[str, str, str] | None:
@@ -238,10 +239,14 @@ class VacancyDetailVerifier:
                 timeout=12,
                 allow_redirects=False,
             )
-            if int(getattr(page, "status_code", 0) or 0) == 200:
+            original_detail_page_fetched = (
+                int(getattr(page, "status_code", 0) or 0) == 200
+            )
+            if original_detail_page_fetched:
                 structured = _job_jsonld(str(getattr(page, "text", "") or ""))
         except requests.RequestException:
             structured = {}
+            original_detail_page_fetched = False
         if not employer:
             employer = _nested_text(structured, "hiringOrganization", "name")
         title = _text(payload.get("title")) or _text(structured.get("title"))
@@ -268,6 +273,7 @@ class VacancyDetailVerifier:
             posted_field="datePosted",
             closing_raw=closing_raw,
             application_url=route,
+            original_detail_page_fetched=original_detail_page_fetched,
         )
 
     def _smartrecruiters(
@@ -310,17 +316,36 @@ class VacancyDetailVerifier:
             posted_field="releasedDate",
             closing_raw=payload.get("expirationDate"),
             application_url=route,
+            original_detail_page_fetched=False,
         )
 
     def _assess(
         self, *, ats: str, payload: dict, url: str, posting_id: str,
         observed_at: datetime, title: str, employer: str, location: str,
         description: str, posted_raw, posted_field: str, closing_raw,
-        application_url: str,
+        application_url: str, original_detail_page_fetched: bool,
     ) -> VacancyEvidence:
         status = str(payload.get("status") or "").strip().casefold()
         posted_at = parse_date(str(posted_raw)) if posted_raw else None
         closing_at = parse_date(str(closing_raw)) if closing_raw else None
+        valid_route = _valid_application_route(
+            ats, application_url, url, posting_id,
+        )
+        evidence_checks = {
+            "employer": employer.casefold() not in _GENERIC_EMPLOYERS,
+            "role": bool(title and title.casefold() not in _GENERIC_TITLES),
+            "location": bool(location),
+            "description_sufficient": (
+                len(description) >= 80 and len(description.split()) >= 10
+            ),
+            "original_detail_page_reference": bool(url),
+            "original_detail_page_fetched": original_detail_page_fetched,
+            "posting_identity_matched": True,
+            "current_status_recognized": status in _OPEN_STATUS | _CLOSED_STATUS,
+            "publication_date": posted_at is not None,
+            "deadline": closing_at is not None,
+            "application_route_verified": valid_route,
+        }
         if status in _CLOSED_STATUS:
             outcome, reason = "CLOSED", "ats_reports_closed_status"
         elif closing_at is not None and closing_at <= observed_at:
@@ -328,13 +353,13 @@ class VacancyDetailVerifier:
         elif status and status not in _OPEN_STATUS:
             outcome, reason = "UNKNOWN", "ats_status_unrecognized"
         elif (
-            not title or title.casefold() in _GENERIC_TITLES
-            or employer.casefold() in _GENERIC_EMPLOYERS
-            or not location or len(description) < 80
-            or len(description.split()) < 10
+            not evidence_checks["role"]
+            or not evidence_checks["employer"]
+            or not evidence_checks["location"]
+            or not evidence_checks["description_sufficient"]
         ):
             outcome, reason = "UNKNOWN", "ats_record_missing_required_job_evidence"
-        elif not _valid_application_route(ats, application_url, url, posting_id):
+        elif not valid_route:
             outcome, reason = "UNKNOWN", "ats_application_route_unverified"
         else:
             outcome, reason = "OPEN", "matching_public_ats_posting_record"
@@ -355,6 +380,7 @@ class VacancyDetailVerifier:
             ),
             closing_at=closing_at,
             application_url=application_url if outcome == "OPEN" else "",
+            evidence_checks=evidence_checks,
         )
 
 

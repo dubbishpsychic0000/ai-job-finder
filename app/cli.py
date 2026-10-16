@@ -420,6 +420,7 @@ def cmd_discovery_only(args) -> None:
                                 config,
                                 daily_budget_summary(data_dir, keys),
                                 sources_config=sources_config,
+                                profile=profile,
                             )
                             report["provider"]["restored_budget_ledger_count"] = (
                                 restored_ledger_count

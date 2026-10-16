@@ -97,6 +97,19 @@ def test_greenhouse_active_detail_requires_matching_structured_record():
     assert result.posted_at_source == "greenhouse:datePosted"
     assert result.closing_at == datetime(2026, 12, 1, tzinfo=timezone.utc)
     assert result.application_url == GREENHOUSE_URL
+    assert result.evidence_checks == {
+        "employer": True,
+        "role": True,
+        "location": True,
+        "description_sufficient": True,
+        "original_detail_page_reference": True,
+        "original_detail_page_fetched": True,
+        "posting_identity_matched": True,
+        "current_status_recognized": False,
+        "publication_date": True,
+        "deadline": True,
+        "application_route_verified": True,
+    }
     assert len(calls) == 2
     assert all(call[1]["allow_redirects"] is False for call in calls)
 
@@ -136,6 +149,7 @@ def test_smartrecruiters_active_record_can_have_unknown_posting_date():
     assert result.employer == "Acme Construction"
     assert result.location == "Casablanca, Morocco"
     assert "Responsibilities" in result.description
+    assert result.evidence_checks["original_detail_page_fetched"] is False
     assert result.posted_at is None
     assert result.posted_at_source == ""
     assert result.application_url == SMARTRECRUITERS_URL
@@ -233,6 +247,10 @@ def test_mismatched_id_and_insufficient_job_evidence_do_not_verify():
     ).verify(GREENHOUSE_URL)
     assert missing.outcome == "UNKNOWN"
     assert missing.reason_code == "ats_record_missing_required_job_evidence"
+    assert missing.evidence_checks["employer"] is False
+    assert missing.evidence_checks["location"] is False
+    assert missing.evidence_checks["description_sufficient"] is False
+    assert missing.evidence_checks["posting_identity_matched"] is True
 
 
 def test_application_route_must_match_the_public_ats_without_embedded_credentials():
@@ -373,7 +391,7 @@ def test_verified_action_gate_requires_recent_evidence_and_verified_route(db):
         entity_state="VACANCY_VERIFIED",
         entity_reason_code="matching_public_ats_posting_record",
         entity_evidence_url=GREENHOUSE_URL,
-        last_verified_at=NOW,
+        last_verified_at=datetime.now(timezone.utc),
     )
     db.add(verified)
     db.flush()
@@ -394,6 +412,14 @@ def test_verified_action_gate_requires_recent_evidence_and_verified_route(db):
 def test_discovery_persists_detail_evidence_and_source_verification_counts(
     db, config, prefs, profile, monkeypatch,
 ):
+    from app.discovery.verification import freshness_label
+
+    monkeypatch.setattr(
+        discovery_workflow,
+        "freshness_label",
+        lambda posted_at: freshness_label(posted_at, NOW),
+    )
+
     class Connector:
         name = "tavily_official_ats_search"
         kind = "api_search"

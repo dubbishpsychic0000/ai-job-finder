@@ -13,7 +13,11 @@ from app.connectors.tavily_resilience import (
 )
 from app.discovery.country_ranking import CountryScore
 from app.workflows import adaptive_plan
-from app.workflows.discovery import _allocate_source_queries
+from app.workflows.discovery import (
+    _allocate_source_queries,
+    _query_outcome_state,
+    _source_query_trace,
+)
 from app.workflows.search_plan import SearchPlan
 
 
@@ -579,6 +583,65 @@ def test_eight_attempt_allocator_uses_multiple_morocco_source_scopes(tmp_path):
     assert not any(
         reasons.get("aggregate_daily_budget", 0) for reasons in deferrals
     )
+
+
+def test_query_trace_distinguishes_allocation_and_combination_deferrals():
+    source = {"name": "broad", "applies_to_countries": ["*"]}
+    plan = [
+        {
+            "query": f"civil engineering {index}",
+            "country": "Morocco",
+            "location": "Morocco",
+            "lang": "fr",
+            "intent": "role",
+            "_plan_index": index,
+        }
+        for index in range(3)
+    ]
+
+    trace = _source_query_trace(
+        source,
+        plan,
+        plan[:2],
+        plan[:1],
+        max_requests_per_source=3,
+        allocation_reason="run_attempt_cap",
+    )
+
+    assert [entry["request_status"] for entry in trace] == [
+        "pending",
+        "deferred",
+        "deferred",
+    ]
+    assert [entry["reason_code"] for entry in trace] == [
+        "",
+        "search_combination_cap",
+        "run_attempt_cap",
+    ]
+
+
+def test_successful_provider_fallback_is_not_counted_as_query_deferral():
+    assert _query_outcome_state(
+        origin="api",
+        status="ok",
+        error_code="",
+        deferred_reason="daily_request_budget_exhausted",
+        provider_attempts=1,
+    ) == ("attempted", "")
+    assert _query_outcome_state(
+        origin="none",
+        status="degraded",
+        error_code="run_api_attempt_budget_exhausted",
+        deferred_reason="run_api_attempt_budget_exhausted",
+        provider_attempts=0,
+    ) == ("deferred", "run_api_attempt_budget_exhausted")
+    assert _query_outcome_state(
+        origin="api",
+        status="degraded",
+        error_code="provider_request_failed",
+        deferred_reason="daily_request_budget_exhausted",
+        provider_attempts=1,
+    ) == ("failed", "provider_request_failed")
 
 
 def test_normalization_rejection_has_a_stable_reason_code():

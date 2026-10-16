@@ -1,6 +1,7 @@
 """Bounded, sanitized production discovery without analysis or outbound actions."""
 from __future__ import annotations
 
+import hashlib
 import re
 from collections import Counter
 from datetime import datetime, timezone
@@ -11,7 +12,7 @@ from app.discovery.opportunity_details import is_verified_individual_vacancy
 from app.discovery.vacancy_verification import MAX_DETAIL_VERIFICATIONS_PER_RUN
 from app.workflows.discovery import DEFAULT_SOURCES_PATH, DiscoveryReport, run_discovery
 
-REPORT_SCHEMA_VERSION = 4
+REPORT_SCHEMA_VERSION = 5
 MAX_SEARCH_COMBINATIONS = 12
 MAX_TAVILY_ATTEMPTS = 8
 
@@ -22,6 +23,11 @@ _QUALIFICATION_PATTERNS = (
 )
 _EMAIL = re.compile(r"\b[\w.+-]+@[\w.-]+\.[A-Za-z]{2,}\b")
 _PHONE = re.compile(r"(?<!\w)(?:\+?\d[\d ().-]{7,}\d)(?!\w)")
+_URL = re.compile(r"\bhttps?://\S+", re.IGNORECASE)
+_SECRET_ASSIGNMENT = re.compile(
+    r"\b(?:api[_-]?key|authorization|bearer|token)\s*[:=]\s*\S+",
+    re.IGNORECASE,
+)
 
 
 def bounded_source_allowed(source: dict) -> bool:
@@ -340,6 +346,62 @@ def _clean_text(value, limit: int = 250) -> str:
     return text[:limit]
 
 
+def _profile_sensitive_terms(profile: CandidateProfile | None) -> list[str]:
+    if profile is None:
+        return []
+
+    values: list[str] = []
+
+    def collect(value) -> None:
+        if isinstance(value, str):
+            if len(value.strip()) >= 4:
+                values.append(value.strip())
+        elif isinstance(value, dict):
+            for child in value.values():
+                collect(child)
+        elif isinstance(value, (list, tuple, set)):
+            for child in value:
+                collect(child)
+
+    collect(profile.model_dump())
+    return sorted(set(values), key=len, reverse=True)
+
+
+def _safe_search_query(value, sensitive_terms=()) -> str:
+    query = " ".join(str(value or "").split())
+    for term in sensitive_terms:
+        if not term:
+            continue
+        query = re.sub(
+            re.escape(term),
+            "[profile_term]",
+            query,
+            flags=re.IGNORECASE,
+        )
+    query = _SECRET_ASSIGNMENT.sub("[credential]", query)
+    query = _EMAIL.sub("[email]", query)
+    query = _PHONE.sub("[phone]", query)
+    query = _URL.sub("[url]", query)
+    return query[:300]
+
+
+def _trace_ids(query: str, intent: str, country: str, language: str):
+    intent_payload = "\0".join((intent, query))
+    combination_payload = "\0".join((query, intent, country, language))
+    intent_id = hashlib.sha256(intent_payload.encode("utf-8")).hexdigest()[:12]
+    combination_id = hashlib.sha256(
+        combination_payload.encode("utf-8"),
+    ).hexdigest()[:12]
+    return f"intent_{intent_id}", f"plan_{combination_id}"
+
+
+def _stable_record_id(url: str) -> str:
+    safe_url = _public_url(url)
+    return "record_" + hashlib.sha256(
+        safe_url.encode("utf-8"),
+    ).hexdigest()[:16]
+
+
 def _public_url(value) -> str:
     try:
         parts = urlsplit(str(value or ""))
@@ -517,8 +579,32 @@ def build_sanitized_report(
     *,
     sources_config: dict | None = None,
     now: datetime | None = None,
+    profile: CandidateProfile | None = None,
 ) -> dict:
     instant = now or datetime.now(timezone.utc)
+    sensitive_terms = _profile_sensitive_terms(profile)
+    safe_plan = []
+    for item in report.plan_combinations:
+        query = _safe_search_query(item.get("query"), sensitive_terms)
+        intent = _clean_text(item.get("intent"), 48)
+        country = _clean_text(item.get("country"), 80)
+        language = _clean_text(item.get("language"), 16)
+        plan_index = int(item.get("plan_index", 0))
+        intent_id, combination_id = _trace_ids(
+            query, intent, country, language,
+        )
+        safe_plan.append({
+            "plan_index": plan_index,
+            "query_intent_id": intent_id,
+            "plan_combination_id": combination_id,
+            "query": query,
+            "query_redacted": query != " ".join(
+                str(item.get("query") or "").split()
+            ),
+            "intent": intent,
+            "country": country,
+            "language": language,
+        })
     source_reports = []
     queried_country_counts: Counter[str] = Counter()
     queried_language_counts: Counter[str] = Counter()
@@ -535,6 +621,64 @@ def build_sanitized_report(
         )
         queried_country_counts.update(item.get("queries_by_country") or {})
         queried_language_counts.update(item.get("queries_by_language") or {})
+        query_trace = []
+        for trace in item.get("query_trace") or []:
+            query = _safe_search_query(trace.get("query"), sensitive_terms)
+            intent = _clean_text(trace.get("intent"), 48)
+            country = _clean_text(trace.get("country"), 80)
+            language = _clean_text(trace.get("language"), 16)
+            plan_index = int(trace.get("plan_index", 0))
+            intent_id, combination_id = _trace_ids(
+                query, intent, country, language,
+            )
+            request_status = str(trace.get("request_status") or "unknown")
+            if request_status not in {
+                "pending", "attempted", "cached", "deferred", "failed",
+            }:
+                request_status = "unknown"
+            reason_code = str(trace.get("reason_code") or "")
+            if not re.fullmatch(r"[a-z][a-z0-9_]{0,79}", reason_code):
+                reason_code = ""
+            query_trace.append({
+                "plan_index": plan_index,
+                "query_intent_id": intent_id,
+                "plan_combination_id": combination_id,
+                "query": query,
+                "query_redacted": query != " ".join(
+                    str(trace.get("query") or "").split()
+                ),
+                "intent": intent,
+                "country": country,
+                "language": language,
+                "source": _clean_text(item.get("name"), 80),
+                "request_status": request_status,
+                "reason_code": reason_code,
+                "result_state": _clean_text(trace.get("result_state"), 48),
+                "provider_attempts": max(
+                    0, int(trace.get("provider_attempts", 0)),
+                ),
+            })
+        verification_evidence = []
+        for evidence in item.get("verification_evidence") or []:
+            url = _public_url(evidence.get("url"))
+            checks = evidence.get("evidence_checks")
+            checks = checks if isinstance(checks, dict) else {}
+            verification_evidence.append({
+                "record_id": _stable_record_id(url),
+                "source_category": _clean_text(
+                    evidence.get("ats_vendor"), 32,
+                ),
+                "outcome": _clean_text(evidence.get("outcome"), 24),
+                "reason_code": _clean_text(evidence.get("reason_code"), 80),
+                "observed_at": _clean_text(evidence.get("observed_at"), 64),
+                "evidence_url": url,
+                "evidence_checks": {
+                    str(name): value
+                    for name, value in checks.items()
+                    if re.fullmatch(r"[a-z][a-z0-9_]{0,63}", str(name))
+                    and isinstance(value, bool)
+                },
+            })
         source_reports.append({
             "name": _clean_text(item.get("name"), 80),
             "kind": _clean_text(item.get("kind"), 40),
@@ -575,6 +719,8 @@ def build_sanitized_report(
             "queries_failed": int(item.get("queries_failed", 0)),
             "queries_budget_deferred": int(item.get("queries_budget_deferred", 0)),
             "queries_run_limit_deferred": int(item.get("queries_run_budget_deferred", 0)),
+            "query_trace": query_trace[:256],
+            "verification_evidence": verification_evidence[:MAX_DETAIL_VERIFICATIONS_PER_RUN],
             "stale_cache_entries": int(item.get("queries_stale_cache", 0)),
             "external_results": int(item.get("fetched", 0)),
             "public_page_requests": int(item.get("public_page_requests", 0)),
@@ -852,6 +998,8 @@ def build_sanitized_report(
             "queries_failed": 0,
             "queries_budget_deferred": 0,
             "queries_run_limit_deferred": 0,
+            "query_trace": [],
+            "verification_evidence": [],
             "stale_cache_entries": 0,
             "external_results": 0,
             "public_page_requests": 0,
@@ -947,6 +1095,7 @@ def build_sanitized_report(
             "REJECTED_NON_VACANCY": "REJECTED_NON_VACANCY",
         }.get(entity_state, "UNKNOWN_OR_UNAVAILABLE")
         opportunities.append({
+            "record_id": _stable_record_id(listing_url),
             "title": _clean_text(job.title, 180) or "Untitled listing",
             "employer": _clean_text(job.company.name if job.company else "", 120) or None,
             "listing_url": listing_url,
@@ -1106,6 +1255,13 @@ def build_sanitized_report(
         "schema_version": REPORT_SCHEMA_VERSION,
         "status": "COMPLETED",
         "reason_code": "",
+        "search_plan": {
+            "planned_combinations": len({
+                item["plan_combination_id"] for item in safe_plan
+            }),
+            "plan_entries": len(safe_plan),
+            "combinations": safe_plan[:MAX_SEARCH_COMBINATIONS],
+        },
         "limits": {
             "search_combinations": MAX_SEARCH_COMBINATIONS,
             "tavily_api_attempts": MAX_TAVILY_ATTEMPTS,
@@ -1142,6 +1298,12 @@ def build_sanitized_report(
                 count for status, count in freshness_counts.items()
                 if status in {"STALE_BY_POSTING_DATE", "EXPIRED_BY_CLOSING_DATE"}
             ),
+            "stale_by_posting_date_new": freshness_counts[
+                "STALE_BY_POSTING_DATE"
+            ],
+            "expired_by_closing_date_new": freshness_counts[
+                "EXPIRED_BY_CLOSING_DATE"
+            ],
             "unverifiable_posting_date_new": freshness_counts["UNVERIFIABLE_DATE"],
         },
         "query_outcome": {

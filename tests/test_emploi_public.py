@@ -357,6 +357,10 @@ def test_competition_evidence_persists_and_is_held_for_owner_review(
     deadline = observed_at.replace(microsecond=0) + timedelta(days=2)
     metadata["deadline_at"] = deadline.isoformat()
     metadata["deadline_original"] = deadline.strftime("%d/%m/%Y - %H:%M")
+    metadata["status"] = "OPEN_ANNOUNCEMENT"
+    metadata["stage"] = "OPEN_ANNOUNCEMENT"
+    metadata["verification_status"] = "verified"
+    metadata["reason_code"] = "official_public_competition_verified_open"
     opportunity = _opportunity(metadata)
     opportunity.closing_at = deadline
 
