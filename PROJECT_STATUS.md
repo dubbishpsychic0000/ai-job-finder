@@ -1892,3 +1892,117 @@ it made **0** reservations and **0** application, messaging, BTP, or
 production-write actions. No discovery was chained. The proposed allocation
 remains subject to a separate explicit authorization and successful durable
 reservations at dispatch time.
+
+## Phase 2.8m one bounded discovery-only evaluation
+
+Following explicit authorization, exactly one `discovery_only` workflow ran
+on `main` at commit
+`2129af7a8afd35a3ff5e8f84ceb7bf4441999edc`:
+[run 38910729695](https://github.com/dubbishpsychic0000/ai-job-finder/actions/runs/38910729695).
+The sanitized artifact `discovery-only-38910729695` uploaded successfully and
+was retrieved. The restore step and bounded discovery command succeeded. The
+normal application pipeline, employer-history and BTP workflows, WhatsApp,
+vault state persistence, and non-sanitized run-log upload were skipped.
+
+### Readiness, reservations, and remaining budget
+
+The discovery restore/readiness gate passed on UTC day **2026-10-16**. All
+**4/4 required inputs** and **7/7 budget ledgers** were restored and validated;
+the private-vault origin/ref and reservation checkout path passed the existing
+checks. The three current-day ledgers had no general allowance. The other four
+were rolled over only through the durable reservation mechanism: all **8/8
+Tavily attempts** received a successful durable general-purpose reservation
+before dispatch, with **8 durable ledger writes**. There were **0** failed
+reservations, provider failures, rate-limit errors, or retries.
+
+The report's post-run general-purpose budget (limit **17 per key**, excluding
+the protected three-request-per-key BTP reserve) is **60 attempts remaining**,
+reported per key as `[0, 0, 0, 9, 17, 17, 17]`. This is the sanitized
+general-budget summary; it does not expose a fingerprint-to-position mapping.
+Discovery used only the general allowance. The BTP reserve remained excluded
+by the durable reservation limit and no BTP request or action occurred.
+
+### Actual query allocation and deferred requests
+
+The plan contained **12** combinations, of which **3** reached at least one
+connector: Morocco Arabic `[profile_term] technician`, Morocco French
+`technicien travaux publics`, and France French `[profile_term] technician`.
+The exact redacted query text, stable intent/combination IDs, source state,
+attempt count, result state, and reason are preserved in the sanitized
+artifact's query traces.
+
+Tavily allocation did **not** achieve the requested six-Morocco/two-
+international target. It made **7 Morocco attempts** (4 Arabic, 3 French),
+**1 France attempt** (French), and **0 Belgium attempts**. Belgium's planned
+Dutch-language role query `[profile_term] technician` and English-language
+`junior [profile_term] technician` each had both broad web and official ATS
+source requests deferred with `run_attempt_cap` after the shared attempt cap
+was consumed; the broad and ATS sources were applicable to Belgium.
+Morocco-only sources were, as configured, inapplicable outside Morocco.
+
+The eight live Tavily attempts were: Morocco Arabic broad search, Rekrute,
+Emploi.ma, and ANAPEC (**4**); Morocco French official ATS, Emploi-Public
+domain search, and Indeed Morocco (**3**); and France French broad search
+(**1**). The four cached rows were the Emploi-Public-domain Tavily scope,
+Marocannonces, Indeed Morocco, and the Emploi-Public adapter.
+
+| Source | Tavily attempts | Cached source responses | Deferred source/query requests |
+|---|---:|---:|---:|
+| Broad web search | 2 | 0 | 10 |
+| Official ATS search | 1 | 0 | 11 |
+| Rekrute | 1 | 0 | 1 |
+| Emploi.ma | 1 | 0 | 1 |
+| Amaljob | 0 | 0 | 2 |
+| ANAPEC | 1 | 0 | 1 |
+| Emploi-Public-domain Tavily scope | 1 | 1 | 0 |
+| Marocannonces | 0 | 1 | 1 |
+| Dreamjob | 0 | 0 | 2 |
+| Indeed Morocco | 1 | 1 | 0 |
+| Bghit Nekhdem | 0 | 0 | 2 |
+| Jobzyn | 0 | 0 | 2 |
+| Moncallcenter | 0 | 0 | 2 |
+
+The **35 deferred source/query combinations** all have reason
+`run_attempt_cap`; the per-source counts above reconcile to the artifact's
+`requests_not_attempted_due_to_budget: 35`. Across the source traces there
+were **13** attempted-or-cached source requests: 8 live Tavily requests, 1
+direct Emploi-Public adapter query, and 4 cached responses. The adapter's
+cached query is not a Tavily attempt. No query/source request failed.
+
+The robots-aware Emploi-Public adapter made **7 portal page requests**, all
+in Arabic: 1 robots request, 2 listing-page requests (both fetched and
+parsed), and 4 detail-page requests (all fetched and parsed). It parsed 26
+listing cards and 2 procedural notices: one convocation and one results
+publication, neither an open-vacancy confirmation. One existing competition
+was reverified and reported closed with reason
+`application_deadline_elapsed`; no new public competition was verified.
+
+### Discovery and verification outcomes
+
+The report records **72 provider results returned**, **48 filtered** (24
+from cached provider results), **28 external results fetched**, **28
+normalized records**, and **17 duplicates**. These are not vacancy counts.
+Among **9 new records**, the classification was **6 research leads**, **2
+rejected non-vacancies**, and **1 unverified individual-vacancy candidate**;
+all 9 had `UNVERIFIABLE_DATE`. There were **0 verified open vacancies** and
+**0 newly proven expired/closed vacancies**.
+
+| Record | Employer | Role | Location | Detail/posting identity | Current status | Publication/deadline | Application route |
+|---|---|---|---|---|---|---|---|
+| `record_5c2f94d85b303720` | Unknown | “Job Vacancy: Apprentice Civil Engineering Technician” | Morocco is only the unverified search-country label | A public listing reference exists at `https://teacakeclub.org/2026/08/19/job-vacancy-apprentice-civil-engineering-technician`; the source is unsupported for detail verification, no detail fetch or posting identity was verified | Unverified; current status not established; reason `unsupported_detail_verification_source` | Publication date and deadline unknown; URL date is not accepted as posting-date evidence | `NOT_DETECTED`; no route verified |
+
+This candidate is **not proven open, old, expired, or closed**. Its source
+reference and title do not establish employer, actual work location,
+posting-specific identity, current status, publication date, deadline, or
+submission route. Eligibility was not evaluated. The sanitized artifact
+records the available evidence and verification reason; no snippet or HTTP
+success was treated as vacancy proof.
+
+### Side effects and stop
+
+The sanitized report records **0** production-database writes, applications,
+drafts, emails, Gmail access, or WhatsApp messages. The workflow skipped BTP
+and all downstream application paths. It made **8 authorized private-vault
+budget-ledger writes** for reservations; production candidate/opportunity
+records were not changed. Discovery-result persistence was limited to the
+ephemeral run database. No retry or second evaluation was launched.
