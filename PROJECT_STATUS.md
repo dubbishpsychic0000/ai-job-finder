@@ -1844,3 +1844,51 @@ failed source/plan rows, plus evidence checks for every verified candidate.
 This is an offline audit and implementation only. No new live discovery,
 provider request, vault restore/write, budget reservation, application,
 message, BTP action, or production candidate/opportunity mutation was made.
+
+## Phase 2.8l fresh restore-only budget preflight
+
+Exactly one `discovery_restore_preflight` ran on `main` at Phase 2.8k status
+commit `31cd8acdef459099c04553b1c78be9bcf61dfd58`:
+[run 38907638754](https://github.com/dubbishpsychic0000/ai-job-finder/actions/runs/38907638754).
+The job and sanitized report upload succeeded; the normal `pipeline` job was
+skipped. The report was retrieved as
+`discovery-restore-preflight-38907638754`.
+
+At the preflight timestamp the UTC day was **2026-10-16**. The configured
+private-vault origin, `main` ref, restored clone path, and reservation checkout
+path were verified. All **4/4 required inputs** and **7/7 expected budget
+ledgers** were present and validated. Ledger outcomes were **3
+`valid_current_day`** and **4 `prior_day_rollover_pending`**.
+
+Current general-purpose capacity is **0**. Three current-day ledgers each
+have a general count of 17/17; their remaining **9 total requests** are the
+protected BTP reserve (3 per key), not discovery capacity. The BTP reserve
+validation passed and every ledger reports `btp_reserve_intact: true`.
+
+Four keys are conditionally eligible for general discovery after a successful
+durable reservation performs UTC-day rollover: fingerprints `240c8071`,
+`bf109685`, `a20550bf`, and `39950b91`. Each would have at most 17 general
+attempts after rollover, or **68 conditional attempts total**. This is not
+current capacity or a reservation; the preflight created **0** reservations.
+The three excluded keys are fingerprints `da6f156a`, `95f8557c`, and
+`3265acb4`; their current-day general allowance is exhausted, while their
+three-request-per-key BTP reserve remains protected.
+
+The proposed allocation of six Morocco and two international Tavily attempts
+is within the conditional 68-attempt general capacity and the existing
+eight-attempt cap, but is **not currently dispatchable**: each request still
+requires its own successful durable reservation after rollover. The existing
+12-plan-combination limit is unchanged. Source applicability supports the
+intended country split: broad Tavily and official-ATS search apply to all
+countries; Morocco-only job-board and government sources apply only to
+Morocco. The Emploi-Public adapter remains Morocco-only and separate from
+Tavily's attempt count, with existing bounds of 2 listing pages and up to 12
+detail pages, subject to robots checks. Preflight made no portal requests.
+
+The report's `discovery_gate.authorized` value reflects conditional
+reservation-gated eligibility, not authorization from the user to evaluate.
+This preflight dispatched **0** provider requests and **0** discovery queries;
+it made **0** reservations and **0** application, messaging, BTP, or
+production-write actions. No discovery was chained. The proposed allocation
+remains subject to a separate explicit authorization and successful durable
+reservations at dispatch time.
