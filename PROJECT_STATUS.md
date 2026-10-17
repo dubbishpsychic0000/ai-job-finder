@@ -2104,3 +2104,35 @@ explicit authorization.
 - Full test suite: **570 passed, 1 skipped**.
 - Ruff on all changed Python files, Python compilation, parsing of all
   **8 workflow/config YAML files**, and `git diff --check`: **passed**.
+
+## Phase 2.8o restore-only readiness check — blocked
+
+The requested checkout was verified at `main` commit
+`5f3df36068e14a6df1e00a52246b8886949c73c8`. The preflight workflow was
+inspected: its dedicated restore-only job reads and validates the private
+vault and budget ledgers, reports zero reservations and zero provider
+requests, and excludes the normal pipeline job.
+
+Exactly one dispatch was attempted for `discovery_restore_preflight`, but
+GitHub rejected the workflow-dispatch API request with HTTP 403:
+`Must have admin rights to Repository`. No Actions run was created, so there
+is no preflight run URL or sanitized readiness artifact. No vault restore,
+ledger read, reservation, Tavily/portal/provider request, or downstream job
+ran in this phase.
+
+The current UTC date at the authorized check time was **2026-10-17**. Because
+the preflight did not execute, today's required-input and ledger validation
+counts, current general-purpose capacity, conditional rollover capacity,
+eligible/excluded provider keys, and three-request-per-key BTP reserve status
+are **unverified**. The prior 2026-10-16 preflight is historical and must not
+be used to infer today's availability. The proposed 6 Morocco / 1 France / 1
+Belgium allocation remains within the published 8-attempt and 12-plan
+combination caps, and broad web / official-ATS sources remain configured for
+international countries while Morocco-specific sources remain restricted to
+Morocco; budget feasibility cannot be confirmed without the blocked fresh
+preflight. No readiness or live-evaluation authorization is implied.
+
+Safe remediation is to have a repository administrator grant the required
+workflow-dispatch permission, then request a new, separately authorized
+restore-only preflight for the current UTC day. No live discovery evaluation
+should be started before that check and separate explicit authorization.
