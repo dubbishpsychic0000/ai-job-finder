@@ -147,6 +147,9 @@ def cmd_discovery_only(args) -> None:
         validate_budget_ledgers,
         validate_discovery_input_status,
     )
+    from app.workflows.discovery_only_restore import (
+        validate_discovery_dispatch_report,
+    )
     from app.workflows.tavily_budget_vault import (
         BudgetPersistenceError,
         GitVaultBudgetStore,
@@ -220,18 +223,33 @@ def cmd_discovery_only(args) -> None:
             ] if isinstance(restore_status.get("ledger_diagnostics"), list) else []
         else:
             status = json.loads(status_path.read_text(encoding="utf-8"))
+            readiness_path = data_dir / "discovery_restore_preflight_report.json"
+            try:
+                readiness_report = json.loads(
+                    readiness_path.read_text(encoding="utf-8"),
+                )
+            except (OSError, ValueError):
+                readiness_report = None
+            readiness_error = validate_discovery_dispatch_report(readiness_report)
+            if readiness_error:
+                report = blocked_report(
+                    readiness_error,
+                    phase="input_restore",
+                )
             profile_path = root / "candidate" / "profile.yaml"
             preferences_path = root / "candidate" / "preferences.yaml"
             keys_path = root / "secrets" / "tavily_keys.txt"
-            if not profile_path.is_file() or not preferences_path.is_file():
+            if report is None and (
+                not profile_path.is_file() or not preferences_path.is_file()
+            ):
                 report = blocked_report(
                     "candidate_search_preferences_missing", phase="profile_parse",
                 )
-            elif not database_path.is_file():
+            elif report is None and not database_path.is_file():
                 report = blocked_report(
                     "production_database_snapshot_missing", phase="database_check",
                 )
-            else:
+            elif report is None:
                 phase = "config_load"
                 config = get_config()
                 phase = "profile_parse"

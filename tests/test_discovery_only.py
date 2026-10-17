@@ -143,6 +143,37 @@ def _prepare_cli_inputs(root: Path, database_path: Path) -> None:
             "expected_budget_ledger_count": 1,
             "restored_budget_ledger_count": 1,
             "provider_cache_restored": False,
+            "discovery_readiness_schema_version": 2,
+            "discovery_readiness": "READY",
+            "discovery_dispatch_permission": True,
+            "discovery_readiness_evaluated_at": datetime.now(timezone.utc).isoformat(),
+            "discovery_readiness_utc_day": datetime.now(timezone.utc).date().isoformat(),
+            "discovery_readiness_reason_code": "",
+        }),
+        encoding="utf-8",
+    )
+    (root / "data" / "discovery_restore_preflight_report.json").write_text(
+        json.dumps({
+            "schema_version": 2,
+            "status": "COMPLETED",
+            "execution_status": "COMPLETED",
+            "readiness": "READY",
+            "readiness_evaluated_at": datetime.now(timezone.utc).isoformat(),
+            "readiness_utc_day": datetime.now(timezone.utc).date().isoformat(),
+            "readiness_reason_code": "",
+            "readiness_reason_codes": [],
+            "discovery_dispatch_permission": True,
+            "reason_code": "general_capacity_available",
+            "discovery_gate": {
+                "authorized": True,
+                "policy": "fresh_ready_report_and_explicit_dispatch_permission",
+                "reason_code": "",
+            },
+            "provider_budget": {
+                "general_capacity_current_utc_day": 17,
+                "aggregate_capacity_remaining": {"general_remaining": 17},
+                "btp_reserve_validation": "passed",
+            },
         }),
         encoding="utf-8",
     )
@@ -268,6 +299,15 @@ def test_missing_discovery_inputs_fail_closed(
         (root / "candidate" / "preferences.yaml").unlink()
     else:
         database_path.unlink()
+    status_path = root / "data" / "discovery_only_inputs_status.json"
+    status = json.loads(status_path.read_text(encoding="utf-8"))
+    status.pop("discovery_readiness_schema_version", None)
+    status.pop("discovery_readiness", None)
+    status.pop("discovery_dispatch_permission", None)
+    status.pop("discovery_readiness_evaluated_at", None)
+    status.pop("discovery_readiness_utc_day", None)
+    status.pop("discovery_readiness_reason_code", None)
+    status_path.write_text(json.dumps(status), encoding="utf-8")
 
     report = _run_discovery_cli(monkeypatch, root, database_path)
 
@@ -305,6 +345,38 @@ def test_absent_or_invalid_input_manifest_blocks_before_discovery(
     )
     assert report["status"] == "BLOCKED"
     assert report["reason_code"] == "discovery_input_status_invalid"
+    assert dispatched == []
+
+
+def test_absent_or_invalid_readiness_report_blocks_before_discovery(
+    tmp_path, monkeypatch,
+):
+    root = tmp_path / "repo"
+    database_path = root / "data" / "agent.db"
+    _prepare_cli_inputs(root, database_path)
+    report_path = root / "data" / "discovery_restore_preflight_report.json"
+    report_path.unlink()
+    dispatched = []
+
+    async def forbidden_discovery(*_args, **_kwargs):
+        dispatched.append(True)
+        return DiscoveryReport()
+
+    report = _run_discovery_cli(
+        monkeypatch, root, database_path, run_discovery=forbidden_discovery,
+    )
+
+    assert report["status"] == "BLOCKED"
+    assert report["phase"] == "input_restore"
+    assert report["reason_code"] == "discovery_readiness_report_invalid"
+    assert dispatched == []
+
+    report_path.write_text('{"status":"COMPLETED"}', encoding="utf-8")
+    report = _run_discovery_cli(
+        monkeypatch, root, database_path, run_discovery=forbidden_discovery,
+    )
+    assert report["status"] == "BLOCKED"
+    assert report["reason_code"] == "discovery_readiness_report_invalid"
     assert dispatched == []
 
 
@@ -1199,7 +1271,10 @@ def test_workflow_discovery_task_skips_outbound_vault_and_full_pipeline_steps():
     ):
         assert "discovery_only" in steps[name]["if"]
 
+    restore = steps["Restore bounded discovery inputs only"]
     run_step = steps["Run bounded discovery-only evaluation"]
+    assert "validate_discovery_dispatch_report" in restore["run"]
+    assert 'cp "$report" data/discovery_restore_preflight_report.json' in restore["run"]
     assert "inputs.task == 'discovery_only'" in run_step["if"]
     assert "run-once" not in run_step["run"]
     assert run_step["env"]["TAVILY_DEBUG"] == "0"
@@ -1218,7 +1293,6 @@ def test_workflow_discovery_task_skips_outbound_vault_and_full_pipeline_steps():
         "AUTHORIZE_LIVE_SPONTANEOUS"
     ]
 
-    restore = steps["Restore bounded discovery inputs only"]
     assert restore["id"] == "discovery_restore"
     assert "set -euo pipefail" in restore["run"]
     assert "set +e" not in restore["run"]

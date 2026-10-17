@@ -9,7 +9,7 @@ import re
 import shutil
 import subprocess
 import sys
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from urllib.parse import urlsplit
 
@@ -27,6 +27,23 @@ class DiscoveryRestoreError(RuntimeError):
     def __init__(self, reason_code: str):
         super().__init__(reason_code)
         self.reason_code = reason_code
+
+
+_READINESS_MAX_AGE = timedelta(minutes=15)
+
+
+def _fresh_readiness_timestamp(value: object) -> bool:
+    if not isinstance(value, str):
+        return False
+    try:
+        evaluated_at = datetime.fromisoformat(value)
+    except ValueError:
+        return False
+    if evaluated_at.tzinfo is None:
+        return False
+    now = datetime.now(timezone.utc)
+    age = now - evaluated_at.astimezone(timezone.utc)
+    return timedelta(0) <= age <= _READINESS_MAX_AGE
 
 
 def _git(repository: Path, *args: str) -> str:
@@ -126,6 +143,64 @@ def _valid_budget_ledger(path: Path, *, today: date) -> bool:
         "prior_day_rollover_pending",
         "ledger_exhausted",
     }
+
+
+def validate_discovery_dispatch_report(report: object) -> str:
+    """Return a safe reason unless a fresh report explicitly permits dispatch."""
+    if not isinstance(report, dict):
+        return "discovery_readiness_report_invalid"
+    gate = report.get("discovery_gate")
+    if not isinstance(gate, dict):
+        return "discovery_readiness_report_invalid"
+    if (
+        report.get("schema_version") != 2
+        or isinstance(report.get("schema_version"), bool)
+        or report.get("execution_status") != "COMPLETED"
+        or report.get("readiness") != "READY"
+        or report.get("discovery_dispatch_permission") is not True
+        or report.get("status") != "COMPLETED"
+        or report.get("readiness_reason_code") != ""
+        or report.get("reason_code") != "general_capacity_available"
+        or report.get("readiness_reason_codes") != []
+        or gate.get("authorized") is not True
+        or gate.get("policy") != "fresh_ready_report_and_explicit_dispatch_permission"
+        or gate.get("reason_code") != ""
+        or not _fresh_readiness_timestamp(report.get("readiness_evaluated_at"))
+        or report.get("readiness_utc_day")
+        != datetime.now(timezone.utc).date().isoformat()
+    ):
+        return "discovery_readiness_not_ready"
+    budget = report.get("provider_budget")
+    if not isinstance(budget, dict):
+        return "discovery_readiness_report_invalid"
+    capacity = budget.get("general_capacity_current_utc_day")
+    if (
+        not isinstance(capacity, int)
+        or isinstance(capacity, bool)
+        or capacity <= 0
+    ):
+        return "no_general_budget_available"
+    aggregate = budget.get("aggregate_capacity_remaining")
+    if (
+        not isinstance(aggregate, dict)
+        or not isinstance(aggregate.get("general_remaining"), int)
+        or isinstance(aggregate.get("general_remaining"), bool)
+        or aggregate["general_remaining"] != capacity
+    ):
+        return "discovery_readiness_report_invalid"
+    reserve_status = budget.get("btp_reserve_validation")
+    if reserve_status not in {
+        "passed",
+        "passed_with_authorized_btp_usage",
+    } and not (
+        reserve_status == "pending_rollover"
+        and isinstance(aggregate.get("btp_reserve_remaining"), int)
+        and not isinstance(aggregate.get("btp_reserve_remaining"), bool)
+    ):
+        return "provider_budget_reserve_unverified"
+    if report.get("readiness_reason_codes") != []:
+        return "discovery_readiness_report_invalid"
+    return ""
 
 
 def _write_status(path: Path, status: dict) -> None:
@@ -290,6 +365,7 @@ def build_restore_preflight_report(
 ) -> dict:
     """Summarize restore and budget health without disclosing vault data."""
     now_date = today or datetime.now(timezone.utc).date()
+    readiness_evaluated_at = datetime.now(timezone.utc)
     keys_path = workspace / "secrets" / "tavily_keys.txt"
     if not keys_path.is_file():
         keys_path = repository / "secrets" / "tavily_keys.txt"
@@ -388,12 +464,14 @@ def build_restore_preflight_report(
             item["reason_code"] = "provider_budget_ledger_from_future"
             reasons.append(item["reason_code"])
         elif outcome == "prior_day_rollover_pending":
-            item["eligible_for_general_discovery"] = True
             item["general_capacity_after_rollover"] = GENERAL_TAVILY_DAILY_LIMIT
             item["btp_reserve_status"] = "rollover_pending"
             item["general_limit_crossed"] = None
             item["above_general_limit_source"] = "not_applicable_after_rollover"
             item["reason_code"] = "utc_day_rollover_pending_durable_reservation"
+            item["eligible_for_general_discovery"] = (
+                item.get("general_capacity_after_rollover", 0) > 0
+            )
         else:
             item["total_remaining"] = max(
                 0, TAVILY_DAILY_REQUEST_LIMIT - payload["count"],
@@ -460,24 +538,28 @@ def build_restore_preflight_report(
                     else "not_applicable"
                 )
             item["eligible_for_general_discovery"] = (
-                outcome == "valid_current_day"
-                and not payload["exhausted"]
-                and item["general_remaining"] is not None
-                and item["general_remaining"] > 0
-                and item["usage_provenance"] == "verified"
-                and item["btp_reserve_status"] not in {
-                    "general_budget_breach",
-                    "btp_reserve_breach",
-                }
+                (
+                    outcome == "valid_current_day"
+                    and not payload["exhausted"]
+                    and item["general_remaining"] is not None
+                    and item["general_remaining"] > 0
+                    and item["usage_provenance"] == "verified"
+                    and item["btp_reserve_status"] not in {
+                        "general_budget_breach",
+                        "btp_reserve_breach",
+                    }
+                )
+                or (
+                    outcome == "prior_day_rollover_pending"
+                    and item.get("general_capacity_after_rollover", 0) > 0
+                )
             )
             if item["eligible_for_general_discovery"]:
                 item["reason_code"] = ""
             elif item["btp_reserve_status"] == "general_budget_breach":
                 item["reason_code"] = "general_budget_exceeded_protected_limit"
-                reasons.append(item["reason_code"])
             elif item["btp_reserve_status"] == "btp_reserve_breach":
                 item["reason_code"] = "btp_reserve_exceeded_protected_limit"
-                reasons.append(item["reason_code"])
             elif item["usage_provenance"] != "verified":
                 item["reason_code"] = "provider_budget_provenance_unavailable"
             elif outcome == "ledger_exhausted" or payload["exhausted"]:
@@ -541,6 +623,14 @@ def build_restore_preflight_report(
         for item in eligible_keys
         if item.get("ledger_date_relation") == "prior_utc_day"
     )
+    rollover_keys = [
+        item for item in per_key
+        if item.get("general_capacity_after_rollover", 0) > 0
+        and item.get("btp_reserve_status") == "rollover_pending"
+    ]
+    rollover_general_capacity = sum(
+        item["general_capacity_after_rollover"] for item in rollover_keys
+    )
     current_ledgers = [
         item for item in per_key
         if item.get("ledger_date_relation") == "current_utc_day"
@@ -568,20 +658,11 @@ def build_restore_preflight_report(
     }
     if any(not item["ledger_valid"] for item in per_key):
         reasons.append("provider_budget_ledger_missing_or_invalid")
-    if not eligible_keys:
-        reasons.append("no_general_budget_available")
     unique_reasons = list(dict.fromkeys(reasons))
-    success = (
+    execution_success = (
         not unique_reasons
         and len(per_key) == len(fingerprints)
-        and all(
-            item["btp_reserve_status"] in {
-                "rollover_pending",
-                "verified_intact",
-                "verified_authorized_btp_usage",
-            }
-            for item in eligible_keys
-        )
+        and all(item["ledger_valid"] for item in per_key)
     )
     reserve_statuses = {item["btp_reserve_status"] for item in per_key}
     if any(not item["ledger_valid"] for item in per_key) or (
@@ -604,11 +685,97 @@ def build_restore_preflight_report(
         aggregate_reserve_validation = "passed"
     else:
         aggregate_reserve_validation = "blocked"
+    readiness_reasons: list[str] = []
+    has_current_capacity = current_general_remaining > 0
+    has_rollover_capacity = rollover_general_capacity > 0
+    has_provenance_gap = any(
+        item["reason_code"] == "provider_budget_provenance_unavailable"
+        for item in per_key
+    )
+    if not has_current_capacity:
+        readiness_reasons.append("no_general_budget_available")
+    if aggregate_reserve_validation in {"unknown", "blocked"} or (
+        aggregate_reserve_validation == "pending_rollover"
+        and not current_btp_reserve_is_known
+    ):
+        readiness_reasons.append("provider_budget_reserve_unverified")
+    if has_provenance_gap:
+        readiness_reasons.append("provider_budget_provenance_unavailable")
+    if has_rollover_capacity and not has_current_capacity:
+        readiness_reasons.append("utc_day_rollover_pending_durable_reservation")
+    readiness_reasons = list(dict.fromkeys(readiness_reasons))
+
+    dispatch_permission = (
+        execution_success
+        and bool(eligible_keys)
+        and has_current_capacity
+        and (
+            aggregate_reserve_validation in {
+                "passed",
+                "passed_with_authorized_btp_usage",
+            }
+            or (
+                aggregate_reserve_validation == "pending_rollover"
+                and current_btp_reserve_is_known
+            )
+        )
+        and not has_provenance_gap
+    )
+    readiness = (
+        "READY"
+        if dispatch_permission
+        else "CONDITIONAL"
+        if (
+            execution_success
+            and has_rollover_capacity
+            and not has_current_capacity
+            and aggregate_reserve_validation == "pending_rollover"
+            and not has_provenance_gap
+        )
+        else "BLOCKED"
+    )
+    explicit_reason = restoration.get("reason_code") if restoration.get("ready") is not True else ""
+    if isinstance(explicit_reason, str) and re.fullmatch(r"[a-z][a-z0-9_]{0,79}", explicit_reason):
+        readiness_reason_code = explicit_reason
+        readiness = "BLOCKED"
+        status = "BLOCKED"
+        dispatch_permission = False
+    else:
+        if readiness == "READY":
+            readiness_reason_code = ""
+        elif not has_current_capacity and not has_rollover_capacity:
+            readiness_reason_code = "no_general_budget_available"
+        elif has_provenance_gap:
+            readiness_reason_code = "provider_budget_provenance_unavailable"
+        elif aggregate_reserve_validation in {"unknown", "blocked"}:
+            readiness_reason_code = "provider_budget_reserve_unverified"
+        elif readiness == "CONDITIONAL":
+            readiness_reason_code = "utc_day_rollover_pending_durable_reservation"
+        else:
+            readiness_reason_code = "preflight_completed_readiness_blocked"
+    status = "COMPLETED" if execution_success else "BLOCKED"
     return {
-        "schema_version": 1,
+        "schema_version": 2,
         "mode": "restore_only",
-        "status": "COMPLETED" if success else "BLOCKED",
-        "reason_code": "general_capacity_available" if success else unique_reasons[0],
+        "status": status,
+        "execution_status": "COMPLETED" if execution_success else "BLOCKED",
+        "readiness": readiness,
+        "readiness_evaluated_at": readiness_evaluated_at.isoformat(),
+        "readiness_utc_day": readiness_evaluated_at.date().isoformat(),
+        "readiness_reason_code": readiness_reason_code,
+        "readiness_reason_codes": readiness_reasons,
+        "discovery_dispatch_permission": dispatch_permission,
+        "reason_code": (
+            "general_capacity_available"
+            if dispatch_permission
+            else readiness_reason_code
+            if readiness_reason_code
+            else "preflight_completed_readiness_blocked"
+            if execution_success and readiness != "READY"
+            else unique_reasons[0]
+            if unique_reasons
+            else "preflight_blocked"
+        ),
         "utc_day": now_date.isoformat(),
         "restoration": {
             "expected_input_count": input_expected,
@@ -672,9 +839,9 @@ def build_restore_preflight_report(
             "btp_reserve_per_key": BTP_TAVILY_DAILY_RESERVE,
             "utc_day_validation": (
                 "passed"
-                if success and rollover_general_capacity == 0
+                if execution_success and rollover_general_capacity == 0
                 else "passed_with_durable_rollover"
-                if success
+                if execution_success and rollover_general_capacity > 0
                 else "blocked"
             ),
             "btp_reserve_validation": aggregate_reserve_validation,
@@ -700,11 +867,9 @@ def build_restore_preflight_report(
             "per_key": per_key,
         },
         "discovery_gate": {
-            "authorized": success,
-            "policy": "eligible_keys_only_preserve_per_key_btp_reserve",
-            "reason_code": (
-                "general_capacity_available" if success else unique_reasons[0]
-            ),
+            "authorized": dispatch_permission,
+            "policy": "fresh_ready_report_and_explicit_dispatch_permission",
+            "reason_code": readiness_reason_code,
         },
         "reason_codes": unique_reasons,
         "side_effects": {
@@ -726,6 +891,16 @@ def _write_report(path: Path, report: dict) -> None:
     path.write_text(
         json.dumps(report, ensure_ascii=False, indent=2) + "\n",
         encoding="utf-8",
+    )
+
+
+def rollovers_are_conditionally_available(per_key: list[dict]) -> bool:
+    """Only a prior-day, durable rollover can make future capacity conditional."""
+    return any(
+        item.get("ledger_date_relation") == "prior_utc_day"
+        and item.get("general_capacity_after_rollover", 0) > 0
+        and item.get("btp_reserve_status") == "rollover_pending"
+        for item in per_key
     )
 
 
@@ -809,6 +984,7 @@ def main(argv: list[str] | None = None) -> int:
             "provider_key_file_invalid",
             "provider_budget_ledger_collision",
             "restore_readiness_manifest_invalid",
+            "restore_execution_report_invalid",
         ),
     )
     args = parser.parse_args(argv)

@@ -163,13 +163,12 @@ jobs:
           import sys
           from pathlib import Path
           payload = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
-          if payload.get("status") != "COMPLETED" or payload.get("discovery_gate", {}).get("authorized") is not True:
-              raise SystemExit("restore preflight did not authorize discovery")
+          if payload.get("execution_status") != "COMPLETED" or payload.get("status") != "COMPLETED":
+              raise SystemExit("restore preflight execution did not complete")
           PY
           then
-            fail_preflight restore_readiness_manifest_invalid
+            fail_preflight restore_execution_report_invalid
           fi
-          echo "ready=true" >> "$GITHUB_OUTPUT"
 
       - name: Upload sanitized restore-only report
         if: ${{ always() }}
@@ -366,8 +365,11 @@ jobs:
           import json
           import sys
           from pathlib import Path
+          from app.workflows.discovery_only_restore import validate_discovery_dispatch_report
           report = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
-          if report.get("status") != "COMPLETED" or report.get("discovery_gate", {}).get("authorized") is not True:
+          if report.get("execution_status") != "COMPLETED" or report.get("status") != "COMPLETED":
+              raise SystemExit("restore preflight execution did not complete")
+          if validate_discovery_dispatch_report(report):
               raise SystemExit("restore preflight did not authorize discovery")
           with Path(sys.argv[2]).open("a", encoding="utf-8") as output:
               output.write("ready=true\n")
@@ -375,6 +377,7 @@ jobs:
           then
             fail_restore restore_readiness_manifest_invalid
           fi
+          cp "$report" data/discovery_restore_preflight_report.json
 
       - name: Restore targeted BTP preflight inputs only
         if: ${{ github.event_name == 'workflow_dispatch' && inputs.task == 'btp_outreach' && inputs.email_mode == 'dry_run' && inputs.target_employer != 'none' }}

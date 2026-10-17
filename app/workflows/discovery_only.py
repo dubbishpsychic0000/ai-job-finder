@@ -4,7 +4,7 @@ from __future__ import annotations
 import hashlib
 import re
 from collections import Counter
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from urllib.parse import urlsplit, urlunsplit
 
 from app.config import AgentConfig, CandidateProfile, Preferences, load_yaml
@@ -33,6 +33,20 @@ _SECRET_ASSIGNMENT = re.compile(
     r"\b(?:api[_-]?key|authorization|bearer|token)\s*[:=]\s*\S+",
     re.IGNORECASE,
 )
+_READINESS_MAX_AGE = timedelta(minutes=15)
+
+
+def _fresh_discovery_readiness_timestamp(value: object) -> bool:
+    if not isinstance(value, str):
+        return False
+    try:
+        evaluated_at = datetime.fromisoformat(value)
+    except ValueError:
+        return False
+    if evaluated_at.tzinfo is None:
+        return False
+    age = datetime.now(timezone.utc) - evaluated_at.astimezone(timezone.utc)
+    return timedelta(0) <= age <= _READINESS_MAX_AGE
 
 
 def bounded_source_allowed(source: dict) -> bool:
@@ -56,12 +70,34 @@ def validate_discovery_input_status(status_path) -> str:
         return "discovery_input_status_invalid"
     if not isinstance(status, dict):
         return "discovery_input_status_invalid"
+    schema_version = status.get("schema_version")
     if (
-        not isinstance(status.get("schema_version"), int)
-        or isinstance(status.get("schema_version"), bool)
-        or status["schema_version"] != 1
+        not isinstance(schema_version, int)
+        or isinstance(schema_version, bool)
+        or schema_version not in {1, 2}
     ):
         return "discovery_input_status_invalid"
+    readiness_schema_version = status.get("discovery_readiness_schema_version")
+    if readiness_schema_version is not None:
+        if (
+            not isinstance(readiness_schema_version, int)
+            or isinstance(readiness_schema_version, bool)
+            or readiness_schema_version != 2
+        ):
+            return "discovery_input_status_invalid"
+        if (
+            status.get("discovery_readiness") != "READY"
+            or status.get("discovery_dispatch_permission") is not True
+            or not _fresh_discovery_readiness_timestamp(
+                status.get("discovery_readiness_evaluated_at"),
+            )
+            or status.get("discovery_readiness_utc_day")
+            != datetime.now(timezone.utc).date().isoformat()
+        ):
+            reason = status.get("discovery_readiness_reason_code")
+            if isinstance(reason, str) and re.fullmatch(r"[a-z][a-z0-9_]{0,79}", reason):
+                return reason
+            return "discovery_readiness_not_ready"
     if status.get("ready") is not True:
         reason = status.get("reason_code")
         if isinstance(reason, str) and re.fullmatch(r"[a-z][a-z0-9_]{0,79}", reason):

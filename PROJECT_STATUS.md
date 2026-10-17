@@ -2265,3 +2265,40 @@ reviewed before a separate live-run authorization.
 No counters or ledger files were changed, no reservations were created, and
 no provenance repair was attempted. This preflight is read-only and does not
 establish that any of the legacy request types can be recovered.
+
+## Phase 2.8r fail-closed discovery readiness
+
+Phase 2.8q completed its restore and ledger inspection, but its summary
+incorrectly coupled successful execution to discovery readiness: it reported
+`status: COMPLETED`, `reason_code: general_capacity_available`, and
+`discovery_gate.authorized: true` despite zero current general capacity,
+unknown provenance on two current-day ledgers, and rollover capacity that was
+only conditional on future durable reservations.
+
+The restore report now distinguishes execution status, readiness
+(`READY`/`CONDITIONAL`/`BLOCKED`), and explicit dispatch permission. A restore
+can complete while readiness is blocked; conditional rollover capacity is
+reported separately and never authorizes dispatch by itself. Current-day
+unknown provenance or an unknown aggregate reserve status prevents an
+unqualified readiness pass. Current capacity on verified ledgers can remain
+usable when other keys are only rollover-pending; the aggregate and per-key
+states remain visible.
+
+Both the Actions gate and `discovery-only` CLI validate the fresh readiness
+report, including its schema, timestamp, UTC day, current general capacity,
+reserve state, reason fields, and consistent dispatch gate. Missing, stale,
+malformed, or contradictory reports block discovery before any provider
+reservation or request. Legacy restore manifests remain accepted as input
+attestations, but they do not provide dispatch permission; a separate valid
+readiness report is mandatory.
+
+No restore preflight, discovery evaluation, provider request, reservation,
+vault mutation, BTP action, application, message, or production write was
+performed during this implementation phase. Local regression and CI results,
+the published implementation commit, and hosted workflow links are recorded
+after publication below.
+
+Local validation: **69 focused tests passed** and the full suite passed
+**590 tests, 1 skipped**. Ruff passed on all changed Python files; modified
+modules compiled successfully; both repository GitHub workflow YAML files
+parsed; and `git diff --check` passed.

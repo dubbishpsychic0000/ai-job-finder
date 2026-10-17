@@ -13,6 +13,7 @@ from app.workflows.discovery_only_restore import (
     build_restore_preflight_report,
     main,
     restore_discovery_inputs,
+    validate_discovery_dispatch_report,
 )
 
 ORIGIN = "https://github.com/dubbishpsychic0000/ai-job-finder-vault.git"
@@ -200,6 +201,10 @@ def test_valid_private_vault_fixture_restores_without_changing_ledger_balance(
         today=date(2026, 10, 14),
     )
     assert report["status"] == "COMPLETED"
+    assert report["execution_status"] == "COMPLETED"
+    assert report["readiness"] == "READY"
+    assert report["discovery_dispatch_permission"] is True
+    assert validate_discovery_dispatch_report(report) == ""
     assert report["reason_code"] == "general_capacity_available"
     assert report["provider_budget"]["requests_dispatched"] == 0
     assert report["provider_budget"]["reservations_created"] == 0
@@ -261,11 +266,15 @@ def test_restore_preflight_fails_closed_for_stale_or_depleted_budget(
         today=date(2026, 10, 14),
     )
 
-    assert report["status"] == "BLOCKED"
+    assert report["status"] == "COMPLETED"
+    assert report["execution_status"] == "COMPLETED"
+    assert report["readiness"] == "BLOCKED"
+    assert report["discovery_dispatch_permission"] is False
     assert report["reason_code"] == reason_code
     assert report["provider_budget"]["requests_dispatched"] == 0
     assert report["provider_budget"]["reservations_created"] == 0
     assert report["provider_budget"]["btp_reserve_validation"] == "unknown"
+    assert report["discovery_gate"]["authorized"] is False
     assert KEY not in json.dumps(report)
 
 
@@ -307,6 +316,8 @@ def test_mixed_key_states_authorize_only_general_eligible_keys(tmp_path):
     )
 
     assert report["status"] == "COMPLETED"
+    assert report["execution_status"] == "COMPLETED"
+    assert report["readiness"] == "READY"
     assert report["discovery_gate"]["authorized"] is True
     assert report["provider_budget"]["eligible_general_key_count"] == 1
     assert report["provider_budget"]["excluded_general_key_count"] == 2
@@ -500,7 +511,13 @@ def test_yesterday_ledger_is_reported_rollover_eligible_without_mutation(tmp_pat
     )
 
     assert report["status"] == "COMPLETED"
-    assert report["discovery_gate"]["authorized"] is True
+    assert report["execution_status"] == "COMPLETED"
+    assert report["readiness"] == "CONDITIONAL"
+    assert report["discovery_dispatch_permission"] is False
+    assert report["discovery_gate"]["authorized"] is False
+    assert report["readiness_reason_code"] == (
+        "utc_day_rollover_pending_durable_reservation"
+    )
     assert report["provider_budget"]["utc_day_validation"] == (
         "passed_with_durable_rollover"
     )
@@ -516,6 +533,127 @@ def test_yesterday_ledger_is_reported_rollover_eligible_without_mutation(tmp_pat
     assert json.loads(source_path.read_text())["date"] == "2026-10-13"
     assert restored_path.read_bytes() == before
     assert source_path.read_bytes() == before
+
+
+def test_current_capacity_is_ready_while_other_key_is_rollover_pending(tmp_path):
+    yesterday = '{"date":"2026-10-13","count":20,"exhausted":true}'
+    repository = _vault(
+        tmp_path,
+        keys=["fixture-current", "fixture-prior"],
+        ledgers={
+            "fixture-current": (
+                '{"date":"2026-10-14","count":0,"exhausted":false,'
+                '"usage_by_type":{"general":0,"btp":0,"unattributed":0}}'
+            ),
+            "fixture-prior": yesterday,
+        },
+    )
+    workspace = tmp_path / "workspace"
+    restoration = restore_discovery_inputs(
+        repository, workspace, expected_origin=ORIGIN,
+        today=date(2026, 10, 14),
+    )
+
+    report = build_restore_preflight_report(
+        repository, workspace, restoration=restoration, today=date(2026, 10, 14),
+    )
+
+    assert report["provider_budget"]["btp_reserve_validation"] == "pending_rollover"
+    assert report["provider_budget"]["general_capacity_current_utc_day"] == 17
+    assert report["provider_budget"]["aggregate_capacity_remaining"][
+        "btp_reserve_remaining"
+    ] == 3
+    assert report["readiness"] == "READY"
+    assert report["discovery_dispatch_permission"] is True
+    assert validate_discovery_dispatch_report(report) == ""
+
+
+def test_phase_28q_unknown_current_provenance_cannot_authorize_dispatch(tmp_path):
+    keys = [f"fixture-{number}" for number in range(7)]
+    ledgers = {
+        keys[0]: (
+            '{"date":"2026-10-14","count":18,"exhausted":false}'
+        ),
+        keys[1]: (
+            '{"date":"2026-10-14","count":17,"exhausted":false}'
+        ),
+    }
+    for key in keys[2:]:
+        ledgers[key] = (
+            '{"date":"2026-10-13","count":17,"exhausted":false}'
+        )
+    repository = _vault(tmp_path, keys=keys, ledgers=ledgers)
+    workspace = tmp_path / "workspace"
+    restoration = restore_discovery_inputs(
+        repository, workspace, expected_origin=ORIGIN,
+        today=date(2026, 10, 14),
+    )
+
+    report = build_restore_preflight_report(
+        repository, workspace, restoration=restoration, today=date(2026, 10, 14),
+    )
+
+    assert report["execution_status"] == "COMPLETED"
+    assert report["status"] == "COMPLETED"
+    assert report["readiness"] == "BLOCKED"
+    assert report["discovery_dispatch_permission"] is False
+    assert report["discovery_gate"]["authorized"] is False
+    assert report["provider_budget"]["general_capacity_current_utc_day"] == 0
+    assert report["provider_budget"]["general_capacity_after_durable_rollover"] == 85
+    assert report["provider_budget"]["btp_reserve_validation"] == "unknown"
+    assert report["readiness_reason_codes"] == [
+        "no_general_budget_available",
+        "provider_budget_reserve_unverified",
+        "provider_budget_provenance_unavailable",
+        "utc_day_rollover_pending_durable_reservation",
+    ]
+    assert validate_discovery_dispatch_report(report) == (
+        "discovery_readiness_not_ready"
+    )
+
+
+@pytest.mark.parametrize(
+    ("mutate", "expected_reason"),
+    [
+        (lambda report: report.pop("readiness_evaluated_at"), "discovery_readiness_not_ready"),
+        (
+            lambda report: report.update(
+                readiness_evaluated_at="2020-01-01T00:00:00+00:00",
+            ),
+            "discovery_readiness_not_ready",
+        ),
+        (
+            lambda report: report.update(discovery_dispatch_permission=False),
+            "discovery_readiness_not_ready",
+        ),
+        (
+            lambda report: report["provider_budget"].update(
+                aggregate_capacity_remaining={"general_remaining": 0},
+            ),
+            "discovery_readiness_report_invalid",
+        ),
+    ],
+)
+def test_dispatch_report_validation_rejects_missing_stale_or_inconsistent_data(
+    tmp_path, mutate, expected_reason,
+):
+    repository = _vault(tmp_path)
+    workspace = tmp_path / "workspace"
+    restoration = restore_discovery_inputs(
+        repository, workspace, expected_origin=ORIGIN,
+        today=date(2026, 10, 14),
+    )
+    report = build_restore_preflight_report(
+        repository, workspace, restoration=restoration, today=date(2026, 10, 14),
+    )
+    mutate(report)
+    assert validate_discovery_dispatch_report(report) == expected_reason
+
+
+def test_dispatch_report_validator_rejects_missing_readiness_report():
+    assert validate_discovery_dispatch_report(None) == (
+        "discovery_readiness_report_invalid"
+    )
 
 
 def test_restore_preflight_reports_missing_expected_ledger_by_fingerprint(tmp_path):
@@ -563,6 +701,7 @@ def test_restore_preflight_reports_missing_expected_ledger_by_fingerprint(tmp_pa
         "vault_clone_failed",
         "vault_sparse_checkout_failed",
         "vault_checkout_failed",
+        "restore_execution_report_invalid",
     ],
 )
 def test_restore_operation_failures_write_blocked_reports(tmp_path, reason):
@@ -647,6 +786,9 @@ def test_exhausted_ledger_is_diagnosed_without_rewriting_it(tmp_path):
         "fingerprint": FINGERPRINT,
         "outcome": "ledger_exhausted",
     }]
-    assert report["status"] == "BLOCKED"
+    assert report["status"] == "COMPLETED"
+    assert report["execution_status"] == "COMPLETED"
+    assert report["readiness"] == "BLOCKED"
+    assert report["discovery_dispatch_permission"] is False
     assert report["provider_budget"]["per_key"][0]["outcome"] == "ledger_exhausted"
     assert source.read_bytes() == before
