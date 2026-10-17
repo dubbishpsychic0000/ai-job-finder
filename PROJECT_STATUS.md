@@ -2202,3 +2202,8 @@ Validation: **75 focused regression tests passed**; the full suite passed
 **581 tests, 1 skipped**. Ruff passed on the changed Python files, Python
 compilation passed, all **8 workflow/configuration YAML files** parsed, and
 `git diff --check` passed.
+
+The first hosted CI run exposed a missing Git identity in one isolated vault
+test fixture. The fixture now sets its own author identity; the follow-up
+commit `14caa50c8c26ce5bd695b33e936d3471a94d0c2b` passed CI in
+[run 39016496921](https://github.com/actions/runs/39016496921).
