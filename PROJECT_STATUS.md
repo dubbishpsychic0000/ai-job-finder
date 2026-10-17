@@ -2154,3 +2154,51 @@ applicability, but **not currently dispatchable** because current general
 capacity is zero and every request still requires a successful durable
 general-purpose reservation. The reserve discrepancy is an additional
 readiness caveat; this result is not authorization to run discovery.
+
+## Phase 2.8p BTP reserve provenance and global ledger validation
+
+Implementation commit: `bb8f3c03d2a308efb16ac275261af114bb3807f6`.
+
+The sanitized evidence from restore-only preflight
+[run 39010526683](https://github.com/actions/runs/39010526683) establishes
+that ledger `da6f156a` had 18/20 requests recorded and two requests remaining
+in the three-request BTP allocation. It does **not** establish the type of
+the 18th request. The historical ledger and retained artifact contain only
+aggregate counts, the generic reservation commits do not identify request
+type, and the private vault history was unavailable for read-only inspection.
+The 18th request is therefore **unknown**: it cannot be called either a
+legitimate BTP request or an improper general-discovery request. No ledger
+was reset, reconstructed, or changed during this audit.
+
+Budget ledgers now retain typed `general`, `btp`, and `unattributed` request
+counts whose sum must equal the aggregate count. Legacy counters are
+conservatively represented as `unattributed`; a current-day general or BTP
+reservation is rejected before any durable write or provider dispatch when
+such provenance remains unresolved. General requests use the 17-request
+category cap alongside the unchanged 20-request total cap, and BTP requests
+use their unchanged three-request cap. Discovery uses the 20-request total
+budget with an explicit general reservation type; BTP's local search budget
+records its requests as BTP use.
+
+Restore reporting assesses every expected ledger, including keys excluded
+from general discovery. It reports general-limit crossings separately from
+authorized BTP use, unknown provenance, and prior-day rollover-pending
+reserves. A known count of 18 with 17 general and one BTP request is reported
+as authorized BTP use with two BTP requests remaining, not as a breach. A
+legacy count of 18 remains unknown and is excluded from general dispatch. A
+prior-day ledger is not described as having a confirmed current-day reserve;
+its availability is conditional on its own successful durable rollover
+reservation. Aggregate reserve validation cannot report `passed` if any
+expected ledger is missing, unresolved, or in rollover-pending state.
+
+Regression coverage verifies authorized BTP use, unknown legacy provenance,
+a typed general-budget overrun, all-seven-ledger aggregation, stale-day
+rollover reporting, malformed evidence, zero general capacity, and refusal
+to dispatch when durable reservation or provenance validation fails. This
+phase is offline implementation and testing only; it performed no provider
+requests, live preflight, reservations, BTP actions, or production writes.
+
+Validation: **75 focused regression tests passed**; the full suite passed
+**581 tests, 1 skipped**. Ruff passed on the changed Python files, Python
+compilation passed, all **8 workflow/configuration YAML files** parsed, and
+`git diff --check` passed.
