@@ -2105,7 +2105,7 @@ explicit authorization.
 - Ruff on all changed Python files, Python compilation, parsing of all
   **8 workflow/config YAML files**, and `git diff --check`: **passed**.
 
-## Phase 2.8o restore-only readiness check — blocked
+## Phase 2.8o restore-only readiness check
 
 The requested checkout was verified at `main` commit
 `5f3df36068e14a6df1e00a52246b8886949c73c8`. The preflight workflow was
@@ -2113,26 +2113,44 @@ inspected: its dedicated restore-only job reads and validates the private
 vault and budget ledgers, reports zero reservations and zero provider
 requests, and excludes the normal pipeline job.
 
-Exactly one dispatch was attempted for `discovery_restore_preflight`, but
-GitHub rejected the workflow-dispatch API request with HTTP 403:
-`Must have admin rights to Repository`. No Actions run was created, so there
-is no preflight run URL or sanitized readiness artifact. No vault restore,
-ledger read, reservation, Tavily/portal/provider request, or downstream job
-ran in this phase.
+The first dispatch attempt was rejected with HTTP 403 (`Must have admin
+rights to Repository`) and did not create a run. One retry of the same
+restore-only dispatch then succeeded on the requested published commit
+`5f3df36068e14a6df1e00a52246b8886949c73c8`:
+[run 39010526683](https://github.com/actions/runs/39010526683).
+The `discovery_restore_preflight` job and sanitized artifact upload succeeded;
+the normal `pipeline` job was skipped. The artifact
+`discovery-restore-preflight-39010526683` reports UTC day **2026-10-17**,
+vault origin, `main` ref, checkout/reservation path, and vault path checks
+passed. It validates all **4/4 required inputs** and **7/7 expected ledgers**.
+It dispatched **0** provider requests and created **0** reservations.
 
-The current UTC date at the authorized check time was **2026-10-17**. Because
-the preflight did not execute, today's required-input and ledger validation
-counts, current general-purpose capacity, conditional rollover capacity,
-eligible/excluded provider keys, and three-request-per-key BTP reserve status
-are **unverified**. The prior 2026-10-16 preflight is historical and must not
-be used to infer today's availability. The proposed 6 Morocco / 1 France / 1
-Belgium allocation remains within the published 8-attempt and 12-plan
-combination caps, and broad web / official-ATS sources remain configured for
-international countries while Morocco-specific sources remain restricted to
-Morocco; budget feasibility cannot be confirmed without the blocked fresh
-preflight. No readiness or live-evaluation authorization is implied.
+Current general-purpose capacity is **0**. Six keys are conditionally
+eligible after their own successful durable rollover reservation:
+`95f8557c`, `3265acb4`, `240c8071`, `bf109685`, `a20550bf`, and `39950b91`.
+They are all prior-day ledgers; each reports up to 17 general attempts after
+rollover, for **102 conditional attempts**. These are not current capacity,
+reservations, or live-run authorization. Key `da6f156a` is excluded from
+general discovery: its current-day ledger count is 18 of 20, leaving zero
+general requests.
 
-Safe remediation is to have a repository administrator grant the required
-workflow-dispatch permission, then request a new, separately authorized
-restore-only preflight for the current UTC day. No live discovery evaluation
-should be started before that check and separate explicit authorization.
+The reserve fields contain a material inconsistency that must not be hidden:
+the top-level report says `btp_reserve_validation: passed`, but the excluded
+current-day key `da6f156a` has `btp_reserve_remaining: 2` and
+`btp_reserve_intact: false`, below the configured three-request reserve. The
+other six prior-day keys report the reserve intact. The restore helper's
+aggregate pass condition checks reserve integrity for general-discovery-
+eligible keys only, so the summary does not certify the reserve on every
+ledger. No reserve was consumed by this preflight; the two remaining requests
+are an observed prior ledger state. Treat global reserve verification as
+unresolved until this reporting/policy inconsistency is separately reviewed.
+
+The proposed **6 Morocco / 1 France / 1 Belgium** split is within the
+eight-attempt ceiling and the **102 conditional general attempts**; broad web
+and official-ATS sources apply internationally, while configured
+Morocco-specific sources remain limited to Morocco. Thus the country
+allocation is conditionally feasible under the recorded budget and source
+applicability, but **not currently dispatchable** because current general
+capacity is zero and every request still requires a successful durable
+general-purpose reservation. The reserve discrepancy is an additional
+readiness caveat; this result is not authorization to run discovery.
