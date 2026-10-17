@@ -2207,3 +2207,61 @@ The first hosted CI run exposed a missing Git identity in one isolated vault
 test fixture. The fixture now sets its own author identity; the follow-up
 commit `14caa50c8c26ce5bd695b33e936d3471a94d0c2b` passed CI in
 [run 39016496921](https://github.com/actions/runs/39016496921).
+
+## Phase 2.8q restore-only verification of typed budget ledgers
+
+Exactly one `discovery_restore_preflight` workflow was dispatched:
+[run 39030416141](https://github.com/actions/runs/39030416141). It ran the
+Phase 2.8p code at published `main` commit
+`3721ec793f08b436a89c219ad840cc54c0851b6a` on UTC day **2026-10-17**.
+The restore-only job completed and uploaded its sanitized artifact. The normal
+`pipeline` job was **skipped**. The artifact records zero provider requests,
+zero budget reservations, and zero application, messaging, BTP, or production
+candidate writes. The run validated the private-vault origin, `main` ref,
+checkout/reservation path, **4/4 required inputs**, and **7/7 expected ledgers**.
+
+The artifact exposes only the short ledger fingerprints, not API keys. Its
+actual ledger states are:
+
+| Fingerprint | UTC-day state | Count | General / BTP / unattributed | Reserve state | Safe reason |
+|---|---|---:|---:|---|---|
+| `da6f156a` | Current day | 18 | 0 / 0 / 18 | Unknown provenance | `provider_budget_provenance_unavailable` |
+| `95f8557c` | Current day | 17 | 0 / 0 / 17 | Unknown provenance | `provider_budget_provenance_unavailable` |
+| `3265acb4` | Prior day | 17 | 0 / 0 / 17 | Rollover pending | `utc_day_rollover_pending_durable_reservation` |
+| `240c8071` | Prior day | 17 | 0 / 0 / 17 | Rollover pending | `utc_day_rollover_pending_durable_reservation` |
+| `bf109685` | Prior day | 17 | 0 / 0 / 17 | Rollover pending | `utc_day_rollover_pending_durable_reservation` |
+| `a20550bf` | Prior day | 8 | 0 / 0 / 8 | Rollover pending | `utc_day_rollover_pending_durable_reservation` |
+| `39950b91` | Prior day | 17 | 0 / 0 / 17 | Rollover pending | `utc_day_rollover_pending_durable_reservation` |
+
+The two current-day ledgers have **unknown** per-request provenance; their
+reported typed values conservatively place every recorded request in
+`unattributed`. They cannot establish either authorized BTP usage or a general
+budget breach. A general reservation against either current-day ledger must
+be blocked with `provider_budget_provenance_unavailable`. The five prior-day
+ledgers are not current-day capacity or verified current-day reserves; any
+capacity from them is conditional on a successful durable rollover
+reservation. Their recorded old-day request categories do not establish
+current-day category usage.
+
+Current general capacity is **0**. Current aggregate total remaining is **5**
+but is not general capacity. The report calculates **85 conditional general
+attempts** and **15 conditional BTP requests** across five prior-day ledgers
+after rollover; these are not current capacity or authorization. Aggregate
+`btp_reserve_remaining` is null and `btp_reserve_validation` is **`unknown`**,
+with **2 unresolved ledgers**. The aggregate reserve result therefore agrees
+with the individual current-day records: the old 18-request ledger remains
+unattributable, and the other current-day ledger is also legacy/unattributed.
+
+**Important readiness/reporting mismatch:** the same artifact reports
+`status: COMPLETED`, top-level `reason_code: general_capacity_available`, and
+`discovery_gate.authorized: true` because five prior-day keys could be
+conditionally rolled over. That internal flag does not override the
+`btp_reserve_validation: unknown` state or either current-day provenance
+blocker, and it is not user authorization. No discovery was launched. The
+next live evaluation must not proceed on this readiness report alone; the
+gate/report discrepancy and unresolved current-day provenance must be
+reviewed before a separate live-run authorization.
+
+No counters or ledger files were changed, no reservations were created, and
+no provenance repair was attempted. This preflight is read-only and does not
+establish that any of the legacy request types can be recovered.
