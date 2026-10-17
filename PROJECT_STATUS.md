@@ -2302,3 +2302,7 @@ Local validation: **69 focused tests passed** and the full suite passed
 **590 tests, 1 skipped**. Ruff passed on all changed Python files; modified
 modules compiled successfully; both repository GitHub workflow YAML files
 parsed; and `git diff --check` passed.
+
+The implementation and this status entry were published to `main` in commit
+`6fcdcee0329359ce4371689d9305c97ecde0ef39`. Hosted CI passed for that exact
+commit in [run 39057416791](https://github.com/dubbishpsychic0000/ai-job-finder/actions/runs/39057416791).
