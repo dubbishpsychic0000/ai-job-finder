@@ -95,16 +95,30 @@ def test_mixed_key_budget_dispatches_only_through_general_capacity(
 
     def reserve_general(path, requested_day, limit):
         state = json.loads(path.read_text(encoding="utf-8"))
-        if state["date"] != requested_day or state["count"] >= limit:
-            return {**state, "reserved": False}
+        if (
+            state["date"] != requested_day
+            or state["count"] >= TAVILY_DAILY_REQUEST_LIMIT
+            or state["usage_by_type"]["general"] >= GENERAL_TAVILY_DAILY_LIMIT
+        ):
+            return {**state, "reserved": False, "reason": "daily_request_budget_exhausted"}
         state["count"] += 1
+        state["usage_by_type"]["general"] += 1
         path.write_text(json.dumps(state), encoding="utf-8")
         return {**state, "reserved": True}
 
     for name, count in (("at-total-limit", 20), ("at-general-limit", 17), ("usable", 1)):
         path = tmp_path / f"{name}.json"
         path.write_text(
-            json.dumps({"date": today, "count": count, "exhausted": False}),
+            json.dumps({
+                "date": today,
+                "count": count,
+                "exhausted": False,
+                "usage_by_type": {
+                    "general": min(count, GENERAL_TAVILY_DAILY_LIMIT),
+                    "btp": max(0, count - GENERAL_TAVILY_DAILY_LIMIT),
+                    "unattributed": 0,
+                },
+            }),
             encoding="utf-8",
         )
         persisted_counts[name] = path
@@ -112,8 +126,9 @@ def test_mixed_key_budget_dispatches_only_through_general_capacity(
             name,
             DailyBudget(
                 path,
-                limit=GENERAL_TAVILY_DAILY_LIMIT,
+                limit=TAVILY_DAILY_REQUEST_LIMIT,
                 durable_reserver=reserve_general,
+                reservation_type="general",
             ),
             key_fingerprint(name),
         )
@@ -353,6 +368,35 @@ def test_tavily_budget_persistence_failure_blocks_provider_request(
     assert source.last_error_code == "budget_ledger_unavailable"
     assert run_budget.as_dict()["attempts"] == 0
     assert budget.remaining() == 0
+
+
+def test_malformed_budget_provenance_blocks_provider_request(tmp_path, monkeypatch):
+    today = datetime.now(timezone.utc).date().isoformat()
+    path = tmp_path / "malformed-budget.json"
+    path.write_text(json.dumps({
+        "date": today,
+        "count": 1,
+        "exhausted": False,
+        "usage_by_type": {"general": 0, "btp": 0, "unattributed": 0},
+    }), encoding="utf-8")
+    budget = DailyBudget(
+        path,
+        limit=TAVILY_DAILY_REQUEST_LIMIT,
+        reservation_type="general",
+    )
+    calls = []
+    monkeypatch.setattr(
+        "app.connectors.tavily_resilience.requests.post",
+        lambda *_args, **_kwargs: calls.append(True),
+    )
+    source = ResilientTavily(
+        keys=[TavilyKey("key", budget, key_fingerprint("key"))],
+        cache=TavilyCache(tmp_path / "cache.json"),
+    )
+
+    assert asyncio.run(source.search("civil", "Morocco")) == []
+    assert calls == []
+    assert source.last_error_code == "budget_ledger_unavailable"
 
 
 def test_tavily_budget_exhaustion_has_an_explicit_safe_reason(tmp_path):

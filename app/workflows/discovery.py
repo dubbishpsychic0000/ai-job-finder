@@ -20,7 +20,7 @@ from app import memory as mem
 from app.config import ROOT_DIR, AgentConfig, CandidateProfile, Preferences, load_yaml
 from app.connectors import registry
 from app.connectors.tavily_resilience import (
-    GENERAL_TAVILY_DAILY_LIMIT,
+    TAVILY_DAILY_REQUEST_LIMIT,
     ApiAttemptBudget,
     DailyBudget,
     TavilyKey,
@@ -323,9 +323,10 @@ def _load_source_connectors(
             api_key=k,
             budget=DailyBudget(
                 budget_path,
-                limit=GENERAL_TAVILY_DAILY_LIMIT,
+                limit=TAVILY_DAILY_REQUEST_LIMIT,
                 durable_reserver=budget_reserver,
                 durable_exhauster=budget_exhauster,
+                reservation_type="general",
             ),
             fp=key_fingerprint(k),
         ))

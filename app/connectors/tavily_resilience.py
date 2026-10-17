@@ -24,7 +24,7 @@ from collections import Counter
 from collections.abc import Callable
 from contextlib import contextmanager
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -37,6 +37,47 @@ logger = logging.getLogger(__name__)
 TAVILY_DAILY_REQUEST_LIMIT = 20
 BTP_TAVILY_DAILY_RESERVE = 3
 GENERAL_TAVILY_DAILY_LIMIT = TAVILY_DAILY_REQUEST_LIMIT - BTP_TAVILY_DAILY_RESERVE
+_RESERVATION_TYPES = ("general", "btp", "unattributed")
+
+
+def _ledger_usage_by_type(payload: dict, count: int) -> dict[str, int]:
+    if "usage_by_type" not in payload:
+        return {"general": 0, "btp": 0, "unattributed": count}
+    usage = payload["usage_by_type"]
+    if not isinstance(usage, dict) or set(usage) != set(_RESERVATION_TYPES):
+        raise ValueError("budget ledger reservation provenance is invalid")
+    if any(
+        not isinstance(usage[name], int)
+        or isinstance(usage[name], bool)
+        or usage[name] < 0
+        for name in _RESERVATION_TYPES
+    ) or sum(usage.values()) != count:
+        raise ValueError("budget ledger reservation provenance is inconsistent")
+    return {name: usage[name] for name in _RESERVATION_TYPES}
+
+
+def _validated_ledger_state(payload: Any) -> dict:
+    if not isinstance(payload, dict):
+        raise ValueError("budget ledger is not an object")
+    ledger_date = payload.get("date")
+    count = payload.get("count")
+    exhausted = payload.get("exhausted")
+    if (
+        not isinstance(ledger_date, str)
+        or not isinstance(count, int)
+        or isinstance(count, bool)
+        or not 0 <= count <= TAVILY_DAILY_REQUEST_LIMIT
+        or not isinstance(exhausted, bool)
+    ):
+        raise ValueError("budget ledger fields are invalid")
+    if date.fromisoformat(ledger_date).isoformat() != ledger_date:
+        raise ValueError("budget ledger date is invalid")
+    return {
+        "date": ledger_date,
+        "count": count,
+        "exhausted": exhausted,
+        "usage_by_type": _ledger_usage_by_type(payload, count),
+    }
 TAVILY_CACHE_TTL_SECONDS = 30 * 24 * 60 * 60
 _budget_locks_guard = threading.Lock()
 _budget_locks: dict[str, threading.RLock] = {}
@@ -214,16 +255,21 @@ class DailyBudget:
         *,
         durable_reserver: Callable[[Path, str, int], dict] | None = None,
         durable_exhauster: Callable[[Path, str, int], dict] | None = None,
+        reservation_type: str = "unattributed",
     ):
         self.path = path
         self.identity = str(path.resolve())
         self.limit = int(limit)
         self.durable_reserver = durable_reserver
         self.durable_exhauster = durable_exhauster
+        if reservation_type not in _RESERVATION_TYPES:
+            raise ValueError("unsupported budget reservation type")
+        self.reservation_type = reservation_type
         self._lock = _budget_thread_lock(self.identity)
         self._date = ""
         self._count = 0
         self._exhausted = False
+        self._usage_by_type = {name: 0 for name in _RESERVATION_TYPES}
         self.last_reservation_error = ""
         self._ledger_error = False
         self._load()
@@ -240,30 +286,35 @@ class DailyBudget:
             return
         try:
             with self.path.open("r", encoding="utf-8") as fh:
-                raw = json.load(fh)
-            if raw.get("date") == self._today():
-                self._date = raw["date"]
-                self._count = int(raw.get("count", 0))
-                self._exhausted = bool(raw.get("exhausted", False))
-        except Exception:
-            self._date, self._count, self._exhausted = "", 0, False
+                state = _validated_ledger_state(json.load(fh))
+            if state["date"] == self._today():
+                self._date = state["date"]
+                self._count = state["count"]
+                self._exhausted = state["exhausted"]
+                self._usage_by_type = state["usage_by_type"]
+        except (OSError, UnicodeError, json.JSONDecodeError, ValueError, TypeError):
+            self._date = self._today()
+            self._count = 0
+            self._exhausted = True
+            self._usage_by_type = {name: 0 for name in _RESERVATION_TYPES}
+            self._ledger_error = True
 
     def _reload_for_date(self, today: str) -> None:
         if self._ledger_error and self._date == today:
             return
         self._date, self._count, self._exhausted = "", 0, False
+        self._usage_by_type = {name: 0 for name in _RESERVATION_TYPES}
         self._ledger_error = False
         if not self.path.exists():
             return
         try:
             with self.path.open("r", encoding="utf-8") as fh:
-                raw = json.load(fh)
-            if not isinstance(raw, dict):
-                raise ValueError("budget ledger is not an object")
-            if raw.get("date") == today:
+                state = _validated_ledger_state(json.load(fh))
+            if state["date"] == today:
                 self._date = today
-                self._count = max(0, int(raw.get("count", 0)))
-                self._exhausted = bool(raw.get("exhausted", False))
+                self._count = state["count"]
+                self._exhausted = state["exhausted"]
+                self._usage_by_type = state["usage_by_type"]
         except (OSError, ValueError, TypeError, AttributeError):
             self._date = today
             self._exhausted = True
@@ -279,6 +330,7 @@ class DailyBudget:
                     "date": self._date,
                     "count": self._count,
                     "exhausted": self._exhausted,
+                    "usage_by_type": self._usage_by_type,
                 }, fh)
             os.replace(tmp, self.path)
             return True
@@ -289,14 +341,46 @@ class DailyBudget:
     def remaining(self, now: datetime | None = None) -> int:
         if self.limit <= 0:
             return 1 << 30
+        self.last_reservation_error = ""
         today = self._today(now)
         with self._lock:
             try:
                 with _budget_file_lock(self.path):
                     self._reload_for_date(today)
-                    if self._ledger_error or self._exhausted:
+                    if self._ledger_error:
+                        self.last_reservation_error = "budget_ledger_unavailable"
                         return 0
-                    return max(0, self.limit - self._count)
+                    if self._exhausted:
+                        self.last_reservation_error = (
+                            "daily_request_budget_exhausted"
+                        )
+                        return 0
+                    if (
+                        self.reservation_type in {"general", "btp"}
+                        and self._usage_by_type["unattributed"] > 0
+                    ):
+                        self.last_reservation_error = (
+                            "provider_budget_provenance_unavailable"
+                        )
+                        return 0
+                    total_remaining = max(0, self.limit - self._count)
+                    if self.reservation_type == "general":
+                        typed_remaining = max(
+                            0,
+                            GENERAL_TAVILY_DAILY_LIMIT
+                            - self._usage_by_type["general"]
+                            - self._usage_by_type["unattributed"],
+                        )
+                    elif self.reservation_type == "btp":
+                        typed_remaining = max(
+                            0,
+                            BTP_TAVILY_DAILY_RESERVE
+                            - self._usage_by_type["btp"]
+                            - self._usage_by_type["unattributed"],
+                        )
+                    else:
+                        typed_remaining = total_remaining
+                    return min(total_remaining, typed_remaining)
             except OSError as exc:
                 self._date = today
                 self._ledger_error = True
@@ -341,6 +425,7 @@ class DailyBudget:
                             "daily_request_budget_exhausted",
                             "provider_budget_persistence_unavailable",
                             "budget_ledger_unavailable",
+                            "provider_budget_provenance_unavailable",
                         }
                         else "provider_budget_persistence_unavailable"
                     )
@@ -361,6 +446,23 @@ class DailyBudget:
                 self._date = today
                 self._count = state["count"]
                 self._exhausted = state["exhausted"]
+                try:
+                    self._usage_by_type = _ledger_usage_by_type(
+                        state, self._count,
+                    )
+                except ValueError:
+                    self.last_reservation_error = (
+                        "provider_budget_persistence_unavailable"
+                    )
+                    self._ledger_error = True
+                    return False
+                if (
+                    self.reservation_type in {"general", "btp"}
+                    and self._usage_by_type["unattributed"]
+                ):
+                    self.last_reservation_error = "provider_budget_provenance_unavailable"
+                    self._ledger_error = True
+                    return False
                 self._ledger_error = False
                 if not self._save():
                     self.last_reservation_error = "provider_budget_persistence_unavailable"
@@ -373,13 +475,42 @@ class DailyBudget:
                     if self._ledger_error:
                         self.last_reservation_error = "budget_ledger_unavailable"
                         return False
-                    if self._exhausted or self._count >= self.limit:
+                    if (
+                        self.reservation_type in {"general", "btp"}
+                        and self._usage_by_type["unattributed"] > 0
+                    ):
+                        self.last_reservation_error = (
+                            "provider_budget_provenance_unavailable"
+                        )
+                        return False
+                    total_limit = min(self.limit, TAVILY_DAILY_REQUEST_LIMIT)
+                    if self.reservation_type == "general":
+                        category_exhausted = (
+                            self._usage_by_type["general"]
+                            + self._usage_by_type["unattributed"]
+                            >= GENERAL_TAVILY_DAILY_LIMIT
+                        )
+                    elif self.reservation_type == "btp":
+                        category_exhausted = (
+                            self._usage_by_type["btp"]
+                            + self._usage_by_type["unattributed"]
+                            >= BTP_TAVILY_DAILY_RESERVE
+                        )
+                    else:
+                        category_exhausted = False
+                    if (
+                        self._exhausted
+                        or self._count >= total_limit
+                        or category_exhausted
+                    ):
                         self.last_reservation_error = "daily_request_budget_exhausted"
                         return False
                     self._date = today
                     self._count += 1
+                    self._usage_by_type[self.reservation_type] += 1
                     if not self._save():
                         self._count -= 1
+                        self._usage_by_type[self.reservation_type] -= 1
                         self.last_reservation_error = "budget_ledger_unavailable"
                         self._ledger_error = True
                         return False
@@ -778,6 +909,7 @@ class ResilientTavily:
         saw_quota_error = False
         saw_request_error = False
         saw_daily_budget = False
+        saw_provenance_error = False
         saw_run_budget = False
         saw_country_allocation = False
         saw_unallocated_country = False
@@ -801,6 +933,20 @@ class ResilientTavily:
                     "fingerprint": key.fp,
                     "reason_code": self.last_deferred_reason,
                 })
+                if (
+                    self.last_deferred_reason
+                    == "provider_budget_provenance_unavailable"
+                ):
+                    saw_provenance_error = True
+                elif self.last_deferred_reason in {
+                    "budget_ledger_unavailable",
+                    "provider_budget_persistence_unavailable",
+                }:
+                    saw_ledger_error = True
+                    saw_persistence_error = (
+                        self.last_deferred_reason
+                        == "provider_budget_persistence_unavailable"
+                    )
                 continue
 
             reservation_error = self.attempt_budget.reserve(
@@ -826,6 +972,10 @@ class ResilientTavily:
                 break
             if reservation_error == "daily_request_budget_exhausted":
                 saw_daily_budget = True
+                self.last_deferred_reason = reservation_error
+                continue
+            if reservation_error == "provider_budget_provenance_unavailable":
+                saw_provenance_error = True
                 self.last_deferred_reason = reservation_error
                 continue
             if reservation_error == "budget_ledger_unavailable":
@@ -993,13 +1143,15 @@ class ResilientTavily:
             self.last_error_code = "country_allocation_cap_exhausted"
         elif saw_unallocated_country:
             self.last_error_code = "country_not_in_attempt_allocation"
-        elif saw_daily_budget:
-            self.last_error_code = "daily_request_budget_exhausted"
+        elif saw_provenance_error:
+            self.last_error_code = "provider_budget_provenance_unavailable"
         elif saw_ledger_error:
             self.last_error_code = (
                 "provider_budget_persistence_unavailable"
                 if saw_persistence_error else "budget_ledger_unavailable"
             )
+        elif saw_daily_budget:
+            self.last_error_code = "daily_request_budget_exhausted"
         else:
             self.last_error_code = "daily_request_budget_exhausted"
         self.last_status = "degraded"

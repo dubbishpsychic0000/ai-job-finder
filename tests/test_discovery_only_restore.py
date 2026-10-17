@@ -38,7 +38,10 @@ def _vault(
     branch: str = "main",
     keys: list[str] | None = None,
     ledgers: dict[str, str | None] | None = None,
-    ledger: str | None = '{"date":"2026-10-14","count":6,"exhausted":false}',
+    ledger: str | None = (
+        '{"date":"2026-10-14","count":6,"exhausted":false,'
+        '"usage_by_type":{"general":6,"btp":0,"unattributed":0}}'
+    ),
 ) -> Path:
     configured_keys = keys or [KEY]
     repository = root / "vault"
@@ -124,6 +127,11 @@ def test_wrong_or_missing_vault_configuration_blocks_restore(
         ('{"date":"not-a-date","count":6,"exhausted":false}', "ledger_date_invalid"),
         ('{"date":"2026-10-15","count":6,"exhausted":false}', "ledger_future_dated"),
         ('{"date":"2026-10-14","count":21,"exhausted":false}', "ledger_count_out_of_range"),
+        (
+            '{"date":"2026-10-14","count":6,"exhausted":false,'
+            '"usage_by_type":{"general":5,"btp":0,"unattributed":0}}',
+            "ledger_provenance_invalid",
+        ),
     ],
 )
 def test_missing_or_corrupt_durable_budget_ledger_blocks_restore(
@@ -180,6 +188,7 @@ def test_valid_private_vault_fixture_restores_without_changing_ledger_balance(
         "date": "2026-10-14",
         "count": 6,
         "exhausted": False,
+        "usage_by_type": {"general": 6, "btp": 0, "unattributed": 0},
     }
     assert (workspace / "data" / "agent.db").read_bytes() == b"offline db fixture"
 
@@ -205,6 +214,11 @@ def test_valid_private_vault_fixture_restores_without_changing_ledger_balance(
         "general_remaining": 11,
         "btp_reserve_remaining": 3,
         "btp_reserve_intact": True,
+        "btp_reserve_status": "verified_intact",
+        "usage_provenance": "verified",
+        "usage_by_type": {"general": 6, "btp": 0, "unattributed": 0},
+        "general_limit_crossed": False,
+        "above_general_limit_source": "not_applicable",
         "eligible_for_general_discovery": True,
         "general_capacity_after_rollover": 0,
         "outcome": "valid_current_day",
@@ -251,7 +265,7 @@ def test_restore_preflight_fails_closed_for_stale_or_depleted_budget(
     assert report["reason_code"] == reason_code
     assert report["provider_budget"]["requests_dispatched"] == 0
     assert report["provider_budget"]["reservations_created"] == 0
-    assert report["provider_budget"]["btp_reserve_validation"] == "blocked"
+    assert report["provider_budget"]["btp_reserve_validation"] == "unknown"
     assert KEY not in json.dumps(report)
 
 
@@ -263,6 +277,11 @@ def test_mixed_key_states_authorize_only_general_eligible_keys(tmp_path):
             "date": "2026-10-14",
             "count": count,
             "exhausted": False,
+            "usage_by_type": {
+                "general": min(count, 17),
+                "btp": max(0, count - 17),
+                "unattributed": 0,
+            },
         })
         for key, count in zip(keys, counts, strict=True)
     }
@@ -312,8 +331,150 @@ def test_mixed_key_states_authorize_only_general_eligible_keys(tmp_path):
     assert eligible["eligible_for_general_discovery"] is True
     assert eligible["general_remaining"] == 16
     assert eligible["btp_reserve_remaining"] == 3
-    assert report["provider_budget"]["btp_reserve_validation"] == "passed"
+    assert report["provider_budget"]["btp_reserve_validation"] == (
+        "passed_with_authorized_btp_usage"
+    )
     assert all(key not in json.dumps(report) for key in keys)
+
+
+def test_count_18_with_verified_btp_reservation_is_not_a_general_breach(tmp_path):
+    ledger = json.dumps({
+        "date": "2026-10-14",
+        "count": 18,
+        "exhausted": False,
+        "usage_by_type": {"general": 17, "btp": 1, "unattributed": 0},
+    })
+    repository = _vault(tmp_path, ledger=ledger)
+    workspace = tmp_path / "workspace"
+    status = restore_discovery_inputs(
+        repository, workspace, expected_origin=ORIGIN,
+        today=date(2026, 10, 14),
+    )
+
+    report = build_restore_preflight_report(
+        repository, workspace, restoration=status, today=date(2026, 10, 14),
+    )
+    key = report["provider_budget"]["per_key"][0]
+
+    assert report["provider_budget"]["btp_reserve_validation"] == (
+        "passed_with_authorized_btp_usage"
+    )
+    assert key["btp_reserve_remaining"] == 2
+    assert key["btp_reserve_intact"] is True
+    assert key["general_limit_crossed"] is False
+    assert key["above_general_limit_source"] == "verified_btp"
+    assert key["eligible_for_general_discovery"] is False
+
+
+def test_count_18_without_provenance_is_unknown_not_a_breach_or_pass(tmp_path):
+    repository = _vault(
+        tmp_path,
+        ledger='{"date":"2026-10-14","count":18,"exhausted":false}',
+    )
+    workspace = tmp_path / "workspace"
+    status = restore_discovery_inputs(
+        repository, workspace, expected_origin=ORIGIN,
+        today=date(2026, 10, 14),
+    )
+
+    report = build_restore_preflight_report(
+        repository, workspace, restoration=status, today=date(2026, 10, 14),
+    )
+    key = report["provider_budget"]["per_key"][0]
+
+    assert report["provider_budget"]["btp_reserve_validation"] == "unknown"
+    assert report["provider_budget"]["btp_reserve_unresolved_ledger_count"] == 1
+    assert key["btp_reserve_status"] == "unknown_provenance"
+    assert key["btp_reserve_remaining"] is None
+    assert key["general_remaining"] is None
+    assert key["general_limit_crossed"] is None
+    assert key["above_general_limit_source"] == "unknown"
+    assert key["eligible_for_general_discovery"] is False
+
+
+def test_count_18_with_general_usage_is_reported_as_a_breach(tmp_path):
+    repository = _vault(
+        tmp_path,
+        ledger=json.dumps({
+            "date": "2026-10-14",
+            "count": 18,
+            "exhausted": False,
+            "usage_by_type": {"general": 18, "btp": 0, "unattributed": 0},
+        }),
+    )
+    workspace = tmp_path / "workspace"
+    status = restore_discovery_inputs(
+        repository, workspace, expected_origin=ORIGIN,
+        today=date(2026, 10, 14),
+    )
+
+    report = build_restore_preflight_report(
+        repository, workspace, restoration=status, today=date(2026, 10, 14),
+    )
+    key = report["provider_budget"]["per_key"][0]
+
+    assert report["provider_budget"]["btp_reserve_validation"] == "blocked"
+    assert key["btp_reserve_status"] == "general_budget_breach"
+    assert key["general_limit_crossed"] is True
+    assert key["above_general_limit_source"] == "verified_general_discovery"
+    assert key["reason_code"] == "general_budget_exceeded_protected_limit"
+
+
+def test_btp_usage_above_three_request_reserve_blocks_global_validation(tmp_path):
+    repository = _vault(
+        tmp_path,
+        ledger=json.dumps({
+            "date": "2026-10-14",
+            "count": 18,
+            "exhausted": False,
+            "usage_by_type": {"general": 14, "btp": 4, "unattributed": 0},
+        }),
+    )
+    workspace = tmp_path / "workspace"
+    status = restore_discovery_inputs(
+        repository, workspace, expected_origin=ORIGIN,
+        today=date(2026, 10, 14),
+    )
+
+    report = build_restore_preflight_report(
+        repository, workspace, restoration=status, today=date(2026, 10, 14),
+    )
+    key = report["provider_budget"]["per_key"][0]
+
+    assert report["provider_budget"]["btp_reserve_validation"] == "blocked"
+    assert key["btp_reserve_status"] == "btp_reserve_breach"
+    assert key["btp_reserve_remaining"] == 0
+    assert key["eligible_for_general_discovery"] is False
+
+
+def test_global_reserve_summary_includes_all_seven_keys(tmp_path):
+    keys = [f"fixture-{number}" for number in range(7)]
+    ledgers = {}
+    for key in keys[:6]:
+        ledgers[key] = json.dumps({
+            "date": "2026-10-13",
+            "count": 20,
+            "exhausted": True,
+        })
+    ledgers[keys[6]] = (
+        '{"date":"2026-10-14","count":18,"exhausted":false}'
+    )
+    repository = _vault(tmp_path, keys=keys, ledgers=ledgers)
+    workspace = tmp_path / "workspace"
+    status = restore_discovery_inputs(
+        repository, workspace, expected_origin=ORIGIN,
+        today=date(2026, 10, 14),
+    )
+
+    report = build_restore_preflight_report(
+        repository, workspace, restoration=status, today=date(2026, 10, 14),
+    )
+
+    assert report["provider_budget"]["btp_reserve_ledger_count"] == 7
+    assert len(report["provider_budget"]["per_key"]) == 7
+    assert report["provider_budget"]["eligible_general_key_count"] == 6
+    assert report["provider_budget"]["btp_reserve_validation"] == "unknown"
+    assert report["provider_budget"]["btp_reserve_unresolved_ledger_count"] == 1
 
 
 def test_yesterday_ledger_is_reported_rollover_eligible_without_mutation(tmp_path):
@@ -344,6 +505,10 @@ def test_yesterday_ledger_is_reported_rollover_eligible_without_mutation(tmp_pat
         "passed_with_durable_rollover"
     )
     assert report["provider_budget"]["general_capacity_after_durable_rollover"] == 17
+    assert report["provider_budget"]["btp_reserve_validation"] == "pending_rollover"
+    assert report["provider_budget"]["aggregate_capacity_remaining"][
+        "btp_reserve_remaining"
+    ] is None
     assert report["provider_budget"]["per_key"][0][
         "eligible_for_general_discovery"
     ] is True

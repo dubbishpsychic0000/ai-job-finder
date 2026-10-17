@@ -9,7 +9,12 @@ import tempfile
 from datetime import date
 from pathlib import Path
 
-from app.connectors.tavily_resilience import GENERAL_TAVILY_DAILY_LIMIT
+from app.connectors.tavily_resilience import (
+    BTP_TAVILY_DAILY_RESERVE,
+    GENERAL_TAVILY_DAILY_LIMIT,
+    TAVILY_DAILY_REQUEST_LIMIT,
+    _ledger_usage_by_type,
+)
 
 _LEDGER_NAME = re.compile(r"tavily_budget_[a-f0-9]{8}\.json\Z")
 _BRANCH = "refs/heads/main"
@@ -91,11 +96,13 @@ class GitVaultBudgetStore:
                 or not isinstance(state.get("exhausted"), bool)
             ):
                 raise ValueError
+            usage_by_type = _ledger_usage_by_type(state, state["count"])
             date.fromisoformat(state["date"])
             return {
                 "date": state["date"],
                 "count": state["count"],
                 "exhausted": state["exhausted"],
+                "usage_by_type": usage_by_type,
             }
         except (UnicodeDecodeError, json.JSONDecodeError, TypeError, ValueError) as exc:
             raise BudgetPersistenceError("invalid_remote_budget_ledger") from exc
@@ -161,7 +168,15 @@ class GitVaultBudgetStore:
         finally:
             index_path.unlink(missing_ok=True)
 
-    def _update(self, path: Path, today: str, limit: int, *, exhaust: bool) -> dict:
+    def _update(
+        self,
+        path: Path,
+        today: str,
+        limit: int,
+        *,
+        exhaust: bool,
+        reservation_type: str = "unattributed",
+    ) -> dict:
         ledger_path = self._relative_ledger_path(path)
         try:
             requested_date = date.fromisoformat(today).isoformat()
@@ -176,11 +191,42 @@ class GitVaultBudgetStore:
             if state["date"] > today:
                 raise BudgetPersistenceError("remote_budget_date_is_in_future")
             if state["date"] != today:
-                state = {"date": today, "count": 0, "exhausted": False}
+                state = {
+                    "date": today,
+                    "count": 0,
+                    "exhausted": False,
+                    "usage_by_type": {
+                        "general": 0,
+                        "btp": 0,
+                        "unattributed": 0,
+                    },
+                }
 
             if exhaust:
                 state["exhausted"] = True
-            elif state["exhausted"] or state["count"] >= limit:
+            elif (
+                reservation_type in {"general", "btp"}
+                and state["usage_by_type"]["unattributed"] > 0
+            ):
+                return {
+                    **state,
+                    "reserved": False,
+                    "reason": "provider_budget_provenance_unavailable",
+                }
+            elif (
+                state["exhausted"]
+                or state["count"] >= limit
+                or (
+                    reservation_type == "general"
+                    and state["usage_by_type"]["general"]
+                    >= GENERAL_TAVILY_DAILY_LIMIT
+                )
+                or (
+                    reservation_type == "btp"
+                    and state["usage_by_type"]["btp"]
+                    >= BTP_TAVILY_DAILY_RESERVE
+                )
+            ):
                 return {
                     **state,
                     "reserved": False,
@@ -188,6 +234,7 @@ class GitVaultBudgetStore:
                 }
             else:
                 state["count"] += 1
+                state["usage_by_type"][reservation_type] += 1
 
             try:
                 self._commit_ledger(head, ledger_path, state)
@@ -202,17 +249,42 @@ class GitVaultBudgetStore:
                     raise
         raise BudgetPersistenceError("vault_budget_push_race_limit")
 
-    def reserve(self, path: Path, today: str, limit: int) -> dict:
+    def reserve(
+        self,
+        path: Path,
+        today: str,
+        limit: int,
+        *,
+        reservation_type: str = "unattributed",
+    ) -> dict:
         """Persist and return a reservation before the provider is dispatched."""
-        state = self._update(path, today, limit, exhaust=False)
+        if reservation_type not in {"general", "btp", "unattributed"}:
+            raise BudgetPersistenceError("invalid_budget_reservation_type")
+        state = self._update(
+            path,
+            today,
+            limit,
+            exhaust=False,
+            reservation_type=reservation_type,
+        )
         if state.get("reserved") is True:
             self.reservation_count += 1
         return state
 
     def reserve_general(self, path: Path, today: str, limit: int) -> dict:
         """Reserve a discovery attempt without ever spending the BTP reserve."""
-        general_limit = min(max(0, int(limit)), GENERAL_TAVILY_DAILY_LIMIT)
-        return self.reserve(path, today, general_limit)
+        return self.reserve(
+            path,
+            today,
+            min(max(0, int(limit)), TAVILY_DAILY_REQUEST_LIMIT),
+            reservation_type="general",
+        )
+
+    def reserve_btp(self, path: Path, today: str, limit: int) -> dict:
+        """Persist an explicitly attributed BTP reservation."""
+        return self.reserve(
+            path, today, limit, reservation_type="btp",
+        )
 
     def exhaust(self, path: Path, today: str, limit: int) -> dict:
         """Durably mark a key exhausted after a provider quota response."""

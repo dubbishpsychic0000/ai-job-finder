@@ -17,6 +17,7 @@ from app.connectors.tavily_resilience import (
     BTP_TAVILY_DAILY_RESERVE,
     GENERAL_TAVILY_DAILY_LIMIT,
     TAVILY_DAILY_REQUEST_LIMIT,
+    _ledger_usage_by_type,
 )
 
 
@@ -98,6 +99,11 @@ def _budget_ledger_diagnostic(path: Path, *, today: date) -> tuple[str, dict | N
         return "ledger_schema_invalid", None
     if not 0 <= payload["count"] <= TAVILY_DAILY_REQUEST_LIMIT:
         return "ledger_count_out_of_range", None
+    if "usage_by_type" in payload:
+        try:
+            _ledger_usage_by_type(payload, payload["count"])
+        except ValueError:
+            return "ledger_provenance_invalid", None
     try:
         ledger_date = date.fromisoformat(payload["date"])
     except ValueError:
@@ -323,6 +329,11 @@ def build_restore_preflight_report(
             "general_remaining": None,
             "btp_reserve_remaining": None,
             "btp_reserve_intact": False,
+            "btp_reserve_status": "unverifiable_ledger",
+            "usage_provenance": "unavailable",
+            "usage_by_type": None,
+            "general_limit_crossed": None,
+            "above_general_limit_source": "unknown",
             "eligible_for_general_discovery": False,
             "general_capacity_after_rollover": 0,
             "outcome": "ledger_missing",
@@ -348,6 +359,9 @@ def build_restore_preflight_report(
             item["reason_code"] = {
                 "ledger_missing": "provider_budget_ledger_missing",
                 "ledger_future_dated": "provider_budget_ledger_from_future",
+                "ledger_provenance_invalid": (
+                    "provider_budget_ledger_provenance_invalid"
+                ),
             }.get(outcome, "provider_budget_ledger_missing_or_invalid")
             reasons.append(item["reason_code"])
             per_key.append(item)
@@ -361,6 +375,14 @@ def build_restore_preflight_report(
         )
         item["count"] = payload["count"]
         item["exhausted"] = payload["exhausted"]
+        provenance_present = "usage_by_type" in payload
+        usage_by_type = _ledger_usage_by_type(payload, payload["count"])
+        item["usage_by_type"] = usage_by_type
+        item["usage_provenance"] = (
+            "verified"
+            if provenance_present and usage_by_type["unattributed"] == 0
+            else "unknown"
+        )
         if outcome == "ledger_future_dated":
             item["ledger_date_relation"] = "future_utc_day"
             item["reason_code"] = "provider_budget_ledger_from_future"
@@ -368,31 +390,96 @@ def build_restore_preflight_report(
         elif outcome == "prior_day_rollover_pending":
             item["eligible_for_general_discovery"] = True
             item["general_capacity_after_rollover"] = GENERAL_TAVILY_DAILY_LIMIT
-            item["btp_reserve_intact"] = True
+            item["btp_reserve_status"] = "rollover_pending"
+            item["general_limit_crossed"] = None
+            item["above_general_limit_source"] = "not_applicable_after_rollover"
             item["reason_code"] = "utc_day_rollover_pending_durable_reservation"
         else:
             item["total_remaining"] = max(
                 0, TAVILY_DAILY_REQUEST_LIMIT - payload["count"],
             )
+            general_usage = usage_by_type["general"]
+            btp_usage = usage_by_type["btp"]
+            unattributed_usage = usage_by_type["unattributed"]
+            effective_general_usage = general_usage + unattributed_usage
             item["general_remaining"] = max(
-                0, GENERAL_TAVILY_DAILY_LIMIT - payload["count"],
-            )
-            item["btp_reserve_remaining"] = max(
                 0,
-                TAVILY_DAILY_REQUEST_LIMIT
-                - max(GENERAL_TAVILY_DAILY_LIMIT, payload["count"]),
+                min(
+                    GENERAL_TAVILY_DAILY_LIMIT - effective_general_usage,
+                    TAVILY_DAILY_REQUEST_LIMIT - payload["count"],
+                ),
             )
-            item["btp_reserve_intact"] = (
-                payload["count"] <= GENERAL_TAVILY_DAILY_LIMIT
-                and item["btp_reserve_remaining"] >= BTP_TAVILY_DAILY_RESERVE
-            )
+            if provenance_present and unattributed_usage == 0:
+                item["btp_reserve_remaining"] = max(
+                    0, BTP_TAVILY_DAILY_RESERVE - btp_usage,
+                )
+                general_crossed = general_usage > GENERAL_TAVILY_DAILY_LIMIT
+                item["general_limit_crossed"] = general_crossed
+                if general_crossed:
+                    item["btp_reserve_status"] = "general_budget_breach"
+                    item["above_general_limit_source"] = (
+                        "verified_general_discovery"
+                    )
+                elif btp_usage > BTP_TAVILY_DAILY_RESERVE:
+                    item["btp_reserve_status"] = "btp_reserve_breach"
+                    item["above_general_limit_source"] = (
+                        "verified_btp"
+                        if payload["count"] > GENERAL_TAVILY_DAILY_LIMIT
+                        else "not_applicable"
+                    )
+                elif btp_usage:
+                    item["btp_reserve_status"] = "verified_authorized_btp_usage"
+                    item["above_general_limit_source"] = (
+                        "verified_btp"
+                        if payload["count"] > GENERAL_TAVILY_DAILY_LIMIT
+                        else "not_applicable"
+                    )
+                else:
+                    item["btp_reserve_status"] = "verified_intact"
+                    item["above_general_limit_source"] = (
+                        "not_applicable"
+                        if payload["count"] <= GENERAL_TAVILY_DAILY_LIMIT
+                        else "unknown"
+                    )
+                item["btp_reserve_intact"] = (
+                    not general_crossed
+                    and btp_usage <= BTP_TAVILY_DAILY_RESERVE
+                )
+            else:
+                item["general_remaining"] = None
+                item["btp_reserve_status"] = "unknown_provenance"
+                item["general_limit_crossed"] = (
+                    True if general_usage > GENERAL_TAVILY_DAILY_LIMIT
+                    else False
+                    if payload["count"] <= GENERAL_TAVILY_DAILY_LIMIT
+                    else None
+                )
+                item["above_general_limit_source"] = (
+                    "unknown"
+                    if payload["count"] > GENERAL_TAVILY_DAILY_LIMIT
+                    else "not_applicable"
+                )
             item["eligible_for_general_discovery"] = (
                 outcome == "valid_current_day"
                 and not payload["exhausted"]
-                and payload["count"] < GENERAL_TAVILY_DAILY_LIMIT
+                and item["general_remaining"] is not None
+                and item["general_remaining"] > 0
+                and item["usage_provenance"] == "verified"
+                and item["btp_reserve_status"] not in {
+                    "general_budget_breach",
+                    "btp_reserve_breach",
+                }
             )
             if item["eligible_for_general_discovery"]:
                 item["reason_code"] = ""
+            elif item["btp_reserve_status"] == "general_budget_breach":
+                item["reason_code"] = "general_budget_exceeded_protected_limit"
+                reasons.append(item["reason_code"])
+            elif item["btp_reserve_status"] == "btp_reserve_breach":
+                item["reason_code"] = "btp_reserve_exceeded_protected_limit"
+                reasons.append(item["reason_code"])
+            elif item["usage_provenance"] != "verified":
+                item["reason_code"] = "provider_budget_provenance_unavailable"
             elif outcome == "ledger_exhausted" or payload["exhausted"]:
                 item["reason_code"] = "provider_key_exhausted"
             else:
@@ -454,6 +541,19 @@ def build_restore_preflight_report(
         for item in eligible_keys
         if item.get("ledger_date_relation") == "prior_utc_day"
     )
+    current_ledgers = [
+        item for item in per_key
+        if item.get("ledger_date_relation") == "current_utc_day"
+    ]
+    current_btp_reserve_is_known = all(item["ledger_valid"] for item in per_key) and all(
+        item["btp_reserve_status"] in {
+            "verified_intact",
+            "verified_authorized_btp_usage",
+            "btp_reserve_breach",
+            "general_budget_breach",
+        }
+        for item in current_ledgers
+    )
     aggregate = {
         "total_remaining": sum(
             item["total_remaining"] or 0
@@ -461,10 +561,9 @@ def build_restore_preflight_report(
             if item.get("ledger_date_relation") == "current_utc_day"
         ),
         "general_remaining": current_general_remaining,
-        "btp_reserve_remaining": sum(
-            item["btp_reserve_remaining"] or 0
-            for item in per_key
-            if item.get("ledger_date_relation") == "current_utc_day"
+        "btp_reserve_remaining": (
+            sum(item["btp_reserve_remaining"] or 0 for item in current_ledgers)
+            if current_ledgers and current_btp_reserve_is_known else None
         ),
     }
     if any(not item["ledger_valid"] for item in per_key):
@@ -475,8 +574,36 @@ def build_restore_preflight_report(
     success = (
         not unique_reasons
         and len(per_key) == len(fingerprints)
-        and all(item["btp_reserve_intact"] for item in eligible_keys)
+        and all(
+            item["btp_reserve_status"] in {
+                "rollover_pending",
+                "verified_intact",
+                "verified_authorized_btp_usage",
+            }
+            for item in eligible_keys
+        )
     )
+    reserve_statuses = {item["btp_reserve_status"] for item in per_key}
+    if any(not item["ledger_valid"] for item in per_key) or (
+        reserve_statuses & {
+            "general_budget_breach",
+            "btp_reserve_breach",
+        }
+    ):
+        aggregate_reserve_validation = "blocked"
+    elif reserve_statuses & {
+        "unknown_provenance",
+        "unverifiable_ledger",
+    }:
+        aggregate_reserve_validation = "unknown"
+    elif "rollover_pending" in reserve_statuses:
+        aggregate_reserve_validation = "pending_rollover"
+    elif "verified_authorized_btp_usage" in reserve_statuses:
+        aggregate_reserve_validation = "passed_with_authorized_btp_usage"
+    elif per_key and reserve_statuses == {"verified_intact"}:
+        aggregate_reserve_validation = "passed"
+    else:
+        aggregate_reserve_validation = "blocked"
     return {
         "schema_version": 1,
         "mode": "restore_only",
@@ -532,6 +659,7 @@ def build_restore_preflight_report(
                     "ledger_date_invalid",
                     "ledger_future_dated",
                     "ledger_count_out_of_range",
+                    "ledger_provenance_invalid",
                     "ledger_exhausted",
                 }
             ],
@@ -549,16 +677,26 @@ def build_restore_preflight_report(
                 if success
                 else "blocked"
             ),
-            "btp_reserve_validation": (
-                "passed"
-                if success and all(item["btp_reserve_intact"] for item in eligible_keys)
-                else "blocked"
-            ),
+            "btp_reserve_validation": aggregate_reserve_validation,
             "aggregate_capacity_remaining": aggregate,
+            "btp_reserve_ledger_count": len(per_key),
+            "btp_reserve_unresolved_ledger_count": sum(
+                item["btp_reserve_status"] in {
+                    "unknown_provenance",
+                    "unverifiable_ledger",
+                }
+                for item in per_key
+            ),
             "eligible_general_key_count": len(eligible_keys),
             "excluded_general_key_count": len(per_key) - len(eligible_keys),
             "general_capacity_current_utc_day": current_general_remaining,
             "general_capacity_after_durable_rollover": rollover_general_capacity,
+            "btp_reserve_capacity_after_durable_rollover": (
+                len([
+                    item for item in eligible_keys
+                    if item.get("ledger_date_relation") == "prior_utc_day"
+                ]) * BTP_TAVILY_DAILY_RESERVE
+            ),
             "per_key": per_key,
         },
         "discovery_gate": {
@@ -631,6 +769,7 @@ def _write_blocked_discovery_report(
         "ledger_date_invalid",
         "ledger_future_dated",
         "ledger_count_out_of_range",
+        "ledger_provenance_invalid",
         "ledger_exhausted",
     }
     ledger_diagnostics = restoration.get("ledger_diagnostics")

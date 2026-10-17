@@ -33,7 +33,9 @@ def _git(*args: str, cwd: Path | None = None) -> str:
     return result.stdout.strip()
 
 
-def _vault_repositories(tmp_path: Path, *, initial_count: int = 0):
+def _vault_repositories(
+    tmp_path: Path, *, initial_count: int = 0, legacy_initial_ledger: bool = False,
+):
     bare = tmp_path / "vault.git"
     seed = tmp_path / "seed"
     _git("init", "--bare", "--initial-branch=main", str(bare))
@@ -43,11 +45,18 @@ def _vault_repositories(tmp_path: Path, *, initial_count: int = 0):
     _git("config", "user.email", "test@example.invalid", cwd=seed)
     (seed / "state").mkdir()
     ledger = seed / "state" / "tavily_budget_0123abcd.json"
-    ledger.write_text(json.dumps({
+    initial_ledger = {
         "date": datetime.now(timezone.utc).date().isoformat(),
         "count": initial_count,
         "exhausted": False,
-    }), encoding="utf-8")
+    }
+    if not legacy_initial_ledger:
+        initial_ledger["usage_by_type"] = {
+            "general": min(initial_count, GENERAL_TAVILY_DAILY_LIMIT),
+            "btp": max(0, initial_count - GENERAL_TAVILY_DAILY_LIMIT),
+            "unattributed": 0,
+        }
+    ledger.write_text(json.dumps(initial_ledger), encoding="utf-8")
     (seed / "state" / "agent.db").write_bytes(b"private-db-placeholder")
     (seed / "candidate.yaml").write_text("private candidate placeholder", encoding="utf-8")
     _git("add", ".", cwd=seed)
@@ -79,6 +88,7 @@ def test_durable_reservation_is_visible_before_provider_request(tmp_path, monkey
         "date": datetime.now(timezone.utc).date().isoformat(),
         "count": 0,
         "exhausted": False,
+        "usage_by_type": {"general": 0, "btp": 0, "unattributed": 0},
     }), encoding="utf-8")
     budget = DailyBudget(
         budget_path,
@@ -215,6 +225,7 @@ def test_crash_after_durable_reservation_preserves_allowance_for_next_run(tmp_pa
     local_first.parent.mkdir()
     local_first.write_text(json.dumps({
         "date": today, "count": 0, "exhausted": False,
+        "usage_by_type": {"general": 0, "btp": 0, "unattributed": 0},
     }), encoding="utf-8")
 
     reservation = first_store.reserve(local_first, today, 2)
@@ -313,6 +324,123 @@ def test_durable_general_reservation_cannot_spend_btp_reserve(tmp_path):
     )
 
 
+def test_legitimate_btp_reservation_is_attributed_and_preserves_general_cap(
+    tmp_path,
+):
+    bare, relative_path, (clone, _) = _vault_repositories(
+        tmp_path, initial_count=GENERAL_TAVILY_DAILY_LIMIT,
+    )
+    today = datetime.now(timezone.utc).date().isoformat()
+    local_path = tmp_path / "runtime" / Path(relative_path).name
+    local_path.parent.mkdir()
+    store = GitVaultBudgetStore(clone)
+
+    reservation = store.reserve_btp(local_path, today, TAVILY_DAILY_REQUEST_LIMIT)
+    blocked_general = store.reserve_general(
+        local_path, today, TAVILY_DAILY_REQUEST_LIMIT,
+    )
+    ledger = _remote_ledger(bare, relative_path)
+
+    assert reservation["reserved"] is True
+    assert ledger["count"] == GENERAL_TAVILY_DAILY_LIMIT + 1
+    assert ledger["usage_by_type"] == {
+        "general": GENERAL_TAVILY_DAILY_LIMIT,
+        "btp": 1,
+        "unattributed": 0,
+    }
+    assert blocked_general["reserved"] is False
+    assert ledger["count"] == GENERAL_TAVILY_DAILY_LIMIT + 1
+
+
+def test_unknown_legacy_provenance_blocks_without_persisting_reservation(tmp_path):
+    bare, relative_path, (clone, _) = _vault_repositories(
+        tmp_path, initial_count=18, legacy_initial_ledger=True,
+    )
+    today = datetime.now(timezone.utc).date().isoformat()
+    local_path = tmp_path / "runtime" / Path(relative_path).name
+    local_path.parent.mkdir()
+    store = GitVaultBudgetStore(clone)
+    before = _remote_ledger(bare, relative_path)
+
+    result = store.reserve_general(local_path, today, TAVILY_DAILY_REQUEST_LIMIT)
+
+    assert result["reserved"] is False
+    assert result["reason"] == "provider_budget_provenance_unavailable"
+    assert _remote_ledger(bare, relative_path) == before
+    assert store.write_count == 0
+
+
+def test_unknown_provenance_does_not_dispatch_provider_request(tmp_path, monkeypatch):
+    bare, relative_path, (clone, _) = _vault_repositories(
+        tmp_path, initial_count=18, legacy_initial_ledger=True,
+    )
+    today = datetime.now(timezone.utc).date().isoformat()
+    local_path = tmp_path / "runtime" / Path(relative_path).name
+    local_path.parent.mkdir()
+    local_path.write_text(json.dumps({
+        "date": today,
+        "count": 18,
+        "exhausted": False,
+    }), encoding="utf-8")
+    store = GitVaultBudgetStore(clone)
+    budget = DailyBudget(
+        local_path,
+        limit=TAVILY_DAILY_REQUEST_LIMIT,
+        durable_reserver=store.reserve_general,
+        reservation_type="general",
+    )
+    requests = []
+    monkeypatch.setattr(
+        "app.connectors.tavily_resilience.requests.post",
+        lambda *_args, **_kwargs: requests.append(True),
+    )
+    from app.connectors.tavily_resilience import (
+        ResilientTavily,
+        TavilyCache,
+        TavilyKey,
+    )
+
+    source = ResilientTavily(
+        keys=[TavilyKey(
+            "test-api-key", budget, key_fingerprint("test-api-key"),
+        )],
+        cache=TavilyCache(tmp_path / "cache.json"),
+    )
+
+    import asyncio
+
+    assert asyncio.run(source.search("civil engineering", "Morocco")) == []
+    assert requests == []
+    assert source.last_error_code == "provider_budget_provenance_unavailable"
+    assert _remote_ledger(bare, relative_path)["count"] == 18
+    assert store.write_count == 0
+
+
+def test_known_general_overrun_is_never_reclassified_as_btp_usage(tmp_path):
+    bare, relative_path, (clone, _) = _vault_repositories(tmp_path)
+    today = datetime.now(timezone.utc).date().isoformat()
+    ledger = clone / relative_path
+    ledger.write_text(json.dumps({
+        "date": today,
+        "count": 18,
+        "exhausted": False,
+        "usage_by_type": {"general": 18, "btp": 0, "unattributed": 0},
+    }), encoding="utf-8")
+    _git("add", relative_path, cwd=clone)
+    _git("commit", "-m", "fixture general overrun", cwd=clone)
+    _git("push", "origin", "main", cwd=clone)
+    store = GitVaultBudgetStore(clone)
+    before = _remote_ledger(bare, relative_path)
+
+    result = store.reserve_general(
+        ledger, today, TAVILY_DAILY_REQUEST_LIMIT,
+    )
+
+    assert result["reserved"] is False
+    assert result["reason"] == "daily_request_budget_exhausted"
+    assert _remote_ledger(bare, relative_path) == before
+
+
 @pytest.mark.parametrize("initial_count", [17, 20])
 def test_durable_general_reservation_skips_keys_without_general_capacity(
     tmp_path, initial_count,
@@ -344,7 +472,12 @@ def test_durable_exhaustion_preserves_count_and_blocks_later_reservations(tmp_pa
 
     assert exhausted["exhausted"] is True
     assert blocked["reserved"] is False
-    assert persisted == {"date": today, "count": 4, "exhausted": True}
+    assert persisted == {
+        "date": today,
+        "count": 4,
+        "exhausted": True,
+        "usage_by_type": {"general": 4, "btp": 0, "unattributed": 0},
+    }
 
 
 def test_stale_date_rolls_only_at_utc_day_boundary(tmp_path):
@@ -363,7 +496,10 @@ def test_stale_date_rolls_only_at_utc_day_boundary(tmp_path):
     assert result["date"] == tomorrow
     assert result["count"] == 1
     assert _remote_ledger(bare, relative_path) == {
-        "date": tomorrow, "count": 1, "exhausted": False,
+        "date": tomorrow,
+        "count": 1,
+        "exhausted": False,
+        "usage_by_type": {"general": 0, "btp": 0, "unattributed": 1},
     }
 
 
@@ -390,4 +526,5 @@ def test_discovery_rollover_resets_stale_ledger_only_at_reservation_boundary(
         "date": next_day,
         "count": 1,
         "exhausted": False,
+        "usage_by_type": {"general": 1, "btp": 0, "unattributed": 0},
     }

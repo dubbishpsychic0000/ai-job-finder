@@ -891,6 +891,7 @@ def _configured_public_search():
             budget=DailyBudget(
                 data_dir / f"tavily_budget_{key_fingerprint(key)}.json",
                 limit=TAVILY_DAILY_REQUEST_LIMIT,
+                reservation_type="btp",
             ),
             fp=key_fingerprint(key),
         ))
