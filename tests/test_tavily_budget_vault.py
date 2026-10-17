@@ -427,6 +427,8 @@ def test_known_general_overrun_is_never_reclassified_as_btp_usage(tmp_path):
         "usage_by_type": {"general": 18, "btp": 0, "unattributed": 0},
     }), encoding="utf-8")
     _git("add", relative_path, cwd=clone)
+    _git("config", "user.name", "Offline Fixture", cwd=clone)
+    _git("config", "user.email", "offline@example.invalid", cwd=clone)
     _git("commit", "-m", "fixture general overrun", cwd=clone)
     _git("push", "origin", "main", cwd=clone)
     store = GitVaultBudgetStore(clone)
