@@ -52,6 +52,26 @@ def test_type_and_route_detection_do_not_make_up_email_routes():
     method, url = detect_application_method(text="Apply online today", url="https://example.test/app")
     assert (method, url) == ("ONLINE_FORM", "https://example.test/app")
     assert detect_application_method(text="A great job", has_verified_email=False)[0] == "UNKNOWN"
+    address = "recruitment@company.fr"
+    assert detect_application_method(
+        text=f"Send your CV and application to {address}.",
+        source_type="ats",
+        has_verified_email=True,
+        contact_email=address,
+    ) == ("EMAIL", "")
+    assert detect_application_method(
+        text=f"Contact {address} with questions. Apply online.",
+        url="https://example.test/app",
+        source_type="ats",
+        has_verified_email=True,
+        contact_email=address,
+    ) == ("COMPANY_PORTAL", "https://example.test/app")
+    assert detect_application_method(
+        text=f"Apply by email to {address}.",
+        source_type="ats",
+        has_verified_email=True,
+        contact_email="other@company.fr",
+    )[0] == "COMPANY_PORTAL"
 
 
 def test_entity_classification_distinguishes_vacancies_from_research_pages():
@@ -223,6 +243,33 @@ def test_unverified_entities_are_excluded_from_pending_actions(db):
     db.flush()
 
     assert pending_actions(db) == [verified]
+
+
+def test_verified_email_application_route_is_eligible_for_pending_actions(db):
+    company = get_or_create_company(db, "Example Construction").id
+    email_job = Job(
+        source="greenhouse", external_id="email", dedup_key="email-route",
+        title="Civil Engineer", url="https://boards.greenhouse.io/example/jobs/456",
+        status="analyzed", source_type="ats", company_id=company,
+        location="Casablanca, Morocco",
+        description="Send your application and CV to jobs@example.org.",
+        contact_email="jobs@example.org", verification_status="verified",
+        application_method="EMAIL",
+        application_url="https://boards.greenhouse.io/example/jobs/456",
+        entity_type="INDIVIDUAL_VACANCY", entity_state="VACANCY_VERIFIED",
+        entity_reason_code="matching_public_ats_posting_record",
+        entity_evidence_url="https://boards.greenhouse.io/example/jobs/456",
+        last_verified_at=utcnow(),
+    )
+    db.add(email_job)
+    db.flush()
+    db.add(Decision(
+        job_id=email_job.id, decision="APPLY", overall_score=90,
+        scores={}, reason="test", rules_fired=[], ai_reason="",
+    ))
+    db.flush()
+
+    assert pending_actions(db) == [email_job]
 
 
 def test_daily_limit_draft_is_an_immediate_notification(db):

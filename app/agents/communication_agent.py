@@ -43,6 +43,11 @@ class CommunicationAgent:
         }
         payload = {
             "action": action,
+            "communication_intent": (
+                "Ask a concise question about the hiring process only. Do not state or imply that an application is being submitted. Do not request consideration as an application."
+                if action == "ASK_EMPLOYER"
+                else "Submit a truthful application for this specific vacancy."
+            ),
             "target_language": target_language,
             "job_title": job.title,
             "company": job.company.name if job.company else "",
@@ -58,7 +63,7 @@ class CommunicationAgent:
         if phone and phone not in body:
             # deterministic signature so the phone is always on the email
             tail = [self.profile.name, self.profile.title]
-            block = tail + [phone]
+            block = [*tail, phone]
             if self.profile.name.lower() in body.lower() and self.profile.title.lower() in body.lower():
                 block = [phone]
             body = (body + "\n\n" + "\n".join(x for x in block if x)).strip()

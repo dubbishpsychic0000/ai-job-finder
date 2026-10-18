@@ -149,9 +149,14 @@ def validate(
                 f"(cooldown {cdays}d)", "employer_cooldown")
 
     # duplicate-application check: never email twice for the same job
-    submitted = ("sent", "drafted", "deferred")
+    submitted = ("sent", "inquiry_sent", "drafted", "deferred")
     if mem.store.find_applications(session, job.id, statuses=submitted):
-        report.block("this job was already applied to", "duplicate")
+        reason = (
+            "this job was already applied to"
+            if action in ("APPLY", "APPLIED")
+            else "this employer was already contacted about this job"
+        )
+        report.block(reason, "duplicate")
 
     if email_cfg.get("require_claims_allowedlist"):
         for problem in _claims_ok(body, profile, job):
@@ -173,9 +178,11 @@ def validate(
         if closing <= now:
             report.block("posting closing date has passed", "closing_date")
 
-    if not attachments:
+    if action == "ASK_EMPLOYER" and attachments:
+        report.block("employer inquiries must not include a CV attachment", "attachment")
+    elif action != "ASK_EMPLOYER" and not attachments:
         report.block("no CV attachment resolved", "attachment")
-    else:
+    elif attachments:
         from pathlib import Path
 
         for a in attachments:

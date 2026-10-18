@@ -28,7 +28,7 @@ class ActionReport:
     errors: list[str] = field(default_factory=list)
 
 
-def pending_actions(session: Session) -> list:
+def pending_actions(session: Session, job_id: int | None = None) -> list:
     """Jobs decided as APPLY/ASK_EMPLOYER/INVESTIGATE but not yet acted on."""
     from sqlalchemy import select
 
@@ -37,13 +37,16 @@ def pending_actions(session: Session) -> list:
     decided = select(models.Decision.job_id).where(
         models.Decision.decision.in_(["APPLY", "ASK_EMPLOYER", "INVESTIGATE"]))
     acted = select(models.Job.id).where(models.Job.status.in_(["acted", "closed"]))
-    candidates = list(session.execute(
-        select(models.Job).where(
+    filters = [
             models.Job.status == "analyzed",
             models.Job.opportunity_type != "SPONTANEOUS_APPLICATION",
             models.Job.id.in_(decided),
             models.Job.id.not_in(acted),
-        )
+    ]
+    if job_id is not None:
+        filters.append(models.Job.id == job_id)
+    candidates = list(session.execute(
+        select(models.Job).where(*filters)
     ).scalars().all())
     return [
         job for job in candidates
@@ -73,12 +76,25 @@ async def run_actions(session: Session, config: AgentConfig, settings: RunnerSet
                       profile: CandidateProfile, llm: LLMProvider,
                       immigration_agent=None) -> ActionReport:
     report = ActionReport()
+    live_job_id = None
+    if settings.email_mode == "live":
+        raw_approved_id = str(getattr(settings, "approved_live_job_id", "") or "")
+        if (
+            not getattr(settings, "live_email_manual_dispatch", False)
+            or not getattr(settings, "authorize_live_job_email", False)
+            or not raw_approved_id.isdecimal()
+        ):
+            report.blocked.append({
+                "reason": "single_job_live_email_authorization_required",
+            })
+            return report
+        live_job_id = int(raw_approved_id)
     communicator = CommunicationAgent(llm, profile)
     # Reconfirm the structured ATS posting before any application communication.
     verify_fn = _verify_before_send(config)
     engine = ApplicationEngine(session, config, settings, profile, communicator,
                                verify_url_fn=verify_fn)
-    jobs = pending_actions(session)
+    jobs = pending_actions(session, job_id=live_job_id)
 
     for job in jobs:
         if _is_public_competition(job):
@@ -100,9 +116,11 @@ async def run_actions(session: Session, config: AgentConfig, settings: RunnerSet
         try:
             lang = lang_for_country(job.country)
             if decision.decision in ("APPLY", "ASK_EMPLOYER"):
-                # Portals/forms are user-controlled actions; never replace one
-                # with a guessed email address.
-                if job.application_method in ("ONLINE_FORM", "COMPANY_PORTAL", "JOB_BOARD"):
+                # A vacancy's contact address does not override its application route.
+                if (
+                    decision.decision == "APPLY"
+                    and job.application_method != "EMAIL"
+                ):
                     report.blocked.append({"job_id": job.id, "reason": "online application required",
                                            "application_url": job.application_url or job.url})
                     mem.store.record_event(session, "action", "online application required — no email sent",
@@ -134,7 +152,7 @@ async def run_actions(session: Session, config: AgentConfig, settings: RunnerSet
                     priority = "high" if result.get("daily_limit_reached") else "normal"
                     mem.store.enqueue_notification(session, "EMAIL_DRAFT_CREATED", job_id=job.id,
                                                    priority=priority, payload=result)
-                elif result.get("status") == "sent":
+                elif result.get("status") in ("sent", "inquiry_sent"):
                     mem.store.enqueue_notification(session, "EMAIL_SENT", job_id=job.id,
                                                    priority="high", payload=result)
                 if result["status"] == "blocked":

@@ -113,6 +113,41 @@ _NON_EMPLOYMENT_DOMAINS = {
     "x.com",
     "twitter.com",
 }
+_EMAIL_ADDRESS = re.compile(r"[\w.+-]+@[\w.-]+\.[A-Za-z]{2,}")
+_EMAIL_APPLICATION_PATTERNS = (
+    re.compile(
+        r"\b(?:send|submit|forward|email)\b[^.!?]{0,120}"
+        r"\b(?:application|cv|resume|résumé|curriculum vitae|cover letter)\b"
+        r"[^.!?]{0,100}\b(?:to|at)\s*[:\-]?\s*{email}",
+        re.I,
+    ),
+    re.compile(
+        r"\b(?:apply|applications?)\b[^.!?]{0,100}"
+        r"\b(?:by email|via email|by e-mail|via e-mail)\b[^.!?]{0,100}{email}",
+        re.I,
+    ),
+    re.compile(
+        r"\b(?:envoyez|envoyer|adressez|adresser|transmettez|transmettre)\b"
+        r"[^.!?]{0,100}\b(?:candidature|cv|curriculum vitae)\b"
+        r"[^.!?]{0,100}\b(?:à|a)\s*{email}",
+        re.I,
+    ),
+    re.compile(
+        r"\b(?:postulez|candidater|candidatures?)\b[^.!?]{0,100}"
+        r"\b(?:par email|par courriel|par e-mail)\b[^.!?]{0,100}{email}",
+        re.I,
+    ),
+)
+
+
+def explicit_email_application_recipient(text: str) -> str:
+    """Return an address only when the posting explicitly directs applications to it."""
+    value = str(text or "")
+    for address in _EMAIL_ADDRESS.findall(value):
+        for pattern in _EMAIL_APPLICATION_PATTERNS:
+            if pattern.search(value.replace(address, "{email}")):
+                return address
+    return ""
 
 
 def classify_entity(opportunity) -> tuple[str, str, str]:
@@ -424,8 +459,21 @@ def is_verified_individual_vacancy(job) -> bool:
         and bool(str(getattr(job, "description", "") or "").strip())
         and bool(str(getattr(job, "location", "") or "").strip())
         and bool(getattr(getattr(job, "company", None), "name", ""))
-        and getattr(job, "application_method", "") == "COMPANY_PORTAL"
-        and str(getattr(job, "application_url", "") or "") == url
+        and (
+            (
+                getattr(job, "application_method", "") == "COMPANY_PORTAL"
+                and str(getattr(job, "application_url", "") or "") == url
+            )
+            or (
+                getattr(job, "application_method", "") == "EMAIL"
+                and bool(str(getattr(job, "contact_email", "") or "").strip())
+                and explicit_email_application_recipient(
+                    str(getattr(job, "description", "") or "")
+                ).casefold()
+                == str(getattr(job, "contact_email", "") or "").strip().casefold()
+                and str(getattr(job, "application_url", "") or "") == url
+            )
+        )
         and parsed.scheme in {"http", "https"}
         and official_ats_host
     )
@@ -440,7 +488,8 @@ def classify_opportunity(title: str = "", description: str = "", source_type: st
 
 
 def detect_application_method(*, text: str = "", url: str = "", source_type: str = "",
-                              has_verified_email: bool = False) -> tuple[str, str]:
+                              has_verified_email: bool = False,
+                              contact_email: str = "") -> tuple[str, str]:
     """Return ``(method, application_url)`` without inventing a contact method."""
     value = text.lower()
     if re.search(r"(?:whatsapp|\bwa\.me/)\b", value):
@@ -453,10 +502,15 @@ def detect_application_method(*, text: str = "", url: str = "", source_type: str
         return "RECRUITER", url
     if re.search(r"(?:apply online|apply now|postuler(?: en ligne)?|candidater|submit application)", value):
         return ("COMPANY_PORTAL" if source_type in {"ats", "company_career"} else "ONLINE_FORM"), url
-    if source_type in {"ats", "company_career"}:
-        return "COMPANY_PORTAL", url
     if source_type == "job_board":
         return "JOB_BOARD", url
-    if has_verified_email:
-        return "EMAIL", ""
+    email_route = explicit_email_application_recipient(value)
+    if (
+        has_verified_email
+        and contact_email
+        and email_route.casefold() == contact_email.strip().casefold()
+    ):
+        return "EMAIL", url
+    if source_type in {"ats", "company_career"}:
+        return "COMPANY_PORTAL", url
     return "UNKNOWN", ""

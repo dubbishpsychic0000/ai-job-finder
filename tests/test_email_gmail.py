@@ -36,7 +36,7 @@ def _job(db, title="Technicien VRD", email="jobs@colas.example", posted_days_ago
     job = models.Job(
         source="static_files", external_id="g1", dedup_key="hash:gmail1", title=title,
         company_id=company.id, location="Lyon, France", country="France",
-        description="road construction VRD",
+        description=f"Road construction VRD. Send your application and CV to {email}.",
         url="https://boards.greenhouse.io/example/jobs/1",
         posted_at=datetime.now(timezone.utc) - timedelta(days=posted_days_ago),
         contact_email=email, status="analyzed",
@@ -47,7 +47,7 @@ def _job(db, title="Technicien VRD", email="jobs@colas.example", posted_days_ago
         entity_evidence_url="https://boards.greenhouse.io/example/jobs/1",
         verification_status="verified",
         last_verified_at=datetime.now(timezone.utc),
-        application_method="COMPANY_PORTAL",
+        application_method="EMAIL",
         application_url="https://boards.greenhouse.io/example/jobs/1",
     )
     db.add(job)
@@ -65,7 +65,10 @@ def _decision(db, job, decision="APPLY", score=88.0):
 
 def _settings(settings, **kw):
     return settings.model_copy(update={"enable_email": True, "email_provider": "gmail",
-                                       "email_mode": "live", **kw})
+                                       "email_mode": "live",
+                                       "authorize_live_job_email": True,
+                                       "approved_live_job_id": "1",
+                                       "live_email_manual_dispatch": True, **kw})
 
 
 def _engine(db, config, profile, settings, communicator):
@@ -80,6 +83,8 @@ def _engine(db, config, profile, settings, communicator):
             location=job.location,
             description=job.description,
             application_url=job.application_url,
+            application_method=job.application_method,
+            application_email=job.contact_email,
         )
 
     return ApplicationEngine(
@@ -279,6 +284,115 @@ def test_authorized_spontaneous_live_send_requires_provider_message_id(
     assert result["sent"] is False
     assert provider_mod.GMAIL_SEND_OUTCOME_UNCERTAIN in result["error"]
     assert db.query(models.Email).one().delivery_state == "uncertain"
+
+
+def test_ordinary_live_email_requires_matching_manual_single_job_authorization(
+    db, config, profile, settings, monkeypatch,
+):
+    job = _job(db)
+    decision = _decision(db, job)
+    settings = _settings(
+        settings,
+        approved_live_job_id=str(job.id + 1),
+    )
+    monkeypatch.setattr(
+        provider_mod, "send",
+        lambda *_args, **_kwargs: pytest.fail("unauthorized job must not reach Gmail"),
+    )
+
+    result = asyncio.run(_engine(
+        db, config, profile, settings, _real_communicator(profile),
+    ).run(job, decision, "APPLY", job.contact_email, "fr"))
+
+    assert result == {
+        "sent": False,
+        "status": "blocked",
+        "reason": "single_job_live_email_authorization_required",
+    }
+
+
+def test_live_action_workflow_only_processes_the_exact_approved_job_id(
+    db, config, profile, settings, monkeypatch,
+):
+    from app.agents.llm import NullLLM
+    from app.workflows.action import run_actions
+
+    first_job = _job(db)
+    first_decision = _decision(db, first_job)
+    approved_job = _job(db, email="approved@colas.example")
+    approved_job.external_id = "g2"
+    approved_job.dedup_key = "hash:gmail2"
+    approved_decision = _decision(db, approved_job)
+    settings = _settings(
+        settings,
+        approved_live_job_id=str(approved_job.id),
+    )
+    processed = []
+
+    class _RecordingEngine:
+        def __init__(self, *_args, **_kwargs):
+            pass
+
+        async def run(self, job, decision, action, contact_email, target_language):
+            processed.append((job.id, decision.id, action))
+            return {"sent": True, "status": "sent", "application_id": None}
+
+    monkeypatch.setattr("app.workflows.action.ApplicationEngine", _RecordingEngine)
+
+    report = asyncio.run(run_actions(
+        db, config, settings, profile, NullLLM(profile),
+    ))
+
+    assert processed == [(approved_job.id, approved_decision.id, "APPLY")]
+    assert first_job.id != approved_job.id
+    assert first_decision.id != approved_decision.id
+    assert [item["job_id"] for item in report.applied] == [approved_job.id]
+
+
+def test_portal_vacancy_never_sends_cv_by_email(db, config, profile, settings, monkeypatch):
+    job = _job(db)
+    job.application_method = "COMPANY_PORTAL"
+    decision = _decision(db, job)
+    monkeypatch.setattr(
+        provider_mod, "send",
+        lambda *_args, **_kwargs: pytest.fail("portal route must not send email"),
+    )
+
+    result = asyncio.run(_engine(
+        db, config, profile, _settings(settings), _real_communicator(profile),
+    ).run(job, decision, "APPLY", job.contact_email, "fr"))
+
+    assert result["status"] == "blocked"
+    assert result["reason"] == "portal_application_requires_portal_submission"
+
+
+def test_employer_inquiry_is_not_an_application_and_has_no_cv_attachment(
+    db, config, profile, settings, monkeypatch,
+):
+    job = _job(db)
+    job.application_method = "COMPANY_PORTAL"
+    decision = _decision(db, job, decision="ASK_EMPLOYER")
+    monkeypatch.setattr(
+        "app.email.service.validate",
+        lambda **_kwargs: SimpleNamespace(allowed=True, reasons=[], checks={}),
+    )
+    sent = []
+
+    def send(_settings, **kwargs):
+        sent.append(kwargs)
+        return True, "gmail-inquiry-message-id", ""
+
+    monkeypatch.setattr(provider_mod, "send", send)
+    result = asyncio.run(_engine(
+        db, config, profile, _settings(settings), _real_communicator(profile),
+    ).run(job, decision, "ASK_EMPLOYER", job.contact_email, "fr"))
+
+    assert result["status"] == "inquiry_sent"
+    assert result["sent"] is True
+    assert sent[0]["attachments"] == []
+    application = db.query(models.Application).one()
+    assert application.action == "ASK_EMPLOYER"
+    assert application.status == "inquiry_sent"
 
 
 # ---------------------------------------------------------------------------
@@ -872,7 +986,7 @@ def test_distinct_companies_can_each_receive_a_draft(
         company_id=other_company.id,
         location="Lyon, France",
         country="France",
-        description="civil engineering",
+        description="Civil engineering. Send your application and CV to jobs@other.example.",
         url="https://boards.greenhouse.io/example/jobs/2",
         posted_at=datetime.now(timezone.utc) - timedelta(days=2),
         contact_email="jobs@other.example",
@@ -884,7 +998,7 @@ def test_distinct_companies_can_each_receive_a_draft(
         entity_evidence_url="https://boards.greenhouse.io/example/jobs/2",
         verification_status="verified",
         last_verified_at=datetime.now(timezone.utc),
-        application_method="COMPANY_PORTAL",
+        application_method="EMAIL",
         application_url="https://boards.greenhouse.io/example/jobs/2",
     )
     db.add(second_job)
@@ -1181,10 +1295,12 @@ def test_live_status_distinguishes_required_and_optional_scope(
     cli.cmd_gmail_status(None)
     output = cli.console.export_text()
 
-    assert "scopes required to send:" in output
+    assert f"required send scope (granted): {gmail_oauth.GMAIL_SEND_SCOPE}" in output
+    assert f"required send scope (granted): {gmail_oauth.GMAIL_COMPOSE_SCOPE}" in output
     assert gmail_oauth.GMAIL_SEND_SCOPE in output
     assert gmail_oauth.GMAIL_COMPOSE_SCOPE in output
     assert f"optional automatic-reconciliation scope (missing): {gmail_oauth.GMAIL_READONLY_SCOPE}" in output
+    assert "token validity is not tested with Gmail" in output
 
 
 def test_live_send_without_read_scope_keeps_uncertain_attempt_blocked_and_allows_other_job(
@@ -1250,8 +1366,10 @@ def test_live_send_without_read_scope_keeps_uncertain_attempt_blocked_and_allows
 
         monkeypatch.setattr(provider_mod, "send", send_independent)
         independent_result = _run_live(
-            reloaded, config, profile, live, separate_job, separate_decision,
-        )
+                reloaded, config, profile,
+                live.model_copy(update={"approved_live_job_id": str(separate_job.id)}),
+                separate_job, separate_decision,
+            )
 
         assert independent_result["status"] == "sent"
         assert independent_result["message_id"] == "independent-message-id"

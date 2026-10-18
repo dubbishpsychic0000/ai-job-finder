@@ -1,5 +1,41 @@
 # Project status
 
+## Phase 2.8s — verified vacancy to single-job Gmail authorization
+
+Application routing now distinguishes explicit email applications from
+portal-only vacancies and employer inquiries. An application email requires a
+current official ATS posting that explicitly names the verified recipient;
+finding a contact address does not make a portal route email-eligible.
+`ASK_EMPLOYER` remains an inquiry rather than an application and never attaches
+the CV. Stale, changed, unsupported, or unverifiable vacancy evidence blocks
+dispatch.
+
+Ordinary live job email requires a manual `pipeline` workflow dispatch,
+`email_mode=live`, the separate `authorize_live_job_email` confirmation, and an
+exact approved job ID. The action workflow selects only that record and the
+application engine repeats the ID check immediately before dispatch. Scheduled
+runs remain draft-only; discovery-only and history-preflight tasks have email
+disabled and cannot chain into the normal action step. BTP spontaneous email
+retains its separate authorization. Existing recipient/profile-claim, CV,
+duplicate, employer cooldown, freshness, emergency-pause, daily-cap, durable
+send-intent, and uncertain-outcome recovery safeguards remain in place.
+
+Validation on the reviewed implementation: **596 tests passed, 1 skipped**;
+focused route/Gmail/workflow tests passed; Ruff on changed Python files,
+Python compilation, parsing of 15 workflow/configuration YAML files, and
+`git diff --check` passed. No real provider requests, Gmail drafts, emails, or
+employer contacts were made.
+
+Launch remains blocked pending owner review: local Gmail status found the
+OAuth token missing, so the required `gmail.compose` and `gmail.send` scopes
+are not available (the optional `gmail.readonly` scope is also missing).
+Token validity was not tested against Gmail. No current shortlist was
+prepared: the local opportunity database is dated October 8, 2026, and no live
+discovery was run. There is no approved job ID, recipient, intent, or message;
+the first real application must wait for a current verified opportunity and
+explicit owner approval of those exact details. Publication and hosted CI
+verification are pending.
+
 ## Phase 2 multilingual discovery and internship eligibility
 
 Implementation commit: `a3dd154d04394b41956cea05545f01b3104f2ab2`.

@@ -284,7 +284,9 @@ def count_sent_today(session: Session, now: datetime | None = None) -> int:
 
 def count_dispatched_today(session: Session, now: datetime | None = None,
                            action: str | None = None,
-                           statuses: tuple[str, ...] = ("sent", "drafted")) -> int:
+                           statuses: tuple[str, ...] = (
+                               "sent", "inquiry_sent", "drafted",
+                           )) -> int:
     """Outbound communications actually created today (sent or drafted).
 
     `dry_run` is deliberately excluded: nothing left the safety boundary, so it
@@ -308,6 +310,7 @@ def count_applications_today(session: Session, now: datetime | None = None) -> i
     now = now or utcnow()
     start = now - timedelta(days=1)
     stmt = select(Application).where(
+        Application.action.in_(("APPLY", "APPLIED")),
         Application.sent_at.is_not(None), Application.sent_at >= start)
     return len(list(session.execute(stmt).scalars().all()))
 

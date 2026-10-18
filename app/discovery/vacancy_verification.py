@@ -10,6 +10,7 @@ from urllib.parse import urlsplit
 import requests
 
 from app.connectors.base import infer_country, parse_date
+from app.discovery.opportunity_details import explicit_email_application_recipient
 
 USER_AGENT = "WorldwideCareerAgent/0.1 (public vacancy verification)"
 MAX_DETAIL_VERIFICATIONS_PER_RUN = 12
@@ -47,6 +48,8 @@ class VacancyEvidence:
     posted_at_source: str = ""
     closing_at: datetime | None = None
     application_url: str = ""
+    application_method: str = ""
+    application_email: str = ""
     evidence_checks: dict[str, bool] = field(default_factory=dict)
 
 
@@ -331,6 +334,8 @@ class VacancyDetailVerifier:
         valid_route = _valid_application_route(
             ats, application_url, url, posting_id,
         )
+        application_email = explicit_email_application_recipient(description)
+        application_method = "EMAIL" if application_email else "COMPANY_PORTAL"
         evidence_checks = {
             "employer": employer.casefold() not in _GENERIC_EMPLOYERS,
             "role": bool(title and title.casefold() not in _GENERIC_TITLES),
@@ -380,6 +385,8 @@ class VacancyDetailVerifier:
             ),
             closing_at=closing_at,
             application_url=application_url if outcome == "OPEN" else "",
+            application_method=application_method if outcome == "OPEN" else "",
+            application_email=application_email if outcome == "OPEN" else "",
             evidence_checks=evidence_checks,
         )
 

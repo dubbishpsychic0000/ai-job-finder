@@ -757,13 +757,16 @@ def cmd_gmail_status(_args) -> None:
     token = gmail_oauth.token_path(settings)
     console.print(f"client secret: {'present' if secret.exists() else 'MISSING'} ({secret})")
     console.print(f"token:         {'present' if token.exists() else 'MISSING'} ({token})")
-    console.print(f"scopes required to send: {' '.join(gmail_oauth.required_scopes(settings))}")
-    optional = gmail_oauth.optional_scopes(settings)
-    if optional:
-        granted = gmail_oauth.granted_scopes(settings)
-        for scope in optional:
-            state = "granted" if scope in granted else "missing"
-            console.print(f"optional automatic-reconciliation scope ({state}): {scope}")
+    granted = gmail_oauth.granted_scopes(settings)
+    for scope in gmail_oauth.required_scopes(settings):
+        state = "granted" if scope in granted else "missing"
+        console.print(f"required send scope ({state}): {scope}")
+    for scope in gmail_oauth.optional_scopes(settings):
+        state = "granted" if scope in granted else "missing"
+        console.print(f"optional automatic-reconciliation scope ({state}): {scope}")
+    console.print(
+        "authorization check is local-only; token validity is not tested with Gmail"
+    )
 
 
 def cmd_email_policy(_args) -> None:

@@ -133,7 +133,8 @@ async def analyze_job(session: Session, job, analyzer: JobAnalyzer, matcher: Can
     job.contact_email = verification.email if verification.verified else ""
     job.application_method, job.application_url = detect_application_method(
         text=f"{job.title}\n{job.description}", url=job.url, source_type=job.source_type,
-        has_verified_email=verification.verified)
+        has_verified_email=verification.verified,
+        contact_email=job.contact_email)
 
     match = await matcher.match(job, analysis)
     mobility_res = await mobility.analyze(job, analysis)

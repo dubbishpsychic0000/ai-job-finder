@@ -40,6 +40,9 @@ class RunnerSettings(BaseSettings):
     email_provider: str = "gmail"  # log | smtp | gmail
     email_mode: str = "draft"      # dry_run | draft | live
     authorize_live_spontaneous: bool = False
+    authorize_live_job_email: bool = False
+    approved_live_job_id: str = ""
+    live_email_manual_dispatch: bool = False
     email_from: str = ""
     smtp_host: str = ""
     smtp_port: int = 587

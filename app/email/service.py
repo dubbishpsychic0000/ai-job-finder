@@ -129,6 +129,21 @@ class ApplicationEngine:
             return self._record_disabled(
                 job, decision, action, score, contact_email,
                 reason="global emergency pause is ON — outbound halted")
+        if mode == "live" and not is_spontaneous:
+            approved_job_id = str(
+                getattr(self.settings, "approved_live_job_id", "") or ""
+            )
+            if (
+                not getattr(self.settings, "live_email_manual_dispatch", False)
+                or not getattr(self.settings, "authorize_live_job_email", False)
+                or not approved_job_id.isdecimal()
+                or str(job.id) != approved_job_id
+            ):
+                return {
+                    "sent": False,
+                    "status": "blocked",
+                    "reason": "single_job_live_email_authorization_required",
+                }
 
         if mode == "draft" and self.settings.email_provider == "gmail":
             recovery = reconcile_pending_draft(
@@ -149,8 +164,23 @@ class ApplicationEngine:
             if recovery is not None:
                 return recovery
 
-        attachment = resolve_attachment(Path("candidate") / "cv", target_language)
-        if not attachment:
+        if (
+            action == "APPLY"
+            and not is_spontaneous
+            and mode != "dry_run"
+            and getattr(job, "application_method", "") != "EMAIL"
+        ):
+            return {
+                "sent": False,
+                "status": "blocked",
+                "reason": "portal_application_requires_portal_submission",
+            }
+        attachment = (
+            resolve_attachment(Path("candidate") / "cv", target_language)
+            if action == "APPLY" else ""
+        )
+        attachments = [attachment] if attachment else []
+        if action == "APPLY" and not attachment:
             app = mem.store.add_application(self.session, job.id, decision.id, action,
                                             score, contact_email)
             app.status = "blocked"
@@ -245,6 +275,31 @@ class ApplicationEngine:
                                        {"job_id": job.id})
                 return {"sent": False, "status": "blocked", "reason": "posting not live",
                         "application_id": app.id}
+            if mode != "dry_run" and action == "APPLY" and (
+                getattr(job, "application_method", "") != "EMAIL"
+                or getattr(verification, "application_method", "") != "EMAIL"
+                or str(contact_email or "").strip().casefold()
+                != str(getattr(job, "contact_email", "") or "").strip().casefold()
+                or str(getattr(verification, "application_email", "")).casefold()
+                != str(contact_email or "").strip().casefold()
+            ):
+                return {
+                    "sent": False,
+                    "status": "blocked",
+                    "reason": "email_application_route_not_explicitly_verified",
+                }
+            if action == "ASK_EMPLOYER" and (
+                not contact_email
+                or str(contact_email).strip().casefold()
+                != str(getattr(job, "contact_email", "") or "").strip().casefold()
+                or str(contact_email).strip().casefold()
+                not in str(getattr(verification, "description", "") or "").casefold()
+            ):
+                return {
+                    "sent": False,
+                    "status": "blocked",
+                    "reason": "inquiry_recipient_not_verified_in_current_posting",
+                }
             job.last_verified_at = verification_time
             job.verification_status = "verified"
 
@@ -258,7 +313,7 @@ class ApplicationEngine:
             to_addr=contact_email,
             subject=draft["subject"],
             body=draft["body"],
-            attachments=[attachment],
+            attachments=attachments,
             job=job,
             profile=self.profile,
             config=self.config,
@@ -274,7 +329,7 @@ class ApplicationEngine:
         app = mem.store.add_application(self.session, job.id, decision.id, action,
                                         score, contact_email)
         email = mem.store.add_email(self.session, app.id, contact_email, draft["subject"],
-                                    draft["body"], [attachment], status="validated", mode=mode)
+                                    draft["body"], attachments, status="validated", mode=mode)
         email.validation_log = report.reasons
 
         if not report.allowed:
@@ -356,7 +411,8 @@ class ApplicationEngine:
             ) from None
         ok, draft_id, error = provider.create_draft(
             self.settings, to=contact_email, subject=subject, body=body,
-            attachments=[attachment], attempt_key=email.draft_attempt_key)
+            attachments=[attachment] if attachment else [],
+            attempt_key=email.draft_attempt_key)
         if ok:
             email.status = "drafted"
             email.delivery_state = "confirmed"
@@ -400,7 +456,7 @@ class ApplicationEngine:
         """Persist a send intent before crossing the irreversible provider boundary."""
         attempt_key = uuid.uuid4().hex
         fingerprint = _message_fingerprint(
-            contact_email, subject, body, [attachment],
+            contact_email, subject, body, [attachment] if attachment else [],
         )
         company = getattr(job, "company", None)
         attempt = LiveSendAttempt(
@@ -456,7 +512,8 @@ class ApplicationEngine:
         try:
             ok, message_id, error = provider.send(
                 self.settings, to=contact_email, subject=subject, body=body,
-                attachments=[attachment], attempt_key=attempt_key)
+                attachments=[attachment] if attachment else [],
+                attempt_key=attempt_key)
         except Exception as exc:
             ok, message_id, error = False, "", provider.GMAIL_SEND_OUTCOME_UNCERTAIN
             logger.warning("Email provider send raised after dispatch began (%s)",
@@ -483,6 +540,9 @@ class ApplicationEngine:
             mem.store.record_event(self.session, "action", f"email sent to {contact_email}",
                                    "info", {"job_id": job.id, "email_id": email.id,
                                             "message_id": message_id})
+            if app.action == "ASK_EMPLOYER":
+                app.status = "inquiry_sent"
+                app.follow_up_at = None
             result_status = app.status
         else:
             email.error = error

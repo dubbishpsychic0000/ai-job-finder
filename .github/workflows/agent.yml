@@ -21,7 +21,7 @@ on:
         default: pipeline
         options: [pipeline, btp_outreach, history_preflight, discovery_only, discovery_restore_preflight]
       email_mode:
-        description: "Email mode; live sends require the separate BTP authorization checkbox"
+        description: "Email mode; all live sends require a route-specific authorization"
         type: choice
         default: draft
         options: [dry_run, draft, live]
@@ -29,6 +29,15 @@ on:
         description: "Authorize one live BTP email in this manual run (requires email_mode=live)"
         type: boolean
         default: false
+      authorize_live_job_email:
+        description: "Authorize one ordinary job email in this manual run (requires one approved job ID)"
+        type: boolean
+        default: false
+      approved_job_id:
+        description: "Exact job record ID allowed to receive an ordinary live email"
+        type: string
+        required: false
+        default: ""
       max_companies:
         description: "Maximum nearest BTP companies to process (1-50)"
         type: number
@@ -436,6 +445,9 @@ jobs:
           EMAIL_PROVIDER=gmail
           EMAIL_FROM=omar.benhamid@gmail.com
           AUTHORIZE_LIVE_SPONTANEOUS=${{ github.event_name == 'workflow_dispatch' && inputs.task == 'btp_outreach' && inputs.email_mode == 'live' && inputs.authorize_live_btp == true && 'true' || 'false' }}
+          AUTHORIZE_LIVE_JOB_EMAIL=${{ github.event_name == 'workflow_dispatch' && inputs.task == 'pipeline' && inputs.email_mode == 'live' && inputs.authorize_live_job_email == true && 'true' || 'false' }}
+          APPROVED_LIVE_JOB_ID=${{ github.event_name == 'workflow_dispatch' && inputs.task == 'pipeline' && inputs.email_mode == 'live' && inputs.approved_job_id || '' }}
+          LIVE_EMAIL_MANUAL_DISPATCH=${{ github.event_name == 'workflow_dispatch' && inputs.task == 'pipeline' && 'true' || 'false' }}
           MIN_APPLICATION_SCORE=80
           MIN_APPLICATION_CONFIDENCE=0.8
           TAVILY_DEBUG=1

@@ -1337,6 +1337,35 @@ def test_workflow_discovery_task_skips_outbound_vault_and_full_pipeline_steps():
     }
 
 
+def test_ordinary_live_job_email_requires_manual_dispatch_and_one_job_id():
+    repo_root = Path(__file__).resolve().parents[1]
+    workflow = yaml.load(
+        (repo_root / ".github" / "workflows" / "agent.yml").read_text(encoding="utf-8"),
+        Loader=yaml.BaseLoader,
+    )
+    inputs = workflow["on"]["workflow_dispatch"]["inputs"]
+    assert inputs["authorize_live_job_email"]["type"] == "boolean"
+    assert inputs["authorize_live_job_email"]["default"] == "false"
+    assert inputs["approved_job_id"]["type"] == "string"
+    assert inputs["approved_job_id"]["default"] == ""
+    build_env = next(
+        step["run"] for step in workflow["jobs"]["pipeline"]["steps"]
+        if step.get("name") == "Build .env from vault and secrets"
+    )
+    assert "inputs.task == 'pipeline'" in build_env
+    assert "inputs.email_mode == 'live'" in build_env
+    assert "inputs.authorize_live_job_email == true" in build_env
+    assert "github.event_name == 'workflow_dispatch' && inputs.task == 'pipeline'" in build_env
+    assert "APPROVED_LIVE_JOB_ID=" in build_env
+    assert "LIVE_EMAIL_MANUAL_DISPATCH=" in build_env
+    run_step = next(
+        step for step in workflow["jobs"]["pipeline"]["steps"]
+        if step.get("name") == "Run selected workflow"
+    )
+    assert "github.event_name == 'schedule'" in run_step["if"]
+    assert "inputs.task == 'pipeline'" in run_step["if"]
+
+
 def test_restore_only_workflow_job_cannot_dispatch_discovery_or_outbound_actions():
     repo_root = Path(__file__).resolve().parents[1]
     workflow = yaml.load(
