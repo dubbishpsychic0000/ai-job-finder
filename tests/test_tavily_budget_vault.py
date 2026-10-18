@@ -79,6 +79,18 @@ def _remote_ledger(bare: Path, relative_path: str) -> dict:
     return json.loads(content)
 
 
+def _replace_remote_ledger(
+    bare: Path, clone: Path, relative_path: str, payload: str,
+) -> None:
+    ledger = clone / relative_path
+    ledger.write_text(payload, encoding="utf-8")
+    _git("add", relative_path, cwd=clone)
+    _git("config", "user.name", "Offline Fixture", cwd=clone)
+    _git("config", "user.email", "offline@example.invalid", cwd=clone)
+    _git("commit", "-m", "fixture ledger update", cwd=clone)
+    _git("push", "origin", "main", cwd=clone)
+
+
 def test_durable_reservation_is_visible_before_provider_request(tmp_path, monkeypatch):
     bare, relative_path, (clone, _) = _vault_repositories(tmp_path)
     store = GitVaultBudgetStore(clone)
@@ -508,25 +520,189 @@ def test_stale_date_rolls_only_at_utc_day_boundary(tmp_path):
 def test_discovery_rollover_resets_stale_ledger_only_at_reservation_boundary(
     tmp_path,
 ):
-    bare, relative_path, (clone, _) = _vault_repositories(tmp_path, initial_count=20)
+    bare, relative_path, (clone, _) = _vault_repositories(tmp_path, initial_count=18)
     store = GitVaultBudgetStore(clone)
     local_path = tmp_path / "runtime" / Path(relative_path).name
     local_path.parent.mkdir()
     today = datetime.now(timezone.utc).date().isoformat()
-    next_day = (datetime.now(timezone.utc).date() + timedelta(days=1)).isoformat()
-    store.synchronize(local_path, today=today)
+    yesterday = (datetime.now(timezone.utc).date() - timedelta(days=1)).isoformat()
+    stale_ledger = json.dumps({
+        "date": yesterday,
+        "count": 18,
+        "exhausted": True,
+    })
+    _replace_remote_ledger(bare, clone, relative_path, stale_ledger)
+    local_path.write_text(stale_ledger, encoding="utf-8")
     before = _remote_ledger(bare, relative_path)
 
-    reservation = store.reserve_general(local_path, next_day, 20)
+    reservation = store.reserve_general(
+        local_path, today, TAVILY_DAILY_REQUEST_LIMIT,
+    )
 
-    assert before["date"] == today
-    assert before["count"] == 20
+    assert before["date"] == yesterday
+    assert before["count"] == 18
     assert reservation["reserved"] is True
-    assert reservation["date"] == next_day
+    assert reservation["date"] == today
     assert reservation["count"] == 1
+    assert reservation["usage_by_type"] == {
+        "general": 1,
+        "btp": 0,
+        "unattributed": 0,
+    }
     assert _remote_ledger(bare, relative_path) == {
-        "date": next_day,
+        "date": today,
         "count": 1,
         "exhausted": False,
-        "usage_by_type": {"general": 1, "btp": 0, "unattributed": 0},
+        "usage_by_type": {
+            "general": 1,
+            "btp": 0,
+            "unattributed": 0,
+        },
     }
+    assert store.reservation_count == 1
+    assert store.write_count == 1
+
+
+def test_rollover_general_reservation_is_durable_before_provider_request(
+    tmp_path, monkeypatch,
+):
+    bare, relative_path, (clone, _) = _vault_repositories(
+        tmp_path, initial_count=18, legacy_initial_ledger=True,
+    )
+    today = datetime.now(timezone.utc).date().isoformat()
+    yesterday = (datetime.now(timezone.utc).date() - timedelta(days=1)).isoformat()
+    stale_ledger = json.dumps({
+        "date": yesterday,
+        "count": 18,
+        "exhausted": True,
+    })
+    _replace_remote_ledger(bare, clone, relative_path, stale_ledger)
+    local_path = tmp_path / "runtime" / Path(relative_path).name
+    local_path.parent.mkdir()
+    local_path.write_text(stale_ledger, encoding="utf-8")
+    store = GitVaultBudgetStore(clone)
+    budget = DailyBudget(
+        local_path,
+        limit=TAVILY_DAILY_REQUEST_LIMIT,
+        durable_reserver=store.reserve_general,
+        durable_exhauster=store.exhaust,
+        reservation_type="general",
+    )
+
+    class Response:
+        status_code = 200
+
+        def raise_for_status(self):
+            return None
+
+        @staticmethod
+        def json():
+            return {"results": []}
+
+    observed_before_request = []
+
+    def provider_request(*_args, **_kwargs):
+        state = _remote_ledger(bare, relative_path)
+        observed_before_request.append(state)
+        return Response()
+
+    monkeypatch.setattr(
+        "app.connectors.tavily_resilience.requests.post", provider_request,
+    )
+    from app.connectors.tavily_resilience import (
+        ApiAttemptBudget,
+        ResilientTavily,
+        TavilyCache,
+        TavilyKey,
+    )
+
+    source = ResilientTavily(
+        keys=[TavilyKey(
+            "test-rollover-key",
+            budget,
+            key_fingerprint("test-rollover-key"),
+        )],
+        cache=TavilyCache(tmp_path / "cache.json"),
+        attempt_budget=ApiAttemptBudget(
+            8,
+            country_limits={"Morocco": 6, "France": 1, "Belgium": 1},
+        ),
+    )
+
+    import asyncio
+
+    assert asyncio.run(source.search(
+        "civil engineering", "Morocco", country="Morocco",
+    )) == []
+    expected_committed_state = {
+        "date": today,
+        "count": 1,
+        "exhausted": False,
+        "usage_by_type": {
+            "general": 1,
+            "btp": 0,
+            "unattributed": 0,
+        },
+    }
+    assert observed_before_request == [expected_committed_state]
+    assert _remote_ledger(bare, relative_path) == expected_committed_state
+    assert store.reservation_count == 1
+    assert store.write_count == 1
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        '{"date":"2026-2-1","count":1,"exhausted":false}',
+        '{"date":"2026-02-01","count":21,"exhausted":false}',
+        (
+            '{"date":"2026-02-01","count":2,"exhausted":false,'
+            '"usage_by_type":{"general":1,"btp":0,"unattributed":0}}'
+        ),
+    ],
+)
+def test_rollover_rejects_malformed_prior_day_ledger(tmp_path, payload):
+    bare, relative_path, (clone, _) = _vault_repositories(tmp_path)
+    _replace_remote_ledger(bare, clone, relative_path, payload)
+    today = datetime.now(timezone.utc).date().isoformat()
+    local_path = tmp_path / "runtime" / Path(relative_path).name
+    local_path.parent.mkdir()
+    store = GitVaultBudgetStore(clone)
+    before = _git("--git-dir", str(bare), "rev-parse", "refs/heads/main")
+
+    with pytest.raises(BudgetPersistenceError, match="invalid_remote_budget_ledger"):
+        store.reserve_general(local_path, today, TAVILY_DAILY_REQUEST_LIMIT)
+
+    assert _git("--git-dir", str(bare), "rev-parse", "refs/heads/main") == before
+    assert store.write_count == 0
+    assert store.reservation_count == 0
+
+
+def test_future_dated_remote_ledger_blocks_rollover(tmp_path):
+    bare, relative_path, (clone, _) = _vault_repositories(tmp_path)
+    today = datetime.now(timezone.utc).date()
+    tomorrow = today.fromordinal(today.toordinal() + 1).isoformat()
+    _replace_remote_ledger(
+        bare,
+        clone,
+        relative_path,
+        json.dumps({"date": tomorrow, "count": 1, "exhausted": False}),
+    )
+    local_path = tmp_path / "runtime" / Path(relative_path).name
+    local_path.parent.mkdir()
+    store = GitVaultBudgetStore(clone)
+    before = _git("--git-dir", str(bare), "rev-parse", "refs/heads/main")
+
+    with pytest.raises(
+        BudgetPersistenceError,
+        match="remote_budget_date_is_in_future",
+    ):
+        store.reserve_general(
+            local_path,
+            today.isoformat(),
+            TAVILY_DAILY_REQUEST_LIMIT,
+        )
+
+    assert _git("--git-dir", str(bare), "rev-parse", "refs/heads/main") == before
+    assert store.write_count == 0
+    assert store.reservation_count == 0

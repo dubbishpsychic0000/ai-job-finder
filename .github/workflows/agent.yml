@@ -33,6 +33,10 @@ on:
         description: "Authorize one ordinary job email in this manual run (requires one approved job ID)"
         type: boolean
         default: false
+      authorize_conditional_rollover_discovery:
+        description: "Authorize one bounded discovery run using durable prior-day budget rollover"
+        type: boolean
+        default: false
       approved_job_id:
         description: "Exact job record ID allowed to receive an ordinary live email"
         type: string
@@ -246,6 +250,7 @@ jobs:
         env:
           VAULT_TOKEN: ${{ secrets.VAULT_TOKEN }}
           VAULT_URL: https://github.com/dubbishpsychic0000/ai-job-finder-vault.git
+          AUTHORIZE_CONDITIONAL_ROLLOVER_DISCOVERY: ${{ github.event_name == 'workflow_dispatch' && inputs.task == 'discovery_only' && inputs.authorize_conditional_rollover_discovery == true && 'true' || 'false' }}
         run: |
           set -euo pipefail
           mkdir -p data candidate secrets
@@ -372,16 +377,24 @@ jobs:
           fi
           if ! python - "$report" "$GITHUB_OUTPUT" <<'PY'
           import json
+          import os
           import sys
           from pathlib import Path
           from app.workflows.discovery_only_restore import validate_discovery_dispatch_report
           report = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
           if report.get("execution_status") != "COMPLETED" or report.get("status") != "COMPLETED":
               raise SystemExit("restore preflight execution did not complete")
-          if validate_discovery_dispatch_report(report):
+          allow_conditional_rollover = (
+              os.environ.get("AUTHORIZE_CONDITIONAL_ROLLOVER_DISCOVERY") == "true"
+          )
+          if validate_discovery_dispatch_report(
+              report,
+              allow_conditional_rollover=allow_conditional_rollover,
+          ):
               raise SystemExit("restore preflight did not authorize discovery")
           with Path(sys.argv[2]).open("a", encoding="utf-8") as output:
               output.write("ready=true\n")
+              output.write(f"readiness={report['readiness']}\n")
           PY
           then
             fail_restore restore_readiness_manifest_invalid
@@ -496,7 +509,7 @@ jobs:
           exit $(cat /tmp/pipeline_exit_code)
 
       - name: Run bounded discovery-only evaluation
-        if: ${{ github.event_name == 'workflow_dispatch' && inputs.task == 'discovery_only' && steps.discovery_restore.outcome == 'success' && steps.discovery_restore.outputs.ready == 'true' }}
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.task == 'discovery_only' && steps.discovery_restore.outcome == 'success' && steps.discovery_restore.outputs.ready == 'true' && (steps.discovery_restore.outputs.readiness == 'READY' || (steps.discovery_restore.outputs.readiness == 'CONDITIONAL' && inputs.authorize_conditional_rollover_discovery == true)) }}
         env:
           DATABASE_URL: sqlite:///${{ github.workspace }}/data/agent.db
           TAVILY_BUDGET_VAULT_REPO: /tmp/wca-discovery-vault
@@ -504,6 +517,8 @@ jobs:
           ENABLE_EMAIL: "false"
           EMAIL_PROVIDER: log
           AUTHORIZE_LIVE_SPONTANEOUS: "false"
+          AUTHORIZE_CONDITIONAL_ROLLOVER_DISCOVERY: ${{ github.event_name == 'workflow_dispatch' && inputs.task == 'discovery_only' && inputs.authorize_conditional_rollover_discovery == true && 'true' || 'false' }}
+          GITHUB_EVENT_NAME: ${{ github.event_name }}
           LLM_PROVIDER: null
           GEMINI_API_KEYS: ""
           WHATSAPP_ACCESS_TOKEN: ""

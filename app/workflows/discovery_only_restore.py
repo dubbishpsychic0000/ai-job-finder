@@ -145,8 +145,12 @@ def _valid_budget_ledger(path: Path, *, today: date) -> bool:
     }
 
 
-def validate_discovery_dispatch_report(report: object) -> str:
-    """Return a safe reason unless a fresh report explicitly permits dispatch."""
+def validate_discovery_dispatch_report(
+    report: object,
+    *,
+    allow_conditional_rollover: bool = False,
+) -> str:
+    """Return a safe reason unless fresh readiness and explicit policy permit dispatch."""
     if not isinstance(report, dict):
         return "discovery_readiness_report_invalid"
     gate = report.get("discovery_gate")
@@ -156,50 +160,242 @@ def validate_discovery_dispatch_report(report: object) -> str:
         report.get("schema_version") != 2
         or isinstance(report.get("schema_version"), bool)
         or report.get("execution_status") != "COMPLETED"
-        or report.get("readiness") != "READY"
-        or report.get("discovery_dispatch_permission") is not True
         or report.get("status") != "COMPLETED"
-        or report.get("readiness_reason_code") != ""
-        or report.get("reason_code") != "general_capacity_available"
-        or report.get("readiness_reason_codes") != []
-        or gate.get("authorized") is not True
         or gate.get("policy") != "fresh_ready_report_and_explicit_dispatch_permission"
-        or gate.get("reason_code") != ""
         or not _fresh_readiness_timestamp(report.get("readiness_evaluated_at"))
         or report.get("readiness_utc_day")
         != datetime.now(timezone.utc).date().isoformat()
     ):
         return "discovery_readiness_not_ready"
+    if report.get("readiness") == "READY":
+        if (
+            report.get("discovery_dispatch_permission") is not True
+            or report.get("readiness_reason_code") != ""
+            or report.get("reason_code") != "general_capacity_available"
+            or report.get("readiness_reason_codes") != []
+            or gate.get("authorized") is not True
+            or gate.get("reason_code") != ""
+        ):
+            return "discovery_readiness_not_ready"
+    elif report.get("readiness") == "CONDITIONAL":
+        if not allow_conditional_rollover:
+            return "conditional_rollover_authorization_required"
+        if (
+            report.get("discovery_dispatch_permission") is not False
+            or report.get("readiness_reason_code")
+            != "utc_day_rollover_pending_durable_reservation"
+            or report.get("reason_code")
+            != "utc_day_rollover_pending_durable_reservation"
+            or gate.get("authorized") is not False
+            or gate.get("reason_code")
+            != "utc_day_rollover_pending_durable_reservation"
+        ):
+            return "discovery_readiness_not_ready"
+        reasons = report.get("readiness_reason_codes")
+        if (
+            not isinstance(reasons, list)
+            or len(reasons) != 2
+            or not all(isinstance(reason, str) for reason in reasons)
+            or set(reasons) != {
+                "no_general_budget_available",
+                "utc_day_rollover_pending_durable_reservation",
+            }
+        ):
+            return "discovery_readiness_not_ready"
+    else:
+        return "discovery_readiness_not_ready"
+
+    restoration = report.get("restoration")
+    if not isinstance(restoration, dict):
+        return "discovery_readiness_report_invalid"
+    if report.get("readiness") == "CONDITIONAL" and (
+        restoration.get("vault_origin_verified") is not True
+        or restoration.get("vault_branch_verified") is not True
+        or restoration.get("vault_path_verified") is not True
+        or restoration.get("vault_branch") != "main"
+        or restoration.get("expected_input_count") != 4
+        or isinstance(restoration.get("expected_input_count"), bool)
+        or restoration.get("restored_input_count") != 4
+        or isinstance(restoration.get("restored_input_count"), bool)
+        or not isinstance(restoration.get("expected_budget_ledger_count"), int)
+        or isinstance(restoration.get("expected_budget_ledger_count"), bool)
+        or restoration.get("expected_budget_ledger_count") < 1
+        or not isinstance(restoration.get("restored_budget_ledger_count"), int)
+        or isinstance(restoration.get("restored_budget_ledger_count"), bool)
+        or restoration.get("restored_budget_ledger_count")
+        != restoration.get("expected_budget_ledger_count")
+    ):
+        return "discovery_readiness_report_invalid"
+    diagnostics = restoration.get("ledger_diagnostics")
+    expected_ledger_count = restoration.get("expected_budget_ledger_count")
+    if report.get("readiness") == "CONDITIONAL" and (
+        not isinstance(diagnostics, list)
+        or len(diagnostics) != expected_ledger_count
+        or not all(
+            isinstance(item, dict)
+            and isinstance(item.get("fingerprint"), str)
+            and re.fullmatch(r"[a-f0-9]{8}", item["fingerprint"])
+            and isinstance(item.get("outcome"), str)
+            and item.get("outcome") in {
+                "valid_current_day",
+                "prior_day_rollover_pending",
+                "ledger_exhausted",
+            }
+            for item in diagnostics
+        )
+        or len({
+            item["fingerprint"] for item in diagnostics
+            if isinstance(item, dict)
+            and isinstance(item.get("fingerprint"), str)
+        }) != expected_ledger_count
+    ):
+        return "discovery_readiness_report_invalid"
     budget = report.get("provider_budget")
     if not isinstance(budget, dict):
         return "discovery_readiness_report_invalid"
     capacity = budget.get("general_capacity_current_utc_day")
+    aggregate = budget.get("aggregate_capacity_remaining")
     if (
         not isinstance(capacity, int)
         or isinstance(capacity, bool)
-        or capacity <= 0
-    ):
-        return "no_general_budget_available"
-    aggregate = budget.get("aggregate_capacity_remaining")
-    if (
-        not isinstance(aggregate, dict)
+        or (
+            capacity <= 0
+            if report.get("readiness") == "READY"
+            else capacity != 0
+        )
+        or not isinstance(aggregate, dict)
         or not isinstance(aggregate.get("general_remaining"), int)
         or isinstance(aggregate.get("general_remaining"), bool)
         or aggregate["general_remaining"] != capacity
     ):
-        return "discovery_readiness_report_invalid"
+        return (
+            "no_general_budget_available"
+            if not isinstance(capacity, bool) and capacity == 0
+            else "discovery_readiness_report_invalid"
+        )
     reserve_status = budget.get("btp_reserve_validation")
-    if reserve_status not in {
-        "passed",
-        "passed_with_authorized_btp_usage",
-    } and not (
-        reserve_status == "pending_rollover"
-        and isinstance(aggregate.get("btp_reserve_remaining"), int)
-        and not isinstance(aggregate.get("btp_reserve_remaining"), bool)
+    if (
+        not isinstance(reserve_status, str)
+        or (
+            reserve_status not in {
+                "passed",
+                "passed_with_authorized_btp_usage",
+            }
+            and not (
+                reserve_status == "pending_rollover"
+                and (
+                    report.get("readiness") == "CONDITIONAL"
+                    or (
+                        isinstance(aggregate.get("btp_reserve_remaining"), int)
+                        and not isinstance(
+                            aggregate.get("btp_reserve_remaining"), bool,
+                        )
+                    )
+                )
+            )
+        )
     ):
         return "provider_budget_reserve_unverified"
-    if report.get("readiness_reason_codes") != []:
+    if (
+        report.get("readiness_reason_codes") != []
+        and report.get("readiness") != "CONDITIONAL"
+    ):
         return "discovery_readiness_report_invalid"
+    if report.get("readiness") == "CONDITIONAL":
+        requests_dispatched = budget.get("requests_dispatched")
+        reservations_created = budget.get("reservations_created")
+        btp_ledger_count = budget.get("btp_reserve_ledger_count")
+        unresolved_btp_count = budget.get("btp_reserve_unresolved_ledger_count")
+        if (
+            reserve_status != "pending_rollover"
+            or not isinstance(requests_dispatched, int)
+            or isinstance(requests_dispatched, bool)
+            or requests_dispatched != 0
+            or not isinstance(reservations_created, int)
+            or isinstance(reservations_created, bool)
+            or reservations_created != 0
+            or budget.get("general_limit_per_key") != GENERAL_TAVILY_DAILY_LIMIT
+            or budget.get("btp_reserve_per_key") != BTP_TAVILY_DAILY_RESERVE
+            or not isinstance(btp_ledger_count, int)
+            or isinstance(btp_ledger_count, bool)
+            or btp_ledger_count != restoration.get(
+                "expected_budget_ledger_count",
+            )
+            or not isinstance(unresolved_btp_count, int)
+            or isinstance(unresolved_btp_count, bool)
+            or unresolved_btp_count != 0
+        ):
+            return "provider_budget_reserve_unverified"
+        rollover_capacity = budget.get("general_capacity_after_durable_rollover")
+        per_key = budget.get("per_key")
+        if (
+            not isinstance(rollover_capacity, int)
+            or isinstance(rollover_capacity, bool)
+            or rollover_capacity <= 0
+            or not isinstance(per_key, list)
+            or len(per_key) != restoration.get("expected_budget_ledger_count")
+        ):
+            return "discovery_readiness_report_invalid"
+        diagnostic_outcomes = {
+            item["fingerprint"]: item["outcome"]
+            for item in diagnostics
+        }
+        eligible_rollovers = []
+        for item in per_key:
+            if not isinstance(item, dict):
+                return "discovery_readiness_report_invalid"
+            fingerprint = item.get("fingerprint")
+            if (
+                not isinstance(fingerprint, str)
+                or diagnostic_outcomes.get(fingerprint) != item.get("outcome")
+            ):
+                return "discovery_readiness_report_invalid"
+            if item.get("ledger_valid") is not True:
+                return "discovery_readiness_report_invalid"
+            item_reserve_status = item.get("btp_reserve_status")
+            if not isinstance(item_reserve_status, str):
+                return "provider_budget_reserve_unverified"
+            if item_reserve_status in {
+                "general_budget_breach",
+                "btp_reserve_breach",
+                "unknown_provenance",
+                "unverifiable_ledger",
+            }:
+                return "provider_budget_reserve_unverified"
+            if item.get("ledger_date_relation") == "current_utc_day":
+                item_outcome = item.get("outcome")
+                if not isinstance(item_outcome, str) or item_outcome not in {
+                    "valid_current_day",
+                    "ledger_exhausted",
+                }:
+                    return "discovery_readiness_report_invalid"
+                if item.get("usage_provenance") != "verified":
+                    return "provider_budget_provenance_unavailable"
+                if item_reserve_status not in {
+                    "verified_intact",
+                    "verified_authorized_btp_usage",
+                }:
+                    return "provider_budget_reserve_unverified"
+            elif item.get("ledger_date_relation") == "prior_utc_day":
+                if (
+                    item.get("outcome") != "prior_day_rollover_pending"
+                    or item.get("eligible_for_general_discovery") is not True
+                    or item_reserve_status != "rollover_pending"
+                    or item.get("general_capacity_after_rollover")
+                    != GENERAL_TAVILY_DAILY_LIMIT
+                ):
+                    return "discovery_readiness_report_invalid"
+                eligible_rollovers.append(item)
+            else:
+                return "discovery_readiness_report_invalid"
+        if (
+            not eligible_rollovers
+            or sum(
+                item["general_capacity_after_rollover"]
+                for item in eligible_rollovers
+            ) != rollover_capacity
+        ):
+            return "discovery_readiness_report_invalid"
     return ""
 
 

@@ -1,5 +1,39 @@
 # Project status
 
+## Phase 2.8u — conditional-rollover discovery authorization
+
+The durable Tavily ledger now rejects non-canonical dates and counts outside
+the 20-request daily maximum before any update. A valid prior-day ledger is
+reset only inside a durable reservation: the new UTC-day record starts with
+typed counters at zero, then the requested general reservation is committed
+to the private vault before a provider request can be issued. Stale
+unattributed usage is cleared only by that validated rollover; current-day
+unattributed usage still blocks the key. Failed persistence and malformed or
+future-dated ledgers remain fail-closed.
+
+The manual `discovery_only` dispatch has a separate, default-false
+`authorize_conditional_rollover_discovery` confirmation. A fresh conditional
+report remains `CONDITIONAL` with dispatch permission false; both the workflow
+and CLI require the explicit authorization for that manual run and validate
+vault identity, input/ledger completeness, typed current-day provenance,
+reserve status, capacities, and the unchanged 17-general/20-total/3-BTP
+limits. Scheduled runs, ordinary pipeline tasks, and restore-only preflights
+cannot use the authorization or auto-chain into discovery. Provider caps
+remain at 8 Tavily attempts and 12 search combinations, allocated 6 Morocco,
+1 France, and 1 Belgium. Each actual request still requires its own successful
+durable general reservation.
+
+Focused rollover/readiness/workflow validation passed: **104 tests passed**.
+The complete suite passed **615 tests, 1 skipped**. Ruff, Python compilation,
+validation of all **16** repository workflow/configuration YAML files, and
+`git diff --check` passed. Publication and hosted CI verification will be
+recorded after the changes are pushed.
+No live restore, reservation, provider/portal request, discovery evaluation,
+application, email, draft, WhatsApp, BTP action, or production-record change
+was performed for this phase. No discovery run is authorized by this code
+change alone; a future evaluation still requires a separate manual dispatch
+with the explicit conditional-rollover confirmation.
+
 ## Phase 2.8s — verified vacancy to single-job Gmail authorization
 
 Application routing now distinguishes explicit email applications from

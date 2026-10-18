@@ -92,12 +92,13 @@ class GitVaultBudgetStore:
                 or not isinstance(state.get("date"), str)
                 or not isinstance(state.get("count"), int)
                 or isinstance(state.get("count"), bool)
-                or state["count"] < 0
+                or not 0 <= state["count"] <= TAVILY_DAILY_REQUEST_LIMIT
                 or not isinstance(state.get("exhausted"), bool)
             ):
                 raise ValueError
             usage_by_type = _ledger_usage_by_type(state, state["count"])
-            date.fromisoformat(state["date"])
+            if date.fromisoformat(state["date"]).isoformat() != state["date"]:
+                raise ValueError
             return {
                 "date": state["date"],
                 "count": state["count"],

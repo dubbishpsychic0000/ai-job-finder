@@ -230,7 +230,16 @@ def cmd_discovery_only(args) -> None:
                 )
             except (OSError, ValueError):
                 readiness_report = None
-            readiness_error = validate_discovery_dispatch_report(readiness_report)
+            allow_conditional_rollover = (
+                os.environ.get("GITHUB_EVENT_NAME") == "workflow_dispatch"
+                and os.environ.get(
+                    "AUTHORIZE_CONDITIONAL_ROLLOVER_DISCOVERY",
+                ) == "true"
+            )
+            readiness_error = validate_discovery_dispatch_report(
+                readiness_report,
+                allow_conditional_rollover=allow_conditional_rollover,
+            )
             if readiness_error:
                 report = blocked_report(
                     readiness_error,

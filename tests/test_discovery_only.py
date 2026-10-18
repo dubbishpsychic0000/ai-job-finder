@@ -169,6 +169,7 @@ def _prepare_cli_inputs(root: Path, database_path: Path) -> None:
                 "policy": "fresh_ready_report_and_explicit_dispatch_permission",
                 "reason_code": "",
             },
+            "restoration": {},
             "provider_budget": {
                 "general_capacity_current_utc_day": 17,
                 "aggregate_capacity_remaining": {"general_remaining": 17},
@@ -244,6 +245,43 @@ def _run_discovery_cli(
     report_path = root / "report.json"
     cli.cmd_discovery_only(SimpleNamespace(report=report_path))
     return json.loads(report_path.read_text(encoding="utf-8"))
+
+
+@pytest.mark.parametrize(
+    ("event_name", "authorized", "expected"),
+    [
+        ("workflow_dispatch", "true", True),
+        ("schedule", "true", False),
+        ("workflow_dispatch", "false", False),
+    ],
+)
+def test_discovery_cli_scopes_conditional_rollover_authorization_to_manual_run(
+    tmp_path, monkeypatch, event_name, authorized, expected,
+):
+    from app.workflows import discovery_only_restore
+
+    root = tmp_path / "repo"
+    database_path = root / "data" / "agent.db"
+    _prepare_cli_inputs(root, database_path)
+    seen = []
+
+    def validate(_report, *, allow_conditional_rollover=False):
+        seen.append(allow_conditional_rollover)
+        return "authorization_scope_probe"
+
+    monkeypatch.setattr(
+        discovery_only_restore,
+        "validate_discovery_dispatch_report",
+        validate,
+    )
+    monkeypatch.setenv("GITHUB_EVENT_NAME", event_name)
+    monkeypatch.setenv("AUTHORIZE_CONDITIONAL_ROLLOVER_DISCOVERY", authorized)
+
+    report = _run_discovery_cli(monkeypatch, root, database_path)
+
+    assert seen == [expected]
+    assert report["status"] == "BLOCKED"
+    assert report["reason_code"] == "authorization_scope_probe"
 
 
 def test_discovery_execution_failure_has_sanitized_phase_diagnostics(
@@ -1254,6 +1292,11 @@ def test_workflow_discovery_task_skips_outbound_vault_and_full_pipeline_steps():
     task_input = workflow["on"]["workflow_dispatch"]["inputs"]["task"]
     assert "discovery_only" in task_input["options"]
     assert "discovery_restore_preflight" in task_input["options"]
+    conditional_authorization = workflow["on"]["workflow_dispatch"]["inputs"][
+        "authorize_conditional_rollover_discovery"
+    ]
+    assert conditional_authorization["type"] == "boolean"
+    assert conditional_authorization["default"] == "false"
 
     steps = {
         step.get("name"): step for step in workflow["jobs"]["pipeline"]["steps"]
@@ -1273,9 +1316,18 @@ def test_workflow_discovery_task_skips_outbound_vault_and_full_pipeline_steps():
 
     restore = steps["Restore bounded discovery inputs only"]
     run_step = steps["Run bounded discovery-only evaluation"]
+    assert (
+        restore["env"]["AUTHORIZE_CONDITIONAL_ROLLOVER_DISCOVERY"]
+        == "${{ github.event_name == 'workflow_dispatch' && inputs.task == "
+        "'discovery_only' && inputs.authorize_conditional_rollover_discovery == "
+        "true && 'true' || 'false' }}"
+    )
     assert "validate_discovery_dispatch_report" in restore["run"]
+    assert "allow_conditional_rollover=allow_conditional_rollover" in restore["run"]
     assert 'cp "$report" data/discovery_restore_preflight_report.json' in restore["run"]
     assert "inputs.task == 'discovery_only'" in run_step["if"]
+    assert "steps.discovery_restore.outputs.readiness == 'READY'" in run_step["if"]
+    assert "inputs.authorize_conditional_rollover_discovery == true" in run_step["if"]
     assert "run-once" not in run_step["run"]
     assert run_step["env"]["TAVILY_DEBUG"] == "0"
     assert run_step["env"]["GEMINI_API_KEYS"] == ""
@@ -1283,6 +1335,12 @@ def test_workflow_discovery_task_skips_outbound_vault_and_full_pipeline_steps():
     assert run_step["env"]["ENABLE_EMAIL"] == "false"
     assert run_step["env"]["EMAIL_PROVIDER"] == "log"
     assert run_step["env"]["AUTHORIZE_LIVE_SPONTANEOUS"] == "false"
+    assert run_step["env"]["GITHUB_EVENT_NAME"] == "${{ github.event_name }}"
+    assert run_step["env"]["AUTHORIZE_CONDITIONAL_ROLLOVER_DISCOVERY"] == (
+        "${{ github.event_name == 'workflow_dispatch' && inputs.task == "
+        "'discovery_only' && inputs.authorize_conditional_rollover_discovery == "
+        "true && 'true' || 'false' }}"
+    )
     assert "discovery_only_report.json" in steps[
         "Upload sanitized discovery-only report"
     ]["with"]["path"]

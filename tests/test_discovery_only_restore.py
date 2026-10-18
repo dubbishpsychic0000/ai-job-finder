@@ -3,7 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import subprocess
-from datetime import date
+from datetime import date, datetime, timezone
 from pathlib import Path
 
 import pytest
@@ -610,6 +610,134 @@ def test_phase_28q_unknown_current_provenance_cannot_authorize_dispatch(tmp_path
     assert validate_discovery_dispatch_report(report) == (
         "discovery_readiness_not_ready"
     )
+    assert validate_discovery_dispatch_report(
+        report,
+        allow_conditional_rollover=True,
+    ) == "discovery_readiness_not_ready"
+
+
+def _conditional_rollover_report(tmp_path):
+    today = datetime.now(timezone.utc).date()
+    yesterday = date.fromordinal(today.toordinal() - 1)
+    repository = _vault(
+        tmp_path,
+        ledger=json.dumps({
+            "date": yesterday.isoformat(),
+            "count": 18,
+            "exhausted": True,
+        }),
+    )
+    workspace = tmp_path / "workspace"
+    restoration = restore_discovery_inputs(
+        repository,
+        workspace,
+        expected_origin=ORIGIN,
+        today=today,
+    )
+    return repository, workspace, build_restore_preflight_report(
+        repository,
+        workspace,
+        restoration=restoration,
+        reservation_path=repository,
+        today=today,
+    )
+
+
+def test_conditional_rollover_report_requires_separate_explicit_authorization(
+    tmp_path,
+):
+    _repository, _workspace, report = _conditional_rollover_report(tmp_path)
+
+    assert report["execution_status"] == "COMPLETED"
+    assert report["readiness"] == "CONDITIONAL"
+    assert report["discovery_dispatch_permission"] is False
+    assert report["discovery_gate"]["authorized"] is False
+    assert report["provider_budget"]["general_capacity_current_utc_day"] == 0
+    assert report["provider_budget"]["general_capacity_after_durable_rollover"] == 17
+    assert report["provider_budget"]["requests_dispatched"] == 0
+    assert report["provider_budget"]["reservations_created"] == 0
+    assert validate_discovery_dispatch_report(report) == (
+        "conditional_rollover_authorization_required"
+    )
+    assert validate_discovery_dispatch_report(
+        report,
+        allow_conditional_rollover=True,
+    ) == ""
+
+
+@pytest.mark.parametrize(
+    ("mutate", "expected_reason"),
+    [
+        (
+            lambda report: report.update(discovery_dispatch_permission=True),
+            "discovery_readiness_not_ready",
+        ),
+        (
+            lambda report: report["provider_budget"].update(
+                btp_reserve_validation="blocked",
+            ),
+            "provider_budget_reserve_unverified",
+        ),
+        (
+            lambda report: report["provider_budget"]["per_key"][0].update(
+                outcome="ledger_json_invalid",
+            ),
+            "discovery_readiness_report_invalid",
+        ),
+        (
+            lambda report: report["provider_budget"].update(
+                general_capacity_after_durable_rollover=102,
+            ),
+            "discovery_readiness_report_invalid",
+        ),
+        (
+            lambda report: report.update(
+                readiness_utc_day="2020-01-01",
+            ),
+            "discovery_readiness_not_ready",
+        ),
+        (
+            lambda report: report["restoration"].update(
+                vault_origin_verified=False,
+            ),
+            "discovery_readiness_report_invalid",
+        ),
+        (
+            lambda report: report["restoration"].update(
+                restored_input_count=3,
+            ),
+            "discovery_readiness_report_invalid",
+        ),
+        (
+            lambda report: report["provider_budget"].update(
+                btp_reserve_unresolved_ledger_count=1,
+            ),
+            "provider_budget_reserve_unverified",
+        ),
+        (
+            lambda report: report["provider_budget"]["per_key"][0].update(
+                btp_reserve_status="btp_reserve_breach",
+            ),
+            "provider_budget_reserve_unverified",
+        ),
+        (
+            lambda report: report.update(
+                readiness_reason_code="general_capacity_available",
+            ),
+            "discovery_readiness_not_ready",
+        ),
+    ],
+)
+def test_conditional_rollover_validator_rejects_stale_or_contradictory_report(
+    tmp_path, mutate, expected_reason,
+):
+    _repository, _workspace, report = _conditional_rollover_report(tmp_path)
+    mutate(report)
+
+    assert validate_discovery_dispatch_report(
+        report,
+        allow_conditional_rollover=True,
+    ) == expected_reason
 
 
 @pytest.mark.parametrize(
