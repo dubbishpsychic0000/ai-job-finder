@@ -33,8 +33,12 @@ Token validity was not tested against Gmail. No current shortlist was
 prepared: the local opportunity database is dated October 8, 2026, and no live
 discovery was run. There is no approved job ID, recipient, intent, or message;
 the first real application must wait for a current verified opportunity and
-explicit owner approval of those exact details. Publication and hosted CI
-verification are pending.
+explicit owner approval of those exact details.
+
+Implementation published to `main` as
+[`9da30c99f27b3ca976acf70e18030fd47b416043`](https://github.com/dubbishpsychic0000/ai-job-finder/commit/9da30c99f27b3ca976acf70e18030fd47b416043).
+Hosted CI passed in
+[run 39108614880](https://github.com/dubbishpsychic0000/ai-job-finder/actions/runs/39108614880).
 
 ## Phase 2 multilingual discovery and internship eligibility
 
