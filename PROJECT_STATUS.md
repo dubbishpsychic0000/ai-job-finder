@@ -26,8 +26,10 @@ durable general reservation.
 Focused rollover/readiness/workflow validation passed: **104 tests passed**.
 The complete suite passed **615 tests, 1 skipped**. Ruff, Python compilation,
 validation of all **16** repository workflow/configuration YAML files, and
-`git diff --check` passed. Publication and hosted CI verification will be
-recorded after the changes are pushed.
+`git diff --check` passed. The implementation was published to `main` as
+[`c8523fac45e420760b1cdb01c61a66d2cf9e96a0`](https://github.com/dubbishpsychic0000/ai-job-finder/commit/c8523fac45e420760b1cdb01c61a66d2cf9e96a0);
+hosted CI passed in
+[run 39162327116](https://github.com/dubbishpsychic0000/ai-job-finder/actions/runs/39162327116).
 No live restore, reservation, provider/portal request, discovery evaluation,
 application, email, draft, WhatsApp, BTP action, or production-record change
 was performed for this phase. No discovery run is authorized by this code
