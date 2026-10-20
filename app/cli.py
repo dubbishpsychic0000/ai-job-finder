@@ -712,6 +712,288 @@ def cmd_job(args) -> None:
     console.print_json(json.dumps(detail, ensure_ascii=False))
 
 
+def _application_queue_context():
+    return get_config(), get_settings(), get_profile(), get_preferences()
+
+
+def _render_application_queue(rows: list[dict], *, as_json: bool = False) -> None:
+    if as_json:
+        _print_json({"applications": rows})
+        return
+    table = Table(title="Job application queue")
+    for heading in (
+        "Queue", "Job ID", "Employer", "Title", "Location", "Official source",
+        "Deadline", "Recipient", "Application route", "Reason",
+    ):
+        table.add_column(heading, overflow="fold")
+    for row in rows:
+        table.add_row(
+            row["category"],
+            row["job_id"],
+            row["employer"],
+            row["title"],
+            row["location"],
+            row["official_source"],
+            row["deadline"] or "Not stated",
+            row["recipient"] or "Not verified",
+            row["application_route"]["type"] + (
+                f" — {row['application_route']['url']}"
+                if row["application_route"]["url"] else ""
+            ),
+            row["reason"],
+        )
+    console.print(table)
+
+
+def cmd_application_queue(args) -> None:
+    from app.email.application_queue import application_queue
+
+    config, settings, profile, preferences = _application_queue_context()
+    with session_scope() as session:
+        rows = application_queue(
+            session,
+            config=config,
+            settings=settings,
+            profile=profile,
+            preferences=preferences,
+        )
+    _render_application_queue(rows, as_json=args.json)
+
+
+def _direct_send_result_status(result: dict) -> str:
+    if result.get("status") in {"sent", "inquiry_sent"} and result.get("message_id"):
+        return "SENT"
+    if result.get("status") == "drafted":
+        return "DRAFTED"
+    if result.get("status") in {"uncertain", "recovery_required"}:
+        return "SEND_OUTCOME_UNKNOWN"
+    return "BLOCKED"
+
+
+def cmd_send_approved(args) -> None:
+    """Preview and send one explicitly confirmed job application."""
+    from sqlalchemy import select
+
+    from app import models
+    from app.agents.communication_agent import CommunicationAgent
+    from app.discovery.vacancy_verification import VacancyDetailVerifier
+    from app.email.application_queue import (
+        classify_application,
+        verification_matches_job,
+    )
+    from app.email.safety_gate import validate as validate_email
+    from app.email.service import (
+        ApplicationEngine,
+        reconcile_pending_live_send,
+        resolve_attachment,
+    )
+
+    if not args.confirm_send:
+        console.print("BLOCKED: pass --confirm-send to enable the one-job confirmation flow.")
+        raise SystemExit(2)
+
+    config, settings, profile, preferences = _application_queue_context()
+    if (
+        settings.email_mode != "live"
+        or not settings.enable_email
+        or settings.email_provider != "gmail"
+    ):
+        console.print(
+            "BLOCKED: configure EMAIL_MODE=live, ENABLE_EMAIL=true, "
+            "and EMAIL_PROVIDER=gmail before using this direct-send command."
+        )
+        raise SystemExit(1)
+
+    from app.memory.store import get_job_by_opportunity_id
+    from app.workflows.action import lang_for_country
+
+    verifier = VacancyDetailVerifier()
+    with session_scope() as session:
+        job = get_job_by_opportunity_id(session, args.job_id)
+        if job is None:
+            console.print(f"BLOCKED: job ID {args.job_id!r} was not found.")
+            raise SystemExit(1)
+        decision = mem.store.get_last_decision(session, job.id)
+        if decision is None:
+            console.print("BLOCKED: candidate/job eligibility has not been assessed.")
+            raise SystemExit(1)
+        prior_attempt = session.scalar(
+            select(models.LiveSendAttempt.id).where(
+                models.LiveSendAttempt.job_id == job.id,
+                models.LiveSendAttempt.state.in_(
+                    ("prepared", "dispatching", "uncertain", "confirmed_sent"),
+                ),
+            ).limit(1),
+        )
+        if prior_attempt is not None:
+            recovered = reconcile_pending_live_send(
+                session, settings, config, job,
+            )
+            if recovered is None:
+                console.print(
+                    "BLOCKED: prior attempt was reconciled as not dispatched; "
+                    "review and explicitly invoke again if still approved."
+                )
+                return
+            status = _direct_send_result_status(recovered)
+            console.print(f"Status: {status}")
+            if recovered.get("message_id"):
+                console.print(f"Gmail message ID: {recovered['message_id']}")
+            if recovered.get("reason"):
+                console.print(f"Reason: {recovered['reason']}")
+            if status == "SEND_OUTCOME_UNKNOWN":
+                console.print(
+                    "Do not retry. Reconcile this attempt using the existing "
+                    "Gmail Sent-mail recovery flow first."
+                )
+                raise SystemExit(1)
+            return
+
+        try:
+            evidence = verifier.verify(job.url)
+        except Exception as exc:
+            console.print(
+                f"BLOCKED: official posting recheck failed ({type(exc).__name__}); "
+                "no email was attempted."
+            )
+            raise SystemExit(1) from None
+        if (
+            not verification_matches_job(job, evidence)
+            or evidence.application_method != "EMAIL"
+            or str(evidence.application_email or "").strip().casefold()
+            != str(job.contact_email or "").strip().casefold()
+        ):
+            console.print(
+                "BLOCKED: the current official posting did not confirm the same "
+                "open vacancy, explicit email-application route, and recipient."
+            )
+            raise SystemExit(1)
+
+        item = classify_application(
+            session,
+            job,
+            config=config,
+            settings=settings,
+            profile=profile,
+            preferences=preferences,
+            live_evidence=evidence,
+        )
+        if item["category"] != "READY_TO_SEND":
+            console.print(
+                f"BLOCKED: {item['reason']} (queue: {item['category']}); "
+                "no email was attempted."
+            )
+            raise SystemExit(1)
+
+        attachment = resolve_attachment(Path("candidate") / "cv", lang_for_country(job.country))
+        communicator = CommunicationAgent(get_llm(profile), profile)
+        try:
+            message = asyncio.run(
+                communicator.generate(job, "APPLY", lang_for_country(job.country)),
+            )
+        except Exception as exc:
+            console.print(
+                f"BLOCKED: could not prepare the application message "
+                f"({type(exc).__name__}); no email was attempted."
+            )
+            raise SystemExit(1) from None
+
+        daily_total = mem.store.count_dispatched_today(session)
+        daily_applications = mem.store.count_dispatched_today(session, action="APPLY")
+        safety = validate_email(
+            to_addr=job.contact_email,
+            subject=message["subject"],
+            body=message["body"],
+            attachments=[attachment] if attachment else [],
+            job=job,
+            profile=profile,
+            config=config,
+            session=session,
+            action="APPLY",
+            daily_sent=daily_total,
+            daily_total=daily_total,
+            daily_applications=daily_applications,
+            daily_inquiries=mem.store.count_dispatched_today(
+                session, action="ASK_EMPLOYER",
+            ),
+            employer_cooldown_days=settings.employer_cooldown_days,
+        )
+        if not safety.allowed:
+            console.print(
+                "BLOCKED: safety gate: " + "; ".join(safety.reasons)
+                + ". No email was attempted."
+            )
+            raise SystemExit(1)
+
+        company_name = job.company.name if job.company else "Unknown"
+        opportunity_id = mem.store.opportunity_id(job)
+        console.print(f"Job ID: {opportunity_id}")
+        console.print(f"Employer: {company_name}")
+        console.print(f"Role: {job.title}")
+        console.print(f"Location: {job.location or job.country}")
+        console.print(f"Official posting: {job.url}")
+        console.print(f"Recipient: {job.contact_email}")
+        console.print(f"Recipient evidence: {item['recipient_evidence']['source_url']}")
+        console.print("Application route: explicit email application")
+        console.print(f"Subject: {message['subject']}")
+        console.print("Message:")
+        console.print(message["body"], markup=False)
+        console.print(f"CV attachment: {attachment}")
+        try:
+            confirmation = input(
+                f"Type SEND {opportunity_id} to send this exact application: ",
+            ).strip()
+        except (EOFError, KeyboardInterrupt):
+            confirmation = ""
+        if confirmation != f"SEND {opportunity_id}":
+            console.print("BLOCKED: exact confirmation not received; no email was attempted.")
+            return
+
+        class _ApprovedMessage:
+            async def generate(self, *_args, **_kwargs):
+                return message
+
+        # This manual command plus the exact job-ID/message confirmation is
+        # the one-run authorization; it does not change persistent settings.
+        live_settings = settings.model_copy(update={
+            "live_email_manual_dispatch": True,
+            "authorize_live_job_email": True,
+            "approved_live_job_id": str(job.id),
+        })
+        engine = ApplicationEngine(
+            session,
+            config,
+            live_settings,
+            profile,
+            _ApprovedMessage(),
+            verify_url_fn=lambda selected_job: verifier.verify(selected_job.url),
+        )
+        result = asyncio.run(engine.run(
+            job,
+            decision,
+            "APPLY",
+            job.contact_email,
+            lang_for_country(job.country),
+            allow_live_cap_draft_fallback=False,
+        ))
+
+    status = _direct_send_result_status(result)
+    console.print(f"Status: {status}")
+    if result.get("message_id"):
+        console.print(f"Gmail message ID: {result['message_id']}")
+    if result.get("reason"):
+        console.print(f"Reason: {result['reason']}")
+    if result.get("error"):
+        console.print(f"Provider outcome: {result['error']}")
+    if status == "SEND_OUTCOME_UNKNOWN":
+        console.print(
+            "Do not retry. Reconcile this attempt using the existing Gmail "
+            "Sent-mail recovery flow first."
+        )
+    if status in {"BLOCKED", "SEND_OUTCOME_UNKNOWN"}:
+        raise SystemExit(1)
+
+
 def cmd_pause(_args) -> None:
     from app.scheduler.control import set_paused
 
@@ -855,6 +1137,21 @@ def main(argv: list[str] | None = None) -> None:
         sub.add_parser(name)
     job = sub.add_parser("job", help="show complete details for an opportunity ID")
     job.add_argument("opportunity_id", help="e.g. JOB-2026-0817-0042")
+    application_queue_parser = sub.add_parser(
+        "application-queue",
+        help="show sendable, review, portal, and blocked job applications",
+    )
+    application_queue_parser.add_argument("--json", action="store_true")
+    send_approved = sub.add_parser(
+        "send-approved",
+        help="preview and send one manually approved job application",
+    )
+    send_approved.add_argument("--job-id", required=True, help="stable JOB-YYYY-MMDD-NNNN ID")
+    send_approved.add_argument(
+        "--confirm-send",
+        action="store_true",
+        help="show the exact message and require a second exact typed confirmation",
+    )
     dash = sub.add_parser("dashboard")
     dash.add_argument("--host", default="127.0.0.1")
     dash.add_argument("--port", default=8000, type=int)
@@ -878,6 +1175,8 @@ def main(argv: list[str] | None = None) -> None:
         "search-plan": cmd_search_plan,
         "stats": cmd_stats,
         "job": cmd_job,
+        "application-queue": cmd_application_queue,
+        "send-approved": cmd_send_approved,
         "pause": cmd_pause,
         "resume": cmd_resume,
         "scheduler": cmd_scheduler,

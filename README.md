@@ -206,6 +206,54 @@ verify delivery to a handset. Use Meta delivery-status webhooks/provider
 diagnostics to investigate missing messages. No test message is sent by the
 BTP workflow.
 
+### Reviewed application queue and one-job send
+
+Use the queue to distinguish `READY_TO_SEND`, `NEEDS_REVIEW`,
+`PORTAL_APPLICATION`, and `BLOCKED` records without running discovery:
+
+```bash
+python -m app.cli application-queue
+python -m app.cli application-queue --json
+```
+
+The queue uses persisted vacancy/recipient evidence, the latest candidate/job
+decision, Gmail readiness, the local CV, cooldowns, and current daily limits.
+`READY_TO_SEND` means those preconditions are met and a recent official
+verification is available; it is not prior approval to send. The direct-send
+command fetches the official ATS record again immediately before preview and
+again at the existing send boundary.
+
+To prepare and send one application after reviewing the queue:
+
+```bash
+# Configure only in the private local .env; never put tokens in source control.
+EMAIL_PROVIDER=gmail
+EMAIL_MODE=live
+ENABLE_EMAIL=true
+
+# If the token is absent or missing scopes, run normal OAuth consent in live mode.
+python -m app.cli gmail-auth
+python -m app.cli gmail-status
+
+# Replace JOB_ID with the exact stable ID from application-queue.
+python -m app.cli send-approved --job-id JOB_ID --confirm-send
+```
+
+The command reloads one job, checks current official open-vacancy and explicit
+email-route evidence, requires a job-specific verified recipient, assessed
+eligibility and sponsorship constraints, a valid CV, duplicate/cooldown and
+daily-cap clearance, Gmail `send`/`compose`/`readonly` scopes, and an unpaused
+global control. It prints the exact job, employer, recipient and evidence,
+subject, message, and attachment, then requires typing `SEND <exact job ID>`.
+That one confirmation is the only live-job authorization; it does not change
+global settings or authorize other jobs. A cap or provider failure is not
+silently converted into a draft. Results are reported distinctly as `SENT`,
+`DRAFTED`, `BLOCKED`, or `SEND_OUTCOME_UNKNOWN`; this direct-send command does
+not create drafts. An uncertain outcome must be reconciled before any further
+send, and a retry is never automatic. `gmail.readonly` is required on this
+command because Sent-mail reconciliation is a required recovery safeguard.
+Scheduled and discovery-only workflows remain unable to send.
+
 ### Email rollout checklist (safe)
 
 ```bash

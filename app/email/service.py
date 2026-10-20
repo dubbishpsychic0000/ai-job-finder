@@ -74,7 +74,16 @@ class ApplicationEngine:
         self.verify_url_fn = verify_url_fn
 
     # ------------------------------------------------------------------ UI
-    async def run(self, job, decision, action: str, contact_email: str = "", target_language: str = "en") -> dict:
+    async def run(
+        self,
+        job,
+        decision,
+        action: str,
+        contact_email: str = "",
+        target_language: str = "en",
+        *,
+        allow_live_cap_draft_fallback: bool = True,
+    ) -> dict:
         """Execute an APPLY / ASK_EMPLOYER action for a job.
 
         Returns {sent, status, report/error, application_id, email_id,
@@ -245,6 +254,19 @@ class ApplicationEngine:
                     if not live:
                         verification_outcome = "UNKNOWN"
                         verification_reason = "current_ats_record_changed"
+                    closing_at = getattr(verification, "closing_at", None)
+                    if (
+                        live
+                        and isinstance(closing_at, datetime)
+                        and (
+                            closing_at.replace(tzinfo=timezone.utc)
+                            if closing_at.tzinfo is None
+                            else closing_at.astimezone(timezone.utc)
+                        ) <= datetime.now(timezone.utc)
+                    ):
+                        live = False
+                        verification_outcome = "CLOSED"
+                        verification_reason = "application_deadline_elapsed"
                 elif verification_outcome == "OPEN":
                     verification_outcome = "UNKNOWN"
                     verification_reason = "send_time_evidence_not_current"
@@ -335,7 +357,11 @@ class ApplicationEngine:
         if not report.allowed:
             # live mode: the daily outbound budget is the only blocker -> keep
             # the message as a Gmail draft instead of silently blocking it.
-            if mode == "live" and _only_cap_blocked(report):
+            if (
+                mode == "live"
+                and allow_live_cap_draft_fallback
+                and _only_cap_blocked(report)
+            ):
                 mem.store.record_event(self.session, "action",
                                        f"daily outbound cap reached - kept as draft for {contact_email}",
                                        "info", {"job_id": job.id, "application_id": app.id})

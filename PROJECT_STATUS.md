@@ -1,5 +1,40 @@
 # Project status
 
+## Reviewed application queue and one-job email path (not published)
+
+Added a local `application-queue` view that separates sendable email
+applications, jobs needing review, portal-only applications, and blocked
+records. `send-approved --job-id JOB_ID --confirm-send` reloads one job,
+rechecks the current official vacancy and email recipient, applies the
+existing eligibility and safety gates, previews the exact message and CV,
+and requires typing `SEND <exact job ID>`. It reuses the existing
+`ApplicationEngine`, durable send intent, duplicate/cooldown/cap checks, and
+uncertain-send recovery. The direct path does not silently create a draft
+when a live send is blocked.
+
+Focused direct-send/Gmail tests passed (**105 passed, 1 skipped**) and the
+full suite passed (**626 passed, 1 skipped**). Ruff passed on every changed
+Python file; Python compilation, 9 workflow/configuration YAML parses, and
+`git diff --check` passed. Repository-wide `ruff check .` remains blocked by
+24 lint findings in unchanged files; these were not altered as unrelated
+cleanup. The changes therefore remain local and unpublished.
+
+The local application queue could not be evaluated because
+`candidate/profile.yaml` is missing, so the number of currently eligible jobs
+is unknown. Gmail metadata shows `EMAIL_MODE=draft`, `ENABLE_EMAIL=false`,
+Gmail provider selected, client-secret and token files present, `gmail.send`
+and `gmail.compose` granted, and `gmail.readonly` missing. No OAuth flow, draft,
+email send, or live application was attempted.
+
+Once the candidate profile is restored and the owner has reviewed a specific
+`READY_TO_SEND` job, the one-job command is
+`python -m app.cli send-approved --job-id JOB_ID --confirm-send`; the operator
+must then approve the displayed exact application by typing `SEND JOB_ID`.
+Before that, switch local settings to live mode with email enabled and run the
+normal `gmail-auth` consent flow to grant the required sent-mail recovery
+scope, then verify with `gmail-status`. This command and its preview do not
+authorize any other job.
+
 ## Phase 2.8u — conditional-rollover discovery authorization
 
 The durable Tavily ledger now rejects non-canonical dates and counts outside
