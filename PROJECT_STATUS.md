@@ -1,6 +1,6 @@
 # Project status
 
-## Reviewed application queue and one-job email path (not published)
+## Reviewed application queue and one-job email path
 
 Added a local `application-queue` view that separates sendable email
 applications, jobs needing review, portal-only applications, and blocked
@@ -15,9 +15,12 @@ when a live send is blocked.
 Focused direct-send/Gmail tests passed (**105 passed, 1 skipped**) and the
 full suite passed (**626 passed, 1 skipped**). Ruff passed on every changed
 Python file; Python compilation, 9 workflow/configuration YAML parses, and
-`git diff --check` passed. Repository-wide `ruff check .` remains blocked by
-24 lint findings in unchanged files; these were not altered as unrelated
-cleanup. The changes therefore remain local and unpublished.
+`git diff --check` passed. Repository-wide `ruff check .` reports 24 lint
+findings in unchanged files; these were not altered as unrelated cleanup.
+Hosted CI passed in
+[run 39424518309](https://github.com/dubbishpsychic0000/ai-job-finder/actions/runs/39424518309).
+Implementation published to `main` as
+[`8d8b3a070eef41708463ef616564991dbac1b7f1`](https://github.com/dubbishpsychic0000/ai-job-finder/commit/8d8b3a070eef41708463ef616564991dbac1b7f1).
 
 The local application queue could not be evaluated because
 `candidate/profile.yaml` is missing, so the number of currently eligible jobs
