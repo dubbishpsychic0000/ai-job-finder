@@ -459,6 +459,7 @@ def test_live_action_workflow_only_processes_the_exact_approved_job_id(
 
     report = asyncio.run(run_actions(
         db, config, settings, profile, NullLLM(profile),
+        preferences=Preferences(sponsorship_required=False),
     ))
 
     assert processed == [(approved_job.id, approved_decision.id, "APPLY")]

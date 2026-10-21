@@ -49,7 +49,9 @@ class NotificationService:
                 self._deliver(row)
         return results
 
-    def send_portal_application_alert(self, job, provider, *, now=None) -> dict[str, str]:
+    def send_portal_application_alert(
+        self, job, provider, *, now=None, preferences=None,
+    ) -> dict[str, str]:
         """Send one verified portal-only vacancy alert, never retrying ambiguity."""
         from sqlalchemy.exc import IntegrityError
 
@@ -118,7 +120,7 @@ class NotificationService:
             if route_evidence_valid:
                 config = get_config()
                 profile = get_profile()
-                preferences = get_preferences()
+                effective_preferences = preferences or get_preferences()
                 decision = mem.store.get_last_decision(self.session, job.id)
                 analysis = mem.store.get_analysis(self.session, job.id)
                 if decision is None or decision.decision != "APPLY" or analysis is None:
@@ -128,7 +130,7 @@ class NotificationService:
                         llm=None,
                         config=config,
                         profile=profile,
-                        preferences=preferences,
+                        preferences=effective_preferences,
                     ).hard_rules(
                         self.session,
                         job,
@@ -136,7 +138,7 @@ class NotificationService:
                         config.threshold_for(decision.overall_score),
                     )
                     eligibility_issue = _profile_eligibility_issue(
-                        job, analysis, profile, preferences,
+                        job, analysis, profile, effective_preferences,
                     )
                     if hard_block or eligibility_issue:
                         route_evidence_valid = False
@@ -343,11 +345,15 @@ class NotificationService:
             "message": message,
         }
 
-    def alert_verified_portal_jobs(self, provider, *, now=None) -> list[dict[str, str]]:
+    def alert_verified_portal_jobs(
+        self, provider, *, now=None, preferences=None,
+    ) -> list[dict[str, str]]:
         jobs = self.session.scalars(select(Job).order_by(Job.id)).all()
         outcomes = []
         for job in jobs:
-            result = self.send_portal_application_alert(job, provider, now=now)
+            result = self.send_portal_application_alert(
+                job, provider, now=now, preferences=preferences,
+            )
             if result.get("status") != "skipped":
                 outcomes.append({
                     "job_id": mem.store.opportunity_id(job),

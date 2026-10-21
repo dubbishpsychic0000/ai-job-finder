@@ -40,7 +40,9 @@ def _analyze(db, config, prefs, profile):
 
 def _act(db, config, prefs, profile, settings):
     llm = NullLLM(profile)
-    asyncio.run(run_actions(db, config, settings, profile, llm))
+    asyncio.run(run_actions(
+        db, config, settings, profile, llm, preferences=prefs,
+    ))
 
 
 def test_golden_decisions(db, config, prefs, profile):

@@ -78,7 +78,9 @@ def run_pipeline(session: Session | None = None, *, sources_path: Path | None = 
 
             notifications = NotificationService(s)
             whatsapp = MetaWhatsAppProvider()
-            portal_alerts = notifications.alert_verified_portal_jobs(whatsapp)
+            portal_alerts = notifications.alert_verified_portal_jobs(
+                whatsapp, preferences=prefs,
+            )
             immigration = ImmigrationAgent(llm) if with_immigration else None
             action = asyncio.run(run_actions(
                 s, config, settings, profile, llm, immigration,

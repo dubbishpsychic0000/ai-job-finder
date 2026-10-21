@@ -201,7 +201,7 @@ def test_portal_alert_never_routes_email_applications_to_whatsapp(db):
     assert db.query(models.Notification).count() == 0
 
 
-def test_verified_ats_portal_alert_uses_whatsapp_without_email(db):
+def test_verified_ats_portal_alert_uses_whatsapp_without_email(db, prefs):
     job = _portal_job(db)
     job.source = "greenhouse"
     job.source_type = "ats"
@@ -243,7 +243,7 @@ def test_verified_ats_portal_alert_uses_whatsapp_without_email(db):
     # The ATS portal URL is the official destination; no email route exists.
     job.application_method = "COMPANY_PORTAL"
     result = NotificationService(db).send_portal_application_alert(
-        job, provider,
+        job, provider, preferences=prefs,
     )
 
     assert result["status"] == "accepted_by_meta_delivery_unconfirmed"
