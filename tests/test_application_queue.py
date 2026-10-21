@@ -20,7 +20,7 @@ from app.email.application_queue import (
     READY_TO_SEND,
     classify_application,
 )
-from app.email.service import ApplicationEngine
+from app.email.service import ApplicationEngine, resolve_attachment
 from app.memory.store import add_application, get_or_create_company
 
 
@@ -263,6 +263,32 @@ def test_queue_reports_missing_readonly_recovery_scope(
 
     assert row["category"] == NEEDS_REVIEW
     assert row["reason"] == "gmail_scopes_missing:gmail.readonly"
+
+
+def test_queue_reports_missing_cv_as_a_blocking_error(
+    db, config, profile, settings, monkeypatch, tmp_path,
+):
+    _configure_ready(monkeypatch, tmp_path)
+    empty_cv_dir = tmp_path / "empty-cv"
+    empty_cv_dir.mkdir()
+    monkeypatch.setattr(
+        "app.email.service.resolve_attachment",
+        lambda _directory, language: resolve_attachment(empty_cv_dir, language),
+    )
+    job = _job(db)
+
+    row = classify_application(
+        db,
+        job,
+        config=config,
+        settings=_settings(settings),
+        profile=profile,
+        preferences=Preferences(sponsorship_required=False),
+        live_evidence=_evidence(job),
+    )
+
+    assert row["category"] == BLOCKED
+    assert row["reason"] == "verified_cv_missing"
 
 
 def test_send_approved_sends_exact_preview_once_and_reports_gmail_message_id(

@@ -55,8 +55,14 @@ def resolve_attachment(cv_dir: Path, lang: str) -> str:
     cv_dir = Path(cv_dir)
     for name in LANG_TO_CV.get(lang, LANG_TO_CV["en"]):
         p = cv_dir / name
-        if p.exists():
-            return str(p)
+        if not p.is_file() or p.suffix.casefold() != ".pdf":
+            continue
+        try:
+            with p.open("rb") as stream:
+                if stream.read(5) == b"%PDF-":
+                    return str(p)
+        except OSError:
+            continue
     return ""
 
 

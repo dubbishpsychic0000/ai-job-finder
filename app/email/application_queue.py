@@ -282,7 +282,12 @@ def classify_application(
         )
         return item
 
-    cv = email_service.resolve_attachment(Path("candidate") / "cv", "fr")
+    from app.workflows.action import lang_for_country
+
+    cv = email_service.resolve_attachment(
+        Path("candidate") / "cv",
+        lang_for_country(str(getattr(job, "country", "") or "")),
+    )
     if not cv or not Path(cv).is_file():
         item.update(category=BLOCKED, reason="verified_cv_missing")
         return item

@@ -253,6 +253,10 @@ not create drafts. An uncertain outcome must be reconciled before any further
 send, and a retry is never automatic. `gmail.readonly` is required on this
 command because Sent-mail reconciliation is a required recovery safeguard.
 Scheduled and discovery-only workflows remain unable to send.
+CV lookup is limited to `candidate/cv/`: the language-specific
+`CV_Omar_Benhamid_FR.pdf` or `CV_Omar_Benhamid_EN.pdf`, with
+`CV_Omar_Benhamid.pdf` as the fallback. The selected file must be a readable
+PDF; there is no implicit search of other directories.
 
 ### Email rollout checklist (safe)
 

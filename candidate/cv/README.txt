@@ -5,5 +5,7 @@
 # - CV_Omar_Benhamid_EN.pdf  (English CV, used for English-language applications)
 # - CV_Omar_Benhamid.pdf     (default, used when no language-specific CV exists)
 #
+# Place a readable PDF with a valid PDF header here. The application checks
+# only this directory and blocks sending if no supported file is available.
 # The communication agent attaches the language-matched CV and never invents
 # content that is not in candidate/profile.yaml (phone is read from there).
