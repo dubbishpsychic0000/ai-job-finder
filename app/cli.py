@@ -1077,6 +1077,157 @@ def cmd_email_policy(_args) -> None:
     console.print(f"  min apply score:      {s.min_application_score}/100")
     console.print(f"  min apply confidence: {s.min_application_confidence}")
 
+def cmd_whatsapp_check(_args) -> None:
+    """Validate WhatsApp settings locally without making a provider request."""
+    from app.notifications.whatsapp import WhatsAppSettings
+
+    settings = WhatsAppSettings.from_env()
+    errors = settings.validation_errors()
+    if errors:
+        console.print("WhatsApp configuration: INVALID")
+        for error in errors:
+            console.print(f"  - {error}")
+        raise SystemExit(1)
+    console.print(
+        "WhatsApp configuration: structurally valid (no test message sent; "
+        "provider token and template approval were not contacted or verified)"
+    )
+
+
+def cmd_whatsapp_alert_status(args) -> None:
+    """Show the matching portal-alert ledger state without message or secret data."""
+    from sqlalchemy import select
+
+    from app import models
+    from app.memory.store import get_job_by_opportunity_id
+
+    init_db()
+    with session_scope() as session:
+        job = get_job_by_opportunity_id(session, args.job_id)
+        if job is None:
+            console.print("Alert: job not found")
+            raise SystemExit(1)
+        alert = session.execute(
+            select(models.Notification).where(
+                models.Notification.event_type == "PORTAL_APPLICATION_REQUIRED",
+                models.Notification.job_id == job.id,
+            ),
+        ).scalar_one_or_none()
+        if alert is None:
+            console.print("Alert: no portal alert record")
+            return
+        payload = alert.payload if isinstance(alert.payload, dict) else {}
+        console.print(f"Notification ID: {alert.id}")
+        console.print(f"Job ID: {mem.store.opportunity_id(job)}")
+        console.print(f"Status: {alert.status}")
+        outcome = str(payload.get("outcome", "not recorded"))
+        console.print(f"Recorded outcome: {outcome}")
+        provider_called = payload.get("provider_called")
+        if provider_called is None and outcome == "whatsapp_not_configured":
+            provider_call_text = "no (configuration gate failed before invocation)"
+        elif provider_called is None:
+            provider_call_text = "unknown (legacy record)"
+        else:
+            provider_call_text = "yes" if provider_called else "no"
+        console.print(f"Provider called: {provider_call_text}")
+        console.print(
+            "Provider message ID present: "
+            + ("yes" if payload.get("provider_message_id") else "no")
+        )
+        message_id = str(payload.get("provider_message_id") or "")
+        if message_id:
+            receipts = session.execute(
+                select(models.Event).where(
+                    models.Event.type == "whatsapp_delivery",
+                ).order_by(models.Event.occurred_at.desc()),
+            ).scalars().all()
+            matching_states = [
+                str(receipt.data.get("status", "unknown"))
+                for receipt in receipts
+                if isinstance(receipt.data, dict)
+                and receipt.data.get("message_id") == message_id
+            ]
+            console.print(
+                "WhatsApp delivery status: "
+                + (", ".join(matching_states) if matching_states else "not confirmed")
+            )
+        else:
+            console.print("WhatsApp delivery status: unavailable")
+
+
+def _revalidate_public_competition(job) -> dict:
+    """Fetch and parse only the job's official Emploi Public detail page."""
+    from urllib.parse import urlsplit
+
+    import requests
+
+    from app.connectors.emploi_public import parse_competition_detail
+
+    try:
+        parsed = urlsplit(str(job.url or ""))
+        if (
+            parsed.scheme != "https"
+            or parsed.hostname not in {"emploi-public.ma", "www.emploi-public.ma"}
+            or parsed.username is not None
+            or parsed.password is not None
+            or parsed.port not in {None, 443}
+        ):
+            return {}
+        response = requests.get(
+            str(job.url),
+            headers={
+                "User-Agent": "WorldwideCareerAgent/0.1 (portal alert recovery)",
+                "Accept": "text/html",
+            },
+            timeout=15,
+            allow_redirects=False,
+        )
+    except (requests.RequestException, ValueError):
+        return {}
+    if response.status_code != 200:
+        return {}
+    return parse_competition_detail(
+        response.text,
+        str(job.url),
+        language="fr",
+        observed_at=datetime.now(timezone.utc),
+    )
+
+
+def cmd_whatsapp_recover_portal_alert(args) -> None:
+    """Recover exactly one previously unconfigured portal alert."""
+    from app.notifications.service import NotificationService
+    from app.notifications.whatsapp import MetaWhatsAppProvider
+
+    provider = MetaWhatsAppProvider()
+    errors = provider.settings.validation_errors()
+    if errors:
+        console.print("BLOCKED: WhatsApp configuration is invalid:")
+        for error in errors:
+            console.print(f"  - {error}")
+        raise SystemExit(1)
+
+    init_db()
+    with session_scope() as session:
+        result = NotificationService(session).recover_portal_application_alert(
+            notification_id=args.notification_id,
+            opportunity_id=args.job_id,
+            provider=provider,
+            verifier=_revalidate_public_competition,
+        )
+    console.print(f"Status: {result['status']}")
+    if result.get("reason"):
+        console.print(f"Reason: {result['reason']}")
+    if result["status"] == "accepted_by_meta_delivery_unconfirmed":
+        message_id = str(getattr(provider, "last_message_id", "") or "")
+        console.print("Provider accepted: yes; handset delivery: unconfirmed")
+        console.print(f"Provider message ID: {message_id or 'not supplied'}")
+    elif result["status"] == "provider_delivery_ambiguous":
+        console.print("Do not retry; provider outcome may have reached WhatsApp.")
+        raise SystemExit(1)
+    elif result["status"] != "accepted_by_meta_delivery_unconfirmed":
+        raise SystemExit(1)
+
 
 def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(prog="wca", description="Worldwide AI Job & Relocation Agent")
@@ -1159,6 +1310,21 @@ def main(argv: list[str] | None = None) -> None:
     sub.add_parser("gmail-auth", help="one-time Gmail OAuth authorization for the current email mode")
     sub.add_parser("gmail-status", help="show Gmail OAuth status without exposing secrets")
     sub.add_parser("email-policy", help="show current outbound communication policy")
+    sub.add_parser(
+        "whatsapp-check",
+        help="validate WhatsApp configuration locally without sending",
+    )
+    whatsapp_alert_status = sub.add_parser(
+        "whatsapp-alert-status",
+        help="show one job's portal-alert ledger state",
+    )
+    whatsapp_alert_status.add_argument("--job-id", required=True)
+    whatsapp_recover = sub.add_parser(
+        "whatsapp-recover-portal-alert",
+        help="recover one pre-dispatch WhatsApp configuration failure",
+    )
+    whatsapp_recover.add_argument("--job-id", required=True)
+    whatsapp_recover.add_argument("--notification-id", required=True, type=int)
 
     args = parser.parse_args(argv)
     _setup_logging(args.verbose)
@@ -1184,6 +1350,9 @@ def main(argv: list[str] | None = None) -> None:
         "gmail-auth": cmd_gmail_auth,
         "gmail-status": cmd_gmail_status,
         "email-policy": cmd_email_policy,
+        "whatsapp-check": cmd_whatsapp_check,
+        "whatsapp-alert-status": cmd_whatsapp_alert_status,
+        "whatsapp-recover-portal-alert": cmd_whatsapp_recover_portal_alert,
     }
     handlers[args.command](args)
 

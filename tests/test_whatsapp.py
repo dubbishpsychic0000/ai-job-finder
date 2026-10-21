@@ -2,8 +2,10 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
+import pytest
+
 from app import models
-from app.memory.store import get_or_create_company
+from app.memory.store import get_or_create_company, opportunity_id
 from app.notifications.service import NotificationService
 from app.notifications.whatsapp import MetaWhatsAppProvider, WhatsAppSettings
 
@@ -37,6 +39,40 @@ def test_meta_whatsapp_uses_template_body_parameter():
 
 def test_unconfigured_provider_does_not_send():
     assert not MetaWhatsAppProvider(WhatsAppSettings()).send("No delivery")
+
+
+def test_whatsapp_configuration_validation_never_sends():
+    settings = WhatsAppSettings()
+    errors = settings.validation_errors()
+    assert "WHATSAPP_ACCESS_TOKEN is missing" in errors
+    assert "WHATSAPP_PHONE_NUMBER_ID is missing" in errors
+    assert "WHATSAPP_RECIPIENT is missing" in errors
+    assert "WHATSAPP_TEMPLATE_NAME is missing" in errors
+    assert not WhatsAppSettings(
+        access_token="x" * 32,
+        phone_number_id="123456789",
+        recipient="+212600000000",
+        template_name="portal_alert_fr",
+        template_language="fr",
+    ).validation_errors()
+
+
+def test_whatsapp_configuration_rejects_malformed_values():
+    settings = WhatsAppSettings(
+        access_token="short token",
+        phone_number_id="id-with-letters",
+        recipient="0600000000",
+        template_name="Invalid Template Name",
+        graph_api_version="latest",
+        template_language="French",
+    )
+    errors = settings.validation_errors()
+    assert any("WHATSAPP_ACCESS_TOKEN" in error for error in errors)
+    assert any("WHATSAPP_PHONE_NUMBER_ID" in error for error in errors)
+    assert any("WHATSAPP_RECIPIENT" in error for error in errors)
+    assert any("WHATSAPP_TEMPLATE_NAME" in error for error in errors)
+    assert any("WHATSAPP_GRAPH_API_VERSION" in error for error in errors)
+    assert any("WHATSAPP_TEMPLATE_LANGUAGE" in error for error in errors)
 
 
 def test_meta_whatsapp_normalizes_template_parameter_whitespace():
@@ -186,6 +222,252 @@ def test_portal_alert_configuration_and_delivery_failures_are_recorded_without_r
     assert failed["status"] == "failed"
     assert failed["reason"] == "provider_delivery_failed"
     assert retry["status"] == "already_attempted"
+
+
+def _recovery_evidence(job):
+    metadata = job.public_competition
+    return {
+        "status": "OPEN_ANNOUNCEMENT",
+        "stage": "OPEN_ANNOUNCEMENT",
+        "competition_code": metadata["reference"],
+        "evidence_url": job.url,
+        "deadline_at": "2026-10-23T22:59:00+00:00",
+        "submission_route": {
+            "kind": "ONLINE_PORTAL",
+            "destination_url": job.application_url,
+            "conflict": False,
+        },
+    }
+
+
+def _seed_unconfigured_alert(db, job):
+    class _Unconfigured:
+        configured = False
+
+        def send(self, _message):
+            raise AssertionError("provider must not be called")
+
+    now = datetime(2026, 10, 21, 12, tzinfo=timezone.utc)
+    result = NotificationService(db).send_portal_application_alert(
+        job, _Unconfigured(), now=now,
+    )
+    assert result["reason"] == "whatsapp_not_configured"
+    return db.query(models.Notification).one()
+
+
+class _RecoveryProvider:
+    configured = True
+
+    def __init__(self):
+        self.messages = []
+        self.last_message_id = "wamid.recovered"
+
+    def send(self, message):
+        self.messages.append(message)
+        return True
+
+
+def test_recovers_only_the_proven_pre_dispatch_whatsapp_configuration_failure(db):
+    job = _portal_job(db)
+    alert = _seed_unconfigured_alert(db, job)
+    alert.payload.pop("provider_called", None)  # legacy record: reason is pre-dispatch
+    db.commit()
+    provider = _RecoveryProvider()
+    now = datetime(2026, 10, 21, 12, tzinfo=timezone.utc)
+
+    result = NotificationService(db).recover_portal_application_alert(
+        notification_id=alert.id,
+        opportunity_id=opportunity_id(job),
+        provider=provider,
+        verifier=_recovery_evidence,
+        now=now,
+    )
+
+    assert result["status"] == "accepted_by_meta_delivery_unconfirmed"
+    assert len(provider.messages) == 1
+    message = provider.messages[0]
+    for expected in (
+        "Al Omrane Fès-Meknès",
+        "Techniciens en Génie Civil",
+        "C44041/26",
+        job.application_url,
+        "23 October 2026",
+        "diplôme",
+        "CV",
+        "manquante",
+        "WCA ne l'a pas soumise",
+    ):
+        assert expected in message
+    db.refresh(alert)
+    assert alert.status == "accepted"
+    assert alert.payload["provider_called"] is True
+    assert alert.payload["recovery_count"] == 1
+    assert alert.payload["provider_message_id"] == "wamid.recovered"
+
+
+def test_recovery_deduplication_blocks_second_attempt(db):
+    job = _portal_job(db)
+    alert = _seed_unconfigured_alert(db, job)
+    provider = _RecoveryProvider()
+    service = NotificationService(db)
+    kwargs = {
+        "notification_id": alert.id,
+        "opportunity_id": opportunity_id(job),
+        "provider": provider,
+        "verifier": _recovery_evidence,
+        "now": datetime(2026, 10, 21, 12, tzinfo=timezone.utc),
+    }
+
+    first = service.recover_portal_application_alert(**kwargs)
+    second = service.recover_portal_application_alert(**kwargs)
+
+    assert first["status"] == "accepted_by_meta_delivery_unconfirmed"
+    assert second == {
+        "status": "blocked",
+        "reason": "prior_outcome_not_proven_pre_dispatch",
+    }
+    assert len(provider.messages) == 1
+
+
+def test_recovery_atomic_claim_blocks_competing_attempt(db, session_factory):
+    job = _portal_job(db)
+    alert = _seed_unconfigured_alert(db, job)
+    provider = _RecoveryProvider()
+    competing_results = []
+
+    class _CompetingProvider(_RecoveryProvider):
+        def send(self, message):
+            competing_session = session_factory()
+            try:
+                competing_results.append(
+                    NotificationService(
+                        competing_session,
+                    ).recover_portal_application_alert(
+                        notification_id=alert.id,
+                        opportunity_id=opportunity_id(job),
+                        provider=self,
+                        verifier=_recovery_evidence,
+                        now=datetime(2026, 10, 21, 12, tzinfo=timezone.utc),
+                    )
+                )
+            finally:
+                competing_session.close()
+            return super().send(message)
+
+    provider = _CompetingProvider()
+    result = NotificationService(db).recover_portal_application_alert(
+        notification_id=alert.id,
+        opportunity_id=opportunity_id(job),
+        provider=provider,
+        verifier=_recovery_evidence,
+        now=datetime(2026, 10, 21, 12, tzinfo=timezone.utc),
+    )
+
+    assert result["status"] == "accepted_by_meta_delivery_unconfirmed"
+    assert competing_results == [{
+        "status": "blocked",
+        "reason": "prior_outcome_not_proven_pre_dispatch",
+    }]
+    assert len(provider.messages) == 1
+
+
+def test_recovery_rejects_stale_or_changed_official_vacancy(db):
+    job = _portal_job(db)
+    alert = _seed_unconfigured_alert(db, job)
+    provider = _RecoveryProvider()
+    evidence = _recovery_evidence(job)
+    evidence["status"] = "CLOSED_ANNOUNCEMENT"
+    result = NotificationService(db).recover_portal_application_alert(
+        notification_id=alert.id,
+        opportunity_id=opportunity_id(job),
+        provider=provider,
+        verifier=lambda _job: evidence,
+        now=datetime(2026, 10, 21, 12, tzinfo=timezone.utc),
+    )
+    assert result["reason"] == "vacancy_or_route_not_currently_verified"
+    assert provider.messages == []
+
+    evidence["status"] = "OPEN_ANNOUNCEMENT"
+    evidence["deadline_at"] = "2026-10-20T22:59:00+00:00"
+    result = NotificationService(db).recover_portal_application_alert(
+        notification_id=alert.id,
+        opportunity_id=opportunity_id(job),
+        provider=provider,
+        verifier=lambda _job: evidence,
+        now=datetime(2026, 10, 21, 12, tzinfo=timezone.utc),
+    )
+    assert result["reason"] == "vacancy_or_route_not_currently_verified"
+    assert provider.messages == []
+
+
+def test_recovery_rejects_malformed_configuration_and_wrong_alert_or_job(db):
+    job = _portal_job(db)
+    alert = _seed_unconfigured_alert(db, job)
+
+    class _Malformed(_RecoveryProvider):
+        settings = type("Settings", (), {
+            "validation_errors": lambda self: ["invalid config"],
+        })()
+
+    malformed = _Malformed()
+    result = NotificationService(db).recover_portal_application_alert(
+        notification_id=alert.id,
+        opportunity_id=opportunity_id(job),
+        provider=malformed,
+        verifier=_recovery_evidence,
+    )
+    assert result["reason"] == "whatsapp_configuration_invalid"
+    assert malformed.messages == []
+
+    result = NotificationService(db).recover_portal_application_alert(
+        notification_id=alert.id + 100,
+        opportunity_id=opportunity_id(job),
+        provider=_RecoveryProvider(),
+        verifier=_recovery_evidence,
+    )
+    assert result["reason"] == "alert_job_mismatch"
+    assert NotificationService(db).recover_portal_application_alert(
+        notification_id=alert.id,
+        opportunity_id="JOB-2026-1021-0002",
+        provider=_RecoveryProvider(),
+        verifier=_recovery_evidence,
+    )["reason"] == "job_not_found"
+
+
+@pytest.mark.parametrize(
+    ("status", "payload"),
+    [
+        ("accepted", {
+            "outcome": "accepted_by_meta_delivery_unconfirmed",
+            "provider_called": True,
+        }),
+        ("failed", {
+            "outcome": "provider_delivery_ambiguous",
+            "provider_called": True,
+        }),
+        ("failed", {
+            "outcome": "provider_delivery_failed",
+            "provider_called": True,
+        }),
+    ],
+)
+def test_recovery_never_retries_provider_accepted_or_attempted_outcomes(
+    db, status, payload,
+):
+    job = _portal_job(db)
+    alert = _seed_unconfigured_alert(db, job)
+    alert.status = status
+    alert.payload = payload
+    db.commit()
+    provider = _RecoveryProvider()
+    result = NotificationService(db).recover_portal_application_alert(
+        notification_id=alert.id,
+        opportunity_id=opportunity_id(job),
+        provider=provider,
+        verifier=_recovery_evidence,
+    )
+    assert result["reason"] == "prior_outcome_not_proven_pre_dispatch"
+    assert provider.messages == []
 
 
 def test_portal_alert_never_routes_email_applications_to_whatsapp(db):

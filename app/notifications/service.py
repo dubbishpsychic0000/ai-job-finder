@@ -3,12 +3,13 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Callable
-from datetime import timedelta, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit
 
-from sqlalchemy import select
+import requests
+from sqlalchemy import select, update
 from sqlalchemy.orm import Session
 
 from app import memory as mem
@@ -307,6 +308,7 @@ class NotificationService:
             row.status = "failed"
             row.payload = {
                 "outcome": "whatsapp_not_configured",
+                "provider_called": False,
                 "message": message,
             }
             self.session.commit()
@@ -328,6 +330,7 @@ class NotificationService:
             row.status = "accepted"
             row.payload = {
                 "outcome": "accepted_by_meta_delivery_unconfirmed",
+                "provider_called": True,
                 "message": message,
                 "provider_message_id": str(getattr(provider, "last_message_id", "") or ""),
             }
@@ -337,11 +340,171 @@ class NotificationService:
                 "message": message,
             }
         row.status = "failed"
-        row.payload = {"outcome": failure_reason, "message": message}
+        row.payload = {
+            "outcome": failure_reason,
+            "provider_called": True,
+            "message": message,
+        }
         self.session.commit()
         return {
             "status": "failed",
             "reason": failure_reason,
+            "message": message,
+        }
+
+    def recover_portal_application_alert(
+        self,
+        *,
+        notification_id: int,
+        opportunity_id: str,
+        provider,
+        verifier,
+        now=None,
+    ) -> dict[str, str]:
+        """Retry only an alert whose recorded failure proves no provider call occurred."""
+        from app.memory.store import get_job_by_opportunity_id
+
+        now = now or utcnow()
+        if now.tzinfo is None:
+            now = now.replace(tzinfo=timezone.utc)
+        job = get_job_by_opportunity_id(self.session, opportunity_id)
+        if job is None:
+            return {"status": "blocked", "reason": "job_not_found"}
+        alert = self.session.get(Notification, notification_id)
+        if (
+            alert is None
+            or alert.event_type != "PORTAL_APPLICATION_REQUIRED"
+            or alert.job_id != job.id
+        ):
+            return {"status": "blocked", "reason": "alert_job_mismatch"}
+
+        matching_alerts = self.session.execute(
+            select(Notification.id).where(
+                Notification.event_type == "PORTAL_APPLICATION_REQUIRED",
+                Notification.job_id == job.id,
+            ),
+        ).scalars().all()
+        if matching_alerts != [notification_id]:
+            return {"status": "blocked", "reason": "alert_deduplication_conflict"}
+
+        prior_payload = alert.payload if isinstance(alert.payload, dict) else {}
+        if (
+            alert.status != "failed"
+            or prior_payload.get("outcome") != "whatsapp_not_configured"
+            or prior_payload.get("provider_called") not in {None, False}
+            or prior_payload.get("provider_message_id")
+        ):
+            return {"status": "blocked", "reason": "prior_outcome_not_proven_pre_dispatch"}
+        validation_errors = (
+            provider.settings.validation_errors()
+            if hasattr(getattr(provider, "settings", None), "validation_errors")
+            else (["WhatsApp configuration is unavailable"] if not getattr(provider, "configured", False) else [])
+        )
+        if validation_errors or not getattr(provider, "configured", False):
+            return {
+                "status": "blocked",
+                "reason": "whatsapp_configuration_invalid",
+            }
+
+        try:
+            evidence = verifier(job)
+        except (requests.RequestException, ValueError, TypeError):
+            return {"status": "blocked", "reason": "official_vacancy_revalidation_failed"}
+        if not isinstance(evidence, dict):
+            return {"status": "blocked", "reason": "official_vacancy_revalidation_failed"}
+        metadata = job.public_competition if isinstance(job.public_competition, dict) else {}
+        stored_route = metadata.get("submission_route") or {}
+        fresh_route = evidence.get("submission_route") or {}
+        expected_reference = str(metadata.get("reference") or metadata.get("portal_id") or "")
+        fresh_reference = str(evidence.get("competition_code") or "")
+        try:
+            fresh_deadline = datetime.fromisoformat(str(evidence.get("deadline_at") or ""))
+        except ValueError:
+            fresh_deadline = None
+        if fresh_deadline is not None and fresh_deadline.tzinfo is None:
+            fresh_deadline = fresh_deadline.replace(tzinfo=timezone.utc)
+        stored_deadline = getattr(job, "closing_at", None)
+        if stored_deadline is not None and stored_deadline.tzinfo is None:
+            stored_deadline = stored_deadline.replace(tzinfo=timezone.utc)
+        if (
+            evidence.get("status") != "OPEN_ANNOUNCEMENT"
+            or evidence.get("stage") != "OPEN_ANNOUNCEMENT"
+            or not expected_reference
+            or fresh_reference != expected_reference
+            or evidence.get("evidence_url") != job.url
+            or fresh_route.get("kind") != "ONLINE_PORTAL"
+            or fresh_route.get("conflict")
+            or fresh_route.get("destination_url") != job.application_url
+            or stored_route.get("destination_url") != job.application_url
+            or fresh_deadline is None
+            or fresh_deadline <= now
+            or (stored_deadline is not None and fresh_deadline.date() != stored_deadline.date())
+            or getattr(job, "application_method", "") != "COMPANY_PORTAL"
+            or getattr(job, "verification_status", "") != "verified"
+            or not is_verified_individual_vacancy(job)
+        ):
+            return {"status": "blocked", "reason": "vacancy_or_route_not_currently_verified"}
+
+        portal_url = str(job.application_url)
+        message = (
+            "Al Omrane Fès-Meknès — Techniciens en Génie Civil; "
+            f"référence {expected_reference}. "
+            f"Portail officiel: {portal_url}. "
+            f"Date limite: {fresh_deadline.strftime('%d %B %Y')}. "
+            "Pièces requises: diplôme de Technicien Spécialisé en Génie Civil et CV à jour. "
+            "La copie du diplôme est actuellement manquante localement. "
+            "La candidature doit être déposée sur le portail; WCA ne l'a pas soumise."
+        )
+        if len(message) > 1024:
+            return {"status": "blocked", "reason": "alert_exceeds_template_parameter_limit"}
+
+        claimed_payload = {
+            **prior_payload,
+            "outcome": "dispatching_recovered_alert",
+            "provider_called": False,
+            "message": message,
+            "recovery_count": 1,
+            "revalidated_at": now.isoformat(),
+            "revalidated_deadline": fresh_deadline.isoformat(),
+        }
+        claim = self.session.execute(
+            update(Notification)
+            .where(
+                Notification.id == notification_id,
+                Notification.job_id == job.id,
+                Notification.event_type == "PORTAL_APPLICATION_REQUIRED",
+                Notification.status == "failed",
+            )
+            .values(status="dispatching", payload=claimed_payload)
+            .execution_options(synchronize_session=False)
+        )
+        if claim.rowcount != 1:
+            self.session.rollback()
+            return {"status": "blocked", "reason": "alert_already_claimed_or_recovered"}
+        self.session.commit()
+        self.session.refresh(alert)
+
+        try:
+            accepted = provider.send(message)
+        except Exception as exc:
+            logger.exception("WhatsApp recovered alert raised (%s)", type(exc).__name__)
+            accepted = False
+            outcome = "provider_delivery_ambiguous"
+        else:
+            outcome = (
+                "accepted_by_meta_delivery_unconfirmed"
+                if accepted else "provider_delivery_failed"
+            )
+        alert.status = "accepted" if accepted else "failed"
+        alert.payload = {
+            **claimed_payload,
+            "outcome": outcome,
+            "provider_called": True,
+            "provider_message_id": str(getattr(provider, "last_message_id", "") or ""),
+        }
+        self.session.commit()
+        return {
+            "status": outcome,
             "message": message,
         }
 

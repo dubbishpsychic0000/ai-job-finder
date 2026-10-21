@@ -279,7 +279,48 @@ The combined daily outbound cap remains 10.
 Verified portal-only vacancies use a separate deduplicated WhatsApp owner alert;
 they are never sent to Gmail. An alert is recorded as accepted by Meta only
 when its API accepts the request, not as handset delivery. Unconfigured or
-failed delivery is recorded and is not automatically retried.
+provider-attempted failed delivery is recorded and is never automatically
+retried. A narrow recovery command exists only for an alert recorded as
+`whatsapp_not_configured`, which is written before the WhatsApp provider is
+called. It atomically claims that exact alert, revalidates its official notice,
+and makes at most one provider call. Accepted, ambiguous, or other provider-
+attempted outcomes cannot be recovered or retried.
+
+#### WhatsApp setup and one-alert recovery
+
+Configure credentials only in the ignored root `.env` (not `.env.example`, chat,
+or tracked files). In the Meta for Developers app attached to the correct
+WhatsApp Business Account, use **WhatsApp > API Setup** / **Cloud API** to get
+the sender **Phone number ID** and issue a valid access token for that account.
+For ongoing use, prefer an appropriately scoped system-user token with
+`whatsapp_business_messaging`; keep it private. Set `WHATSAPP_ACCESS_TOKEN` and
+`WHATSAPP_PHONE_NUMBER_ID` to those Meta-provided values. Set
+`WHATSAPP_RECIPIENT` to the owner's authorized WhatsApp number in international
+E.164 form (for Morocco, `+212...`, without the domestic leading zero). Set
+`WHATSAPP_TEMPLATE_NAME` to the exact approved template name in that WhatsApp
+Business Account. The template must be approved for the desired language and
+have one body text parameter (`{{1}}`); set `WHATSAPP_TEMPLATE_LANGUAGE` to its
+Meta language code, such as `fr` when approved. The owner must have authorized
+receipt of these alerts.
+
+Run `python -m app.cli whatsapp-check` to validate local presence and format;
+it sends no request and does not verify token validity or template approval.
+Use `python -m app.cli whatsapp-alert-status --job-id JOB_ID` to view a
+notification ID and safe ledger status without displaying its message or any
+credentials. Only a persisted `whatsapp_not_configured` pre-dispatch failure
+can be recovered. After independently confirming configuration, use:
+
+```bash
+python -m app.cli whatsapp-recover-portal-alert \
+  --job-id JOB-2026-1021-0001 --notification-id NOTIFICATION_ID
+```
+
+This command fetches only that vacancy's official Emploi Public detail page;
+it does not run discovery or any other notification workflow. It requires the
+notice to remain open with the same reference, deadline, and official portal.
+Meta acceptance is reported separately from handset delivery; delivery is
+confirmed only if a configured, authenticated WhatsApp status webhook records
+the corresponding receipt. Never retry an accepted or ambiguous outcome.
 
 CV lookup is limited to `candidate/cv/`: the language-specific
 `CV_Omar_Benhamid_FR.pdf` or `CV_Omar_Benhamid_EN.pdf`, with

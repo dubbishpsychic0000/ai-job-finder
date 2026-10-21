@@ -16,6 +16,8 @@ sys.path.insert(0, str(ROOT))
 os.environ["DATABASE_URL"] = f"sqlite:///{ROOT / 'data' / 'test_agent.db'}"
 os.environ["LLM_PROVIDER"] = "null"
 os.environ["ENABLE_EMAIL"] = "false"
+os.environ["EMAIL_MODE"] = "draft"
+os.environ["AUTO_SEND_VERIFIED_APPLICATIONS"] = "false"
 
 # wipe any previous test DB (best-effort: Windows may briefly hold the file open
 # after a prior run; per-test truncation keeps isolation either way)
