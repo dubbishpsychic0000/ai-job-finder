@@ -74,6 +74,12 @@ def _upgrade_schema() -> None:
             "ON emails (draft_attempt_key) "
             "WHERE draft_attempt_key <> '' AND delivery_state <> 'not_attempted'"
         ))
+        if insp.has_table("notifications"):
+            conn.execute(text(
+                "CREATE UNIQUE INDEX IF NOT EXISTS uq_notifications_portal_alert_job "
+                "ON notifications (job_id) "
+                "WHERE event_type = 'PORTAL_APPLICATION_REQUIRED'"
+            ))
 
     _add_missing_columns(insp, "jobs", {
         "source_type": "VARCHAR(32) DEFAULT ''",

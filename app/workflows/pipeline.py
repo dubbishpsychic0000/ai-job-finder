@@ -43,6 +43,7 @@ def run_pipeline(session: Session | None = None, *, sources_path: Path | None = 
     prefs = get_preferences()
     profile = get_profile()
     settings = get_settings()
+    _enforce_scheduled_email_policy(settings)
     llm = get_llm(profile, settings)
 
     def _run() -> RunResult:
@@ -72,8 +73,17 @@ def run_pipeline(session: Session | None = None, *, sources_path: Path | None = 
                 "decisions": dict(Counter(d["decision"] for d in analysis.analyzed)),
                 "errors": analysis.errors,
             }
+            from app.notifications.service import NotificationService
+            from app.notifications.whatsapp import MetaWhatsAppProvider
+
+            notifications = NotificationService(s)
+            whatsapp = MetaWhatsAppProvider()
+            portal_alerts = notifications.alert_verified_portal_jobs(whatsapp)
             immigration = ImmigrationAgent(llm) if with_immigration else None
-            action = asyncio.run(run_actions(s, config, settings, profile, llm, immigration))
+            action = asyncio.run(run_actions(
+                s, config, settings, profile, llm, immigration,
+                preferences=prefs,
+            ))
             result.action = {
                 "applied": len(action.applied),
                 "asked": len(action.asked),
@@ -82,6 +92,7 @@ def run_pipeline(session: Session | None = None, *, sources_path: Path | None = 
                 "errors": action.errors,
                 "drafts": sum(1 for item in (action.applied + action.asked)
                               if item.get("status") == "drafted"),
+                "portal_alerts": portal_alerts,
             }
             result.company_outreach = _run_company_outreach(
                 s, config, settings, profile,
@@ -95,11 +106,6 @@ def run_pipeline(session: Session | None = None, *, sources_path: Path | None = 
                 result.followup = {"sent": fu.sent, "blocked": fu.blocked, "errors": fu.errors}
             # Rendering/delivery is intentionally after all actions and never
             # controls discovery, decisions, or email safety.
-            from app.notifications.service import NotificationService
-            from app.notifications.whatsapp import MetaWhatsAppProvider
-
-            notifications = NotificationService(s)
-            whatsapp = MetaWhatsAppProvider()
             if whatsapp.configured:
                 # A concise operational heartbeat is sent on *every* pipeline
                 # run, including zero-result runs.  Event notifications remain
@@ -147,6 +153,14 @@ def render_run_summary(result: RunResult) -> str:
         f"Gmail drafts: {drafts + int(btp_action.get('drafts', 0))} | "
         f"Errors: {errors} | BTP: {btp_action.get('candidates', 0)} companies checked"
     )
+
+
+def _enforce_scheduled_email_policy(settings, event_name: str | None = None) -> None:
+    """GitHub schedule events remain draft-only even if runner env drifts."""
+    event_name = event_name if event_name is not None else os.getenv("GITHUB_EVENT_NAME", "")
+    if event_name == "schedule":
+        settings.email_mode = "draft"
+        settings.auto_send_verified_applications = False
 
 
 def _run_company_outreach(session, config, settings, profile, *, paused: bool) -> dict:

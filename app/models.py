@@ -337,9 +337,18 @@ class Notification(Base):
     job_id: Mapped[int | None] = mapped_column(ForeignKey("jobs.id"), nullable=True, index=True)
     priority: Mapped[str] = mapped_column(String(16), default="normal", index=True)
     payload: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
-    status: Mapped[str] = mapped_column(String(16), default="queued", index=True)  # queued|delivered|ignored
+    status: Mapped[str] = mapped_column(String(32), default="queued", index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, index=True)
     delivered_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
+
+Index(
+    "uq_notifications_portal_alert_job",
+    Notification.job_id,
+    unique=True,
+    sqlite_where=(Notification.event_type == "PORTAL_APPLICATION_REQUIRED"),
+    postgresql_where=(Notification.event_type == "PORTAL_APPLICATION_REQUIRED"),
+)
 
 
 class ImmigrationProgram(Base):

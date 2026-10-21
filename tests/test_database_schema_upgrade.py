@@ -36,6 +36,26 @@ def test_schema_upgrade_adds_missing_columns_idempotently(tmp_path, monkeypatch)
     legacy_engine.dispose()
 
 
+def test_schema_upgrade_adds_portal_alert_dedup_index_when_notifications_exist(
+    tmp_path, monkeypatch,
+):
+    legacy_engine = create_engine(f"sqlite:///{tmp_path / 'notification-legacy.db'}")
+    with legacy_engine.begin() as connection:
+        connection.execute(text("CREATE TABLE emails (id INTEGER PRIMARY KEY)"))
+        connection.execute(text(
+            "CREATE TABLE notifications (id INTEGER PRIMARY KEY, job_id INTEGER, "
+            "event_type VARCHAR(64))"
+        ))
+    monkeypatch.setattr(database, "engine", legacy_engine)
+
+    database._upgrade_schema()
+
+    assert "uq_notifications_portal_alert_job" in {
+        index["name"] for index in inspect(legacy_engine).get_indexes("notifications")
+    }
+    legacy_engine.dispose()
+
+
 def test_phase_24_job_columns_are_migrated_before_orm_reads(tmp_path, monkeypatch):
     legacy_engine = create_engine(f"sqlite:///{tmp_path / 'phase-24-legacy.db'}")
     models.Base.metadata.create_all(legacy_engine)

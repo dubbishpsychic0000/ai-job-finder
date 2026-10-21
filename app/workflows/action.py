@@ -12,7 +12,7 @@ from sqlalchemy.orm import Session
 from app import memory as mem
 from app.agents.communication_agent import CommunicationAgent
 from app.agents.llm import LLMProvider
-from app.config import AgentConfig, CandidateProfile, RunnerSettings
+from app.config import AgentConfig, CandidateProfile, Preferences, RunnerSettings
 from app.discovery.opportunity_details import is_verified_individual_vacancy
 from app.email.service import ApplicationEngine
 
@@ -74,21 +74,34 @@ def lang_for_country(country: str) -> str:
 
 async def run_actions(session: Session, config: AgentConfig, settings: RunnerSettings,
                       profile: CandidateProfile, llm: LLMProvider,
-                      immigration_agent=None) -> ActionReport:
+                      immigration_agent=None,
+                      preferences: Preferences | None = None) -> ActionReport:
     report = ActionReport()
+    automatic_mode = bool(
+        getattr(settings, "auto_send_verified_applications", False)
+    )
+    if preferences is None:
+        from app.config import get_preferences
+
+        preferences = get_preferences()
     live_job_id = None
     if settings.email_mode == "live":
-        raw_approved_id = str(getattr(settings, "approved_live_job_id", "") or "")
-        if (
-            not getattr(settings, "live_email_manual_dispatch", False)
-            or not getattr(settings, "authorize_live_job_email", False)
-            or not raw_approved_id.isdecimal()
-        ):
-            report.blocked.append({
-                "reason": "single_job_live_email_authorization_required",
-            })
-            return report
-        live_job_id = int(raw_approved_id)
+        if automatic_mode:
+            if not settings.enable_email or settings.email_provider != "gmail":
+                report.blocked.append({"reason": "automatic_applications_require_enabled_gmail"})
+                return report
+        else:
+            raw_approved_id = str(getattr(settings, "approved_live_job_id", "") or "")
+            if (
+                not getattr(settings, "live_email_manual_dispatch", False)
+                or not getattr(settings, "authorize_live_job_email", False)
+                or not raw_approved_id.isdecimal()
+            ):
+                report.blocked.append({
+                    "reason": "single_job_live_email_authorization_required",
+                })
+                return report
+            live_job_id = int(raw_approved_id)
     communicator = CommunicationAgent(llm, profile)
     # Reconfirm the structured ATS posting before any application communication.
     verify_fn = _verify_before_send(config)
@@ -116,6 +129,12 @@ async def run_actions(session: Session, config: AgentConfig, settings: RunnerSet
         try:
             lang = lang_for_country(job.country)
             if decision.decision in ("APPLY", "ASK_EMPLOYER"):
+                if automatic_mode and decision.decision != "APPLY":
+                    report.blocked.append({
+                        "job_id": job.id,
+                        "reason": "automatic_authorization_excludes_employer_inquiries",
+                    })
+                    continue
                 # A vacancy's contact address does not override its application route.
                 if (
                     decision.decision == "APPLY"
@@ -141,7 +160,46 @@ async def run_actions(session: Session, config: AgentConfig, settings: RunnerSet
                     mem.store.enqueue_notification(session, "NO_EMAIL_FOUND", job_id=job.id,
                                                    payload={"url": job.application_url or job.url})
                     continue
-                result = await engine.run(job, decision, decision.decision, to_addr, lang)
+                automatic_application = (
+                    automatic_mode
+                    and settings.email_mode == "live"
+                    and decision.decision == "APPLY"
+                    and job.application_method == "EMAIL"
+                )
+                live_evidence = None
+                if automatic_application:
+                    from app.email.application_queue import (
+                        READY_TO_SEND,
+                        classify_application,
+                    )
+
+                    live_evidence = verify_fn(job)
+                    classification = classify_application(
+                        session,
+                        job,
+                        config=config,
+                        settings=settings,
+                        profile=profile,
+                        preferences=preferences,
+                        live_evidence=live_evidence,
+                    )
+                    if classification.get("category") != READY_TO_SEND:
+                        report.blocked.append({
+                            "job_id": job.id,
+                            "reason": classification.get("reason", "automatic_application_preflight_failed"),
+                        })
+                        continue
+                    engine.verify_url_fn = lambda _job, evidence=live_evidence: evidence
+                engine_options = {}
+                if automatic_application:
+                    engine_options = {
+                        "allow_live_cap_draft_fallback": False,
+                        "allow_automatic_application": True,
+                    }
+                result = await engine.run(
+                    job, decision, decision.decision, to_addr, lang,
+                    **engine_options,
+                )
                 if result.get("application_id"):  # §24 — query ledger learns the outcome
                     mem.store.record_query_outcome(
                         session, job.search_query, job.search_country, job.source,

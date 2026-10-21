@@ -39,6 +39,7 @@ class RunnerSettings(BaseSettings):
     enable_email: bool = False
     email_provider: str = "gmail"  # log | smtp | gmail
     email_mode: str = "draft"      # dry_run | draft | live
+    auto_send_verified_applications: bool = False
     authorize_live_spontaneous: bool = False
     authorize_live_job_email: bool = False
     approved_live_job_id: str = ""
@@ -77,6 +78,8 @@ class RunnerSettings(BaseSettings):
 class CandidateProfile(BaseModel):
     name: str
     title: str = ""
+    nationality: str = ""
+    work_authorization: dict[str, Any] = Field(default_factory=dict)
     student_status: Literal["unknown", "current_student", "not_student"] = "unknown"
     phone: str = ""
     summary: str = ""
@@ -92,13 +95,20 @@ class CandidateProfile(BaseModel):
 
     def claims_allowedlist(self) -> set[str]:
         """Flat set of every string the profile authorises agent to claim."""
-        tokens = {self.title, self.name, str(self.experience_years), self.phone}
+        tokens = {
+            self.title,
+            self.name,
+            str(self.experience_years),
+            self.phone,
+            self.nationality,
+        }
         for e in self.education:
             tokens.update(str(v) for v in e.values())
         tokens.update(self.skills)
         tokens.update(self.languages)
         for p in self.projects:
             tokens.update(str(v) for v in p.values())
+        tokens.update(str(value) for value in self.work_authorization.values())
         return {t.lower() for t in tokens if t}
 
 

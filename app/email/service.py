@@ -89,6 +89,7 @@ class ApplicationEngine:
         target_language: str = "en",
         *,
         allow_live_cap_draft_fallback: bool = True,
+        allow_automatic_application: bool = False,
     ) -> dict:
         """Execute an APPLY / ASK_EMPLOYER action for a job.
 
@@ -149,10 +150,24 @@ class ApplicationEngine:
                 getattr(self.settings, "approved_live_job_id", "") or ""
             )
             if (
-                not getattr(self.settings, "live_email_manual_dispatch", False)
-                or not getattr(self.settings, "authorize_live_job_email", False)
-                or not approved_job_id.isdecimal()
-                or str(job.id) != approved_job_id
+                not (
+                    allow_automatic_application
+                    and getattr(
+                        self.settings,
+                        "auto_send_verified_applications",
+                        False,
+                    )
+                    and action == "APPLY"
+                    and getattr(job, "application_method", "") == "EMAIL"
+                    and getattr(self.settings, "email_provider", "") == "gmail"
+                    and getattr(self.settings, "enable_email", False)
+                )
+                and (
+                    not getattr(self.settings, "live_email_manual_dispatch", False)
+                    or not getattr(self.settings, "authorize_live_job_email", False)
+                    or not approved_job_id.isdecimal()
+                    or str(job.id) != approved_job_id
+                )
             ):
                 return {
                     "sent": False,

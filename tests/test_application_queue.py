@@ -11,7 +11,7 @@ import pytest
 from app import memory as mem
 from app import models
 from app.cli import cmd_send_approved
-from app.config import Preferences
+from app.config import Preferences, RunnerSettings
 from app.email import gmail_oauth, provider
 from app.email.application_queue import (
     BLOCKED,
@@ -149,6 +149,11 @@ def _ready_item(db, job, config, profile, settings, monkeypatch, tmp_path):
     )
 
 
+def test_automatic_application_setting_defaults_off(monkeypatch):
+    monkeypatch.delenv("AUTO_SEND_VERIFIED_APPLICATIONS", raising=False)
+    assert RunnerSettings(_env_file=None).auto_send_verified_applications is False
+
+
 def test_queue_requires_fresh_verified_vacancy_route_recipient_and_all_gates(
     db, config, profile, settings, monkeypatch, tmp_path,
 ):
@@ -176,8 +181,89 @@ def test_queue_never_counts_company_portal_as_email_application(
         db, job, config, profile, _settings(settings), monkeypatch, tmp_path,
     )
 
-    assert item["category"] == PORTAL_APPLICATION
+    assert item["category"] == PORTAL_APPLICATION, item
     assert item["reason"] == "official_application_requires_portal"
+
+
+def test_queue_requires_confirmed_nationality_and_qualification_facts(
+    db, config, profile, settings, monkeypatch, tmp_path,
+):
+    job = _job(db)
+    job.description += " Moroccan nationality and a Technicien Spécialisé degree in Génie Civil required."
+    unknown_profile = profile.model_copy(update={"nationality": ""})
+    item = _ready_item(
+        db, job, config, unknown_profile, _settings(settings),
+        monkeypatch, tmp_path,
+    )
+    assert item["category"] == NEEDS_REVIEW
+    assert item["reason"] == "required_nationality_not_in_profile"
+
+
+def test_queue_blocks_nationality_mismatch_and_unresolved_work_authorization(
+    db, config, profile, settings, monkeypatch, tmp_path,
+):
+    job = _job(db)
+    job.description += " Moroccan nationality required."
+    mismatch = profile.model_copy(update={"nationality": "French"})
+    item = _ready_item(
+        db, job, config, mismatch, _settings(settings), monkeypatch, tmp_path,
+    )
+    assert item["category"] == BLOCKED
+    assert item["reason"] == "required_nationality_mismatch"
+
+    authorization_job = _job(db, email="right-to-work@colas.fr")
+    authorization_job.description += " Applicants must have the right to work in France."
+    analysis = mem.store.get_analysis(db, authorization_job.id)
+    analysis.work_authorization = "Must have the right to work in France."
+    unresolved = _ready_item(
+        db, authorization_job, config,
+        profile.model_copy(update={"work_authorization": {}}),
+        _settings(settings), monkeypatch, tmp_path,
+    )
+    assert unresolved["category"] == NEEDS_REVIEW
+    assert unresolved["reason"] == "work_authorization_requirement_unresolved"
+
+
+def test_verified_public_competition_is_queued_as_portal_not_email(
+    db, config, profile, settings,
+):
+    job = _job(db, method="COMPANY_PORTAL")
+    observed = datetime.now(timezone.utc)
+    official_url = "https://www.emploi-public.ma/fr/concours/details/example"
+    job.source = "emploi_public_ma"
+    job.source_type = "government"
+    job.country = "Morocco"
+    job.last_verified_at = observed
+    job.closing_at = observed + timedelta(days=2)
+    job.url = official_url
+    job.entity_evidence_url = job.url
+    job.entity_state = "VACANCY_VERIFIED"
+    job.entity_reason_code = "official_public_competition_verified_open"
+    job.application_url = "https://alomrane.gov.ma/Le-groupe/Offre-d-emplois"
+    job.public_competition = {
+        "source": "emploi_public_ma",
+        "status": "OPEN_ANNOUNCEMENT",
+        "stage": "OPEN_ANNOUNCEMENT",
+        "observed_at": observed.isoformat(),
+        "evidence_url": job.url,
+        "qualification_requirements": "Technicien specialise en genie civil",
+        "eligibility_requirements": "Nationalite marocaine obligatoire",
+        "submission_route": {
+            "kind": "ONLINE_PORTAL",
+            "destination_url": job.application_url,
+            "evidence_url": "https://www.emploi-public.ma/fr/concours/download/arrete/example",
+            "conflict": False,
+        },
+    }
+    profile = profile.model_copy(update={"nationality": "Moroccan"})
+
+    item = classify_application(
+        db, job, config=config, settings=settings, profile=profile,
+        preferences=Preferences(sponsorship_required=False),
+    )
+
+    assert item["category"] == PORTAL_APPLICATION, item
+    assert item["application_route"]["type"] == "COMPANY_PORTAL"
 
 
 def test_queue_requires_job_specific_verified_recipient(

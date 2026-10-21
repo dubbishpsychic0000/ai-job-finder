@@ -25,6 +25,7 @@ from sqlalchemy.orm import sessionmaker
 import app.cli as cli
 from app import models
 from app.agents.communication_agent import CommunicationAgent
+from app.config import Preferences
 from app.email import gmail_oauth
 from app.email import provider as provider_mod
 from app.email.service import ApplicationEngine
@@ -311,6 +312,123 @@ def test_ordinary_live_email_requires_matching_manual_single_job_authorization(
     }
 
 
+def test_verified_application_standing_authorization_is_narrow_and_guarded(
+    db, config, profile, settings, monkeypatch,
+):
+    job = _job(db)
+    decision = _decision(db, job)
+    settings = _settings(
+        settings,
+        auto_send_verified_applications=True,
+        authorize_live_job_email=False,
+        live_email_manual_dispatch=False,
+        approved_live_job_id="",
+    )
+    monkeypatch.setattr(
+        "app.email.service.validate",
+        lambda **_kwargs: SimpleNamespace(allowed=True, reasons=[], checks={}),
+    )
+    calls = []
+    monkeypatch.setattr(
+        provider_mod, "send",
+        lambda *_args, **_kwargs: (calls.append("gmail") or (True, "msg-1", "")),
+    )
+
+    result = asyncio.run(_engine(
+        db, config, profile, settings, _real_communicator(profile),
+    ).run(
+        job, decision, "APPLY", job.contact_email, "fr",
+        allow_automatic_application=True,
+    ))
+
+    assert calls == ["gmail"]
+    assert result["status"] == "sent"
+    assert db.query(models.LiveSendAttempt).one().state == "confirmed_sent"
+
+    other_job = _job(db, email="jobs@other.example")
+    other_decision = _decision(db, other_job)
+    blocked = asyncio.run(_engine(
+        db, config, profile,
+        settings.model_copy(update={"email_provider": "smtp"}),
+        _real_communicator(profile),
+    ).run(
+        other_job, other_decision, "APPLY", other_job.contact_email, "fr",
+        allow_automatic_application=True,
+    ))
+    assert blocked["reason"] == "single_job_live_email_authorization_required"
+    assert calls == ["gmail"]
+
+
+def test_automatic_live_action_requires_ready_preflight_and_excludes_inquiries(
+    db, config, profile, settings, monkeypatch,
+):
+    from app.agents.llm import NullLLM
+    from app.email.application_queue import READY_TO_SEND
+    from app.workflows.action import run_actions
+
+    job = _job(db)
+    _decision(db, job)
+    settings = _settings(
+        settings,
+        auto_send_verified_applications=True,
+        authorize_live_job_email=False,
+        live_email_manual_dispatch=False,
+        approved_live_job_id="",
+    )
+    evidence = SimpleNamespace(outcome="OPEN", reason_code="matching_public_ats_posting_record")
+    preflights = []
+    engine_calls = []
+    monkeypatch.setattr(
+        "app.workflows.action._verify_before_send",
+        lambda _config: lambda _job: evidence,
+    )
+    monkeypatch.setattr(
+        "app.email.application_queue.classify_application",
+        lambda *_args, **_kwargs: (preflights.append("checked") or {
+            "category": READY_TO_SEND,
+        }),
+    )
+
+    class _RecordingEngine:
+        def __init__(self, *_args, **_kwargs):
+            pass
+
+        async def run(self, *args, **kwargs):
+            engine_calls.append((args[0].id, args[2], kwargs))
+            return {"sent": True, "status": "sent", "application_id": None}
+
+    monkeypatch.setattr("app.workflows.action.ApplicationEngine", _RecordingEngine)
+    report = asyncio.run(run_actions(
+        db, config, settings, profile, NullLLM(profile),
+        preferences=Preferences(sponsorship_required=False),
+    ))
+
+    assert preflights == ["checked"]
+    assert engine_calls == [(
+        job.id,
+        "APPLY",
+        {"allow_live_cap_draft_fallback": False, "allow_automatic_application": True},
+    )]
+    assert [item["job_id"] for item in report.applied] == [job.id]
+
+    job.status = "acted"
+    inquiry_job = _job(db, email="hr@another.example")
+    inquiry_job.external_id = "inquiry"
+    inquiry_job.dedup_key = "inquiry"
+    inquiry = _decision(db, inquiry_job, decision="ASK_EMPLOYER")
+    second = asyncio.run(run_actions(
+        db, config, settings, profile, NullLLM(profile),
+        preferences=Preferences(sponsorship_required=False),
+    ))
+    assert any(
+        item.get("job_id") == inquiry_job.id
+        and item.get("reason") == "automatic_authorization_excludes_employer_inquiries"
+        for item in second.blocked
+    )
+    assert len(engine_calls) == 1
+    assert inquiry.decision == "ASK_EMPLOYER"
+
+
 def test_live_action_workflow_only_processes_the_exact_approved_job_id(
     db, config, profile, settings, monkeypatch,
 ):
@@ -347,6 +465,18 @@ def test_live_action_workflow_only_processes_the_exact_approved_job_id(
     assert first_job.id != approved_job.id
     assert first_decision.id != approved_decision.id
     assert [item["job_id"] for item in report.applied] == [approved_job.id]
+
+
+def test_github_scheduled_runs_are_forced_to_draft_mode(settings):
+    from app.workflows.pipeline import _enforce_scheduled_email_policy
+
+    scheduled = settings.model_copy(update={
+        "email_mode": "live",
+        "auto_send_verified_applications": True,
+    })
+    _enforce_scheduled_email_policy(scheduled, event_name="schedule")
+    assert scheduled.email_mode == "draft"
+    assert scheduled.auto_send_verified_applications is False
 
 
 def test_portal_vacancy_never_sends_cv_by_email(db, config, profile, settings, monkeypatch):

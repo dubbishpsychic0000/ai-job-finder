@@ -253,6 +253,34 @@ not create drafts. An uncertain outcome must be reconciled before any further
 send, and a retry is never automatic. `gmail.readonly` is required on this
 command because Sent-mail reconciliation is a required recovery safeguard.
 Scheduled and discovery-only workflows remain unable to send.
+
+#### Standing authorization for verified email applications
+
+Automatic sending is **off by default** (`AUTO_SEND_VERIFIED_APPLICATIONS=false`).
+After validating the local setup, deliberately enable it in the private local
+`.env` alongside:
+
+```dotenv
+EMAIL_PROVIDER=gmail
+EMAIL_MODE=live
+ENABLE_EMAIL=true
+AUTO_SEND_VERIFIED_APPLICATIONS=true
+```
+
+This authorization is limited to `APPLY` decisions for current, verified,
+individual vacancies whose official posting explicitly accepts email and whose
+recipient, eligibility, language-matched readable CV, Gmail scopes, duplicate
+state, cooldown, send recovery, and daily caps all pass. It never authorizes
+`ASK_EMPLOYER`, spontaneous applications, speculative outreach, or portal
+submissions. Scheduled GitHub workflows remain in draft mode. Ambiguous Gmail
+outcomes are recorded for reconciliation and are never retried automatically.
+The combined daily outbound cap remains 10.
+
+Verified portal-only vacancies use a separate deduplicated WhatsApp owner alert;
+they are never sent to Gmail. An alert is recorded as accepted by Meta only
+when its API accepts the request, not as handset delivery. Unconfigured or
+failed delivery is recorded and is not automatically retried.
+
 CV lookup is limited to `candidate/cv/`: the language-specific
 `CV_Omar_Benhamid_FR.pdf` or `CV_Omar_Benhamid_EN.pdf`, with
 `CV_Omar_Benhamid.pdf` as the fallback. The selected file must be a readable

@@ -132,6 +132,121 @@ def _config_limit(config: AgentConfig, name: str, default: int) -> int:
     return int(email.get(name, rules.get(name, default)))
 
 
+def _profile_eligibility_issue(
+    job, analysis, profile: CandidateProfile, preferences: Preferences,
+) -> tuple[str, str] | None:
+    """Fail closed when required candidate facts are missing or do not match."""
+    import unicodedata
+
+    competition = getattr(job, "public_competition", None)
+    competition = competition if isinstance(competition, dict) else {}
+    requirements = " ".join((
+        str(getattr(job, "description", "") or ""),
+        str(getattr(analysis, "education_required", "") or ""),
+        str(competition.get("qualification_requirements", "")),
+        str(competition.get("eligibility_requirements", "")),
+    )).casefold()
+    if any(term in requirements for term in (
+        "moroccan national", "moroccan nationality", "nationalité marocaine",
+        "nationalité marocaine obligatoire", "marocain obligatoire",
+        "nationalite marocaine", "marocain obligatoire",
+        "citizenship of morocco", "nationality: moroccan",
+    )):
+        nationality = str(getattr(profile, "nationality", "") or "").strip().casefold()
+        if not nationality:
+            return NEEDS_REVIEW, "required_nationality_not_in_profile"
+        if nationality not in {"moroccan", "marocain", "marocaine", "morocco", "maroc"}:
+            return BLOCKED, "required_nationality_mismatch"
+
+    education_requirement = " ".join((
+        str(getattr(analysis, "education_required", "") or ""),
+        str(competition.get("qualification_requirements", "")),
+    )).strip().casefold()
+    if education_requirement:
+        education = " ".join(
+            str(value)
+            for entry in getattr(profile, "education", [])
+            for value in entry.values()
+        ).casefold()
+        if not education:
+            return NEEDS_REVIEW, "required_qualification_not_in_profile"
+        def normalized(value: str) -> str:
+            folded = unicodedata.normalize("NFKD", value.casefold())
+            return " ".join(
+                "".join(char for char in folded if not unicodedata.combining(char))
+                .replace("/", " ").split()
+            )
+
+        required = normalized(education_requirement)
+        candidate = normalized(education)
+        degree_families = (
+            ("technicien specialise", "technician specialized"),
+            ("conducteur des travaux", "construction supervisor"),
+            ("gros oeuvre", "structural work"),
+            ("bachelor", "licence"),
+            ("master",),
+            ("engineer", "ingenieur"),
+            ("architect", "architecte"),
+        )
+        accepted_degrees = [
+            family for family in degree_families
+            if any(term in required for term in family)
+        ]
+        has_matching_degree = (
+            not accepted_degrees
+            or any(
+                any(term in candidate for term in family)
+                for family in accepted_degrees
+            )
+        )
+        field_terms = ("genie civil", "civil engineering")
+        required_fields = [term for term in field_terms if term in required]
+        has_matching_field = (
+            not required_fields
+            or any(term in candidate for term in required_fields)
+        )
+        if not (
+            has_matching_degree
+            and has_matching_field
+            and (
+                accepted_degrees or required_fields
+                or candidate in required or required in candidate
+            )
+        ):
+            return NEEDS_REVIEW, "required_qualification_match_unconfirmed"
+
+    minimum_experience = getattr(analysis, "experience_min", None)
+    if minimum_experience is not None:
+        years = getattr(profile, "experience_years", None)
+        if years is None:
+            return NEEDS_REVIEW, "required_experience_not_in_profile"
+        if years < minimum_experience:
+            return BLOCKED, "required_experience_not_met"
+
+    country_targets = {
+        str(country).casefold() for country in getattr(preferences, "target_countries", [])
+    }
+    job_country = str(getattr(job, "country", "") or "").casefold()
+    if country_targets and job_country and job_country not in country_targets:
+        relocation_willing = getattr(profile, "relocation", {}).get("willing")
+        if relocation_willing is None:
+            return NEEDS_REVIEW, "location_eligibility_unconfirmed"
+        if relocation_willing is not True:
+            return BLOCKED, "location_preferences_not_met"
+
+    permit_requirement = any(term in requirements for term in (
+        "work permit required", "work authorization required",
+        "visa sponsorship required", "autorisation de travail obligatoire",
+        "must have the right to work", "right to work in",
+        "authorized to work", "authorised to work",
+        "work visa required", "visa required",
+        "permis de travail obligatoire", "autorisation de travail",
+    ))
+    if permit_requirement and not getattr(profile, "work_authorization", {}):
+        return NEEDS_REVIEW, "work_authorization_requirement_unresolved"
+    return None
+
+
 def classify_application(
     session: Session,
     job,
@@ -150,15 +265,25 @@ def classify_application(
     item["application_route"]["verified"] = is_verified_individual_vacancy(job)
 
     competition = getattr(job, "public_competition", None)
-    if (
+    is_competition = (
         getattr(job, "source", "") == "emploi_public_ma"
         or (
             isinstance(competition, dict)
             and competition.get("source") == "emploi_public_ma"
         )
-    ):
-        item.update(category=BLOCKED, reason="public_competition_requires_owner_review")
-        return item
+    )
+    if is_competition:
+        route = competition.get("submission_route") or {}
+        if (
+            competition.get("status") != "OPEN_ANNOUNCEMENT"
+            or not is_verified_individual_vacancy(job)
+            or route.get("kind") != "ONLINE_PORTAL"
+            or not str(route.get("destination_url") or getattr(job, "application_url", ""))
+            or getattr(job, "application_method", "") != "COMPANY_PORTAL"
+        ):
+            item.update(category=BLOCKED, reason="verified_portal_route_missing")
+            return item
+        item["application_route"]["verified"] = True
     if getattr(job, "opportunity_type", "") == "SPONTANEOUS_APPLICATION":
         item.update(category=BLOCKED, reason="not_a_job_vacancy_application")
         return item
@@ -187,6 +312,21 @@ def classify_application(
 
     decision = mem.store.get_last_decision(session, job.id)
     analysis = mem.store.get_analysis(session, job.id)
+    if is_competition:
+        eligibility_issue = _profile_eligibility_issue(
+            job, analysis, profile, preferences,
+        )
+        if eligibility_issue:
+            item.update(category=eligibility_issue[0], reason=eligibility_issue[1])
+            return item
+        item.update(
+            category=PORTAL_APPLICATION,
+            reason="official_application_requires_portal",
+        )
+        item["eligibility_assessment"] = (
+            dict(competition.get("eligibility_assessment") or {})
+        )
+        return item
     if decision is None or analysis is None:
         item.update(category=NEEDS_REVIEW, reason="candidate_job_eligibility_not_assessed")
         return item
@@ -211,8 +351,12 @@ def classify_application(
             reason="candidate_eligibility:" + ",".join(hard_rules),
         )
         return item
+    eligibility_issue = _profile_eligibility_issue(job, analysis, profile, preferences)
+    if eligibility_issue:
+        item.update(category=eligibility_issue[0], reason=eligibility_issue[1])
+        return item
 
-    if getattr(job, "application_method", "") == "COMPANY_PORTAL":
+    if is_competition or getattr(job, "application_method", "") == "COMPANY_PORTAL":
         item.update(
             category=PORTAL_APPLICATION,
             reason="official_application_requires_portal",
@@ -326,7 +470,11 @@ def classify_application(
 
     item.update(
         category=READY_TO_SEND,
-        reason="preconditions_verified_exact_owner_confirmation_required",
+        reason=(
+            "standing_authorization_preconditions_verified"
+            if getattr(settings, "auto_send_verified_applications", False)
+            else "preconditions_verified_exact_owner_confirmation_required"
+        ),
     )
     return item
 
